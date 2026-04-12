@@ -41,3 +41,22 @@ macOS uses a lightweight utility launcher. It does not try to replicate the Wind
 - Windows package is distributed as `.zip`
 - macOS package is distributed as `.tar.gz` to preserve executable permission on `HermesMacGuiLauncher.command`
 - macOS users may still need to allow the launcher in System Settings → Privacy & Security on first run
+
+### macOS Gatekeeper 处理
+
+首次双击 `.command` 文件时，macOS 可能会弹出「无法打开，因为无法验证开发者」的安全提示。有以下几种处理方式：
+
+**方式一（推荐）：右键打开**
+1. 在 Finder 中右键点击 `HermesMacGuiLauncher.command`
+2. 选择「打开」
+3. 在弹出的对话框中点击「打开」确认
+
+**方式二：终端命令解除隔离**
+```bash
+xattr -d com.apple.quarantine /path/to/HermesMacGuiLauncher.command
+```
+
+**方式三：系统设置允许**
+1. 双击运行后会弹出安全警告
+2. 打开「系统设置」→「隐私与安全性」
+3. 找到 HermesMacGuiLauncher 相关提示，点击「仍要打开」
