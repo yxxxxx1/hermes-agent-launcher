@@ -152,6 +152,16 @@ function Get-WindowsInstallEnvironment {
     }
 }
 
+function Get-PreferredPythonVersionForInstall {
+    param($InstallEnv)
+
+    if ($InstallEnv.HasPython311) { return '3.11' }
+    if ($InstallEnv.HasPython312) { return '3.12' }
+    if ($InstallEnv.HasPython310) { return '3.10' }
+    if ($InstallEnv.HasPython313) { return '3.13' }
+    return '3.11'
+}
+
 function Get-OpenClawSources {
     $candidates = @(
         (Join-Path $env:USERPROFILE '.openclaw'),
@@ -329,7 +339,10 @@ function Build-InstallArguments {
 }
 
 function New-TempScriptFromUrl {
-    param([string]$Url)
+    param(
+        [string]$Url,
+        [string]$PreferredPythonVersion = '3.11'
+    )
 
     $tempPath = Join-Path $env:TEMP ('hermes-install-' + [guid]::NewGuid().ToString('N') + '.ps1')
     $response = Invoke-WebRequest -UseBasicParsing -Uri $Url
@@ -368,16 +381,16 @@ function New-TempScriptFromUrl {
         $content = $content.Replace($rgOriginal, $rgPatched)
     }
 
-    $pythonFallbackOriginal = 'foreach ($fallbackVer in @("3.12", "3.13", "3.10")) {'
-    $pythonFallbackPatched = 'foreach ($fallbackVer in @("3.12", "3.10")) {'
-    if ($content.Contains($pythonFallbackOriginal)) {
-        $content = $content.Replace($pythonFallbackOriginal, $pythonFallbackPatched)
+    $pythonVersionOriginal = '$PythonVersion = "3.11"'
+    $pythonVersionPatched = ('$PythonVersion = "{0}"' -f $PreferredPythonVersion)
+    if ($content.Contains($pythonVersionOriginal)) {
+        $content = $content.Replace($pythonVersionOriginal, $pythonVersionPatched)
     }
 
     $pythonWarnOriginal = 'Write-Info " Or: winget install Python.Python.3.11"'
     $pythonWarnPatched = @'
 Write-Info " Or: winget install Python.Python.3.11"
-Write-Info " GUI note: this launcher avoids auto-falling back to Python 3.13 because that path is less predictable on some Windows machines."
+Write-Info " GUI note: this launcher prefers reusing an already installed compatible Python before forcing a new Python download."
 '@
     if ($content.Contains($pythonWarnOriginal)) {
         $content = $content.Replace($pythonWarnOriginal, $pythonWarnPatched)
@@ -2340,15 +2353,17 @@ function Invoke-AppAction {
             }
             try {
                 $installEnv = Get-WindowsInstallEnvironment
+                $preferredPythonVersion = Get-PreferredPythonVersionForInstall -InstallEnv $installEnv
                 Keep-LauncherVisible
-                $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl
+                $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl -PreferredPythonVersion $preferredPythonVersion
                 $args = Build-InstallArguments -ScriptPath $tempScript -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
                 $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $args
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。安装成功会自动关闭，失败会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
+                Add-LogLine ('安装器将优先使用的 Python 目标版本: ' + $preferredPythonVersion)
                 if ($installEnv.HasOnlyPython313) {
-                    Add-LogLine '安装前环境提示：当前只检测到 Python 3.13。官方文档主推 Python 3.11；GUI 安装器已禁用对 3.13 的自动回退。'
+                    Add-LogLine '安装前环境提示：当前只检测到 Python 3.13。GUI 安装器会先尝试复用本机 3.13，而不是强制下载 3.11。'
                 }
                 if ($installEnv.PyLauncherVersions) {
                     Add-LogLine ('py 已检测到的 Python 版本: ' + ($installEnv.PyLauncherVersions -replace "`r?`n", ' | '))
