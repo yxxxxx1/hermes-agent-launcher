@@ -5,6 +5,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$script:LauncherVersion = 'Windows v2026.04.13.3'
+
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -913,6 +915,7 @@ $defaults = Get-HermesDefaults
                     <TextBlock FontSize="34" FontWeight="Bold" Text="Hermes Agent 桌面控制台"/>
                     <TextBlock Margin="0,10,0,0" FontSize="15" Foreground="#AFC3E3" TextWrapping="Wrap"
                                Text="面向普通 Windows 用户的 Hermes 控制台。安装、配置、启动和日常使用都可以在这里完成。"/>
+                    <TextBlock x:Name="HeaderVersionText" Margin="0,10,0,0" FontSize="13" Foreground="#7DD3FC" Text="版本加载中"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Top">
                     <Button x:Name="BrowseHomeButton" Margin="0,0,0,10" Padding="18,10" Background="#1E293B" Foreground="#F8FAFC" BorderBrush="#475569" Content="打开数据目录"/>
@@ -1080,6 +1083,7 @@ $defaults = Get-HermesDefaults
 
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
+$window.Title = ('Hermes Agent 桌面控制台 {0}' -f $script:LauncherVersion)
 
 $controls = @{}
 foreach ($name in @(
@@ -1088,15 +1092,18 @@ foreach ($name in @(
     'StageLaunchButton','StageGatewayButton','StageAdvancedButton','HermesHomeTextBox','InstallDirTextBox','BranchTextBox',
     'BrowseHomeButton','BrowseInstallButton','NoVenvCheckBox','SkipSetupCheckBox','DetailTitleText','DetailSummaryText',
     'DetailChecklistText','DetailAction1Button','DetailAction2Button','DetailAction3Button','DetailAction4Button','DetailAction5Button','DetailAction6Button','DetailAction7Button',
-    'ClearLogButton','LogTextBox','FooterText'
+    'ClearLogButton','LogTextBox','FooterText','HeaderVersionText'
 )) {
     $controls[$name] = $window.FindName($name)
 }
+
+$controls.HeaderVersionText.Text = ('当前版本：{0}' -f $script:LauncherVersion)
 
 $controls.HermesHomeTextBox.Text = $defaults.HermesHome
 $controls.InstallDirTextBox.Text = $defaults.InstallDir
 $controls.BranchTextBox.Text = 'main'
 $controls.SkipSetupCheckBox.IsChecked = $true
+$controls.FooterText.Text = ('就绪 | {0}' -f $script:LauncherVersion)
 
 $script:CrashLogPath = Join-Path $env:TEMP 'HermesGuiLauncher-crash.log'
 
@@ -1138,6 +1145,8 @@ $script:TrackedTaskStdOutLength = 0
 $script:TrackedTaskStdErrLength = 0
 $script:ExternalInstallProcess = $null
 $script:ExternalInstallTimer = $null
+$script:ExternalInstallLogPath = $null
+$script:ExternalInstallStatusPath = $null
 $script:ExternalModelProcess = $null
 $script:ExternalModelTimer = $null
 $script:ExternalGatewaySetupProcess = $null
@@ -1229,6 +1238,35 @@ function Add-ActionLog {
     if ($Next) { Add-LogLine ("下一步：{0}" -f $Next) }
 }
 
+function Get-LogTailLines {
+    param(
+        [string]$Path,
+        [int]$MaxLines = 18
+    )
+
+    if (-not $Path -or -not (Test-Path $Path)) { return @() }
+    try {
+        $rawLines = @(Get-Content -Path $Path -Tail 80 -ErrorAction Stop)
+        $lines = @($rawLines | Where-Object { $_ -and $_.Trim() -ne '' })
+        if ($lines.Count -le $MaxLines) { return $lines }
+        return @($lines | Select-Object -Last $MaxLines)
+    } catch {
+        return @()
+    }
+}
+
+function Read-ExternalInstallStatus {
+    if (-not $script:ExternalInstallStatusPath -or -not (Test-Path $script:ExternalInstallStatusPath)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -Path $script:ExternalInstallStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
 function Set-Footer {
     param([string]$Text)
     $controls.FooterText.Text = $Text
@@ -1254,6 +1292,13 @@ function Stop-ExternalInstallTimer {
     }
 }
 
+function Reset-ExternalInstallState {
+    Stop-ExternalInstallTimer
+    $script:ExternalInstallProcess = $null
+    $script:ExternalInstallLogPath = $null
+    $script:ExternalInstallStatusPath = $null
+}
+
 function Stop-ExternalModelTimer {
     if ($script:ExternalModelTimer) {
         $script:ExternalModelTimer.Stop()
@@ -1276,10 +1321,16 @@ function Stop-ExternalMessagingTimer {
 }
 
 function Start-ExternalInstallMonitor {
-    param([System.Diagnostics.Process]$Process)
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$LogPath,
+        [string]$StatusPath
+    )
 
     Stop-ExternalInstallTimer
     $script:ExternalInstallProcess = $Process
+    $script:ExternalInstallLogPath = $LogPath
+    $script:ExternalInstallStatusPath = $StatusPath
 
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromSeconds(2)
@@ -1301,14 +1352,34 @@ function Start-ExternalInstallMonitor {
         $exitCode = 1
         try { $exitCode = $script:ExternalInstallProcess.ExitCode } catch { }
 
+        $statusRecord = Read-ExternalInstallStatus
+        $logPath = if ($statusRecord -and $statusRecord.logPath) { [string]$statusRecord.logPath } else { $script:ExternalInstallLogPath }
         $script:ExternalInstallProcess = $null
         Stop-ExternalInstallTimer
 
         if ($exitCode -eq 0) {
             Add-ActionLog -Action '安装 / 更新 Hermes' -Result '安装终端已自动关闭，安装过程结束' -Next '启动器已自动刷新状态，请按推荐步骤继续'
         } else {
-            Add-ActionLog -Action '安装 / 更新 Hermes' -Result ("安装终端已结束，退出码：{0}" -f $exitCode) -Next '安装失败时终端通常会保留；如已关闭，请重新打开安装并查看终端报错'
+            Add-ActionLog -Action '安装 / 更新 Hermes' -Result ("安装终端已结束，退出码：{0}" -f $exitCode) -Next '把下方失败摘要或日志文件路径发给我排查'
+            if ($logPath) {
+                Add-LogLine ('安装失败日志文件：' + $logPath)
+            }
+            $tailLines = @(Get-LogTailLines -Path $logPath -MaxLines 18)
+            if ($tailLines.Count -gt 0) {
+                Add-LogLine '---- 安装失败摘要开始 ----'
+                foreach ($line in $tailLines) {
+                    Add-LogLine $line
+                }
+                Add-LogLine '---- 安装失败摘要结束 ----'
+            } else {
+                Add-LogLine '未能读取安装失败摘要，请直接把安装终端里的最后几行报错或日志文件发给我。'
+            }
+            [System.Windows.MessageBox]::Show(
+                ("安装失败，退出码：{0}`n`n失败摘要已写入右侧运行日志。{1}" -f $exitCode, $(if ($logPath) { "`n日志文件：$logPath" } else { '' })),
+                'Hermes 安装失败'
+            ) | Out-Null
         }
+        Reset-ExternalInstallState
         Refresh-Status
     })
     $script:ExternalInstallTimer = $timer
@@ -1568,6 +1639,8 @@ function New-ExternalInstallWrapperScript {
     )
 
     $tempPath = Join-Path $env:TEMP ('hermes-install-wrapper-' + [guid]::NewGuid().ToString('N') + '.ps1')
+    $logPath = Join-Path $env:TEMP ('hermes-install-' + [guid]::NewGuid().ToString('N') + '.log')
+    $statusPath = Join-Path $env:TEMP ('hermes-install-' + [guid]::NewGuid().ToString('N') + '.status.json')
     $argLiteral = ($Arguments | ForEach-Object { "'" + ($_.Replace("'", "''")) + "'" }) -join ', '
     $wrapper = @"
 `$ErrorActionPreference = 'Continue'
@@ -1577,19 +1650,35 @@ function New-ExternalInstallWrapperScript {
 `$env:PYTHONIOENCODING = 'utf-8'
 `$env:PYTHONUTF8 = '1'
 chcp 65001 > `$null
+try {
+    Start-Transcript -Path '$logPath' -Force | Out-Null
+} catch { }
 `$installArgs = @($argLiteral)
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$InstallScriptPath' @installArgs
 `$code = `$LASTEXITCODE
+try {
+    Stop-Transcript | Out-Null
+} catch { }
+@{
+  finished = `$true
+  exitCode = `$code
+  logPath = '$logPath'
+} | ConvertTo-Json -Compress | Set-Content -Path '$statusPath' -Encoding UTF8
 if (`$code -ne 0) {
     Write-Host ''
     Write-Host ('安装失败，退出码: ' + `$code) -ForegroundColor Red
+    Write-Host ('安装日志已保存到: ' + '$logPath') -ForegroundColor Yellow
     Write-Host '按 Enter 关闭此窗口。' -ForegroundColor Yellow
     [void](Read-Host)
 }
 exit `$code
 "@
     [System.IO.File]::WriteAllText($tempPath, $wrapper, [System.Text.Encoding]::Unicode)
-    return $tempPath
+    return [pscustomobject]@{
+        WrapperPath = $tempPath
+        LogPath     = $logPath
+        StatusPath  = $statusPath
+    }
 }
 
 function Set-ButtonAction {
@@ -2379,10 +2468,12 @@ function Invoke-AppAction {
                 Keep-LauncherVisible
                 $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl -PreferredPythonVersion $preferredPythonVersion
                 $args = Build-InstallArguments -ScriptPath $tempScript -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
-                $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $args
-                $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
-                Start-ExternalInstallMonitor -Process $proc
+                $wrapper = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $args
+                $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapper.WrapperPath)
+                Start-ExternalInstallMonitor -Process $proc -LogPath $wrapper.LogPath -StatusPath $wrapper.StatusPath
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。安装成功会自动关闭，失败会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
+                Add-LogLine ('当前启动器版本：' + $script:LauncherVersion)
+                Add-LogLine ('本次安装日志文件：' + $wrapper.LogPath)
                 Add-LogLine ('安装器将优先使用的 Python 目标版本: ' + $preferredPythonVersion)
                 if ($installEnv.DetectedPython3Minors -and $installEnv.DetectedPython3Minors.Count -gt 0) {
                     Add-LogLine ('检测到的本机 Python 3.x 版本: ' + (($installEnv.DetectedPython3Minors | ForEach-Object { '3.{0}' -f $_ }) -join ', '))
@@ -2632,6 +2723,6 @@ foreach ($buttonName in @('DetailAction1Button','DetailAction2Button','DetailAct
     })
 }
 
-Add-LogLine '启动器已就绪。'
+Add-LogLine ('启动器已就绪。版本：' + $script:LauncherVersion)
 Refresh-Status
 $window.ShowDialog() | Out-Null
