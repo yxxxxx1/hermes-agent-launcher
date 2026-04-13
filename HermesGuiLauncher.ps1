@@ -5,7 +5,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:LauncherVersion = 'Windows v2026.04.13.3'
+$script:LauncherVersion = 'Windows v2026.04.13.4'
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
@@ -348,7 +348,6 @@ function Open-InExplorer {
 
 function Build-InstallArguments {
     param(
-        [string]$ScriptPath,
         [string]$InstallDir,
         [string]$HermesHome,
         [string]$Branch,
@@ -356,7 +355,7 @@ function Build-InstallArguments {
         [bool]$SkipSetup
     )
 
-    $args = @('-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-InstallDir', $InstallDir, '-HermesHome', $HermesHome, '-Branch', $Branch)
+    $args = @('-InstallDir', $InstallDir, '-HermesHome', $HermesHome, '-Branch', $Branch)
     if ($NoVenv) { $args += '-NoVenv' }
     if ($SkipSetup) { $args += '-SkipSetup' }
     return $args
@@ -1357,9 +1356,18 @@ function Start-ExternalInstallMonitor {
         $script:ExternalInstallProcess = $null
         Stop-ExternalInstallTimer
 
-        if ($exitCode -eq 0) {
+        $installedStatus = $null
+        try {
+            $uiState = Get-UiState
+            $installedStatus = $uiState.InstallStatus
+        } catch { }
+
+        if ($exitCode -eq 0 -and $installedStatus -and $installedStatus.Installed) {
             Add-ActionLog -Action '安装 / 更新 Hermes' -Result '安装终端已自动关闭，安装过程结束' -Next '启动器已自动刷新状态，请按推荐步骤继续'
         } else {
+            if ($exitCode -eq 0) {
+                Add-LogLine '安装终端返回了退出码 0，但启动器没有检测到 Hermes 已安装，已按失败处理。'
+            }
             Add-ActionLog -Action '安装 / 更新 Hermes' -Result ("安装终端已结束，退出码：{0}" -f $exitCode) -Next '把下方失败摘要或日志文件路径发给我排查'
             if ($logPath) {
                 Add-LogLine ('安装失败日志文件：' + $logPath)
@@ -2467,7 +2475,7 @@ function Invoke-AppAction {
                 $preferredPythonVersion = Get-PreferredPythonVersionForInstall -InstallEnv $installEnv
                 Keep-LauncherVisible
                 $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl -PreferredPythonVersion $preferredPythonVersion
-                $args = Build-InstallArguments -ScriptPath $tempScript -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
+                $args = Build-InstallArguments -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
                 $wrapper = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $args
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapper.WrapperPath)
                 Start-ExternalInstallMonitor -Process $proc -LogPath $wrapper.LogPath -StatusPath $wrapper.StatusPath
