@@ -5,7 +5,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:LauncherVersion = 'Windows v2026.04.13.4'
+$script:LauncherVersion = 'Windows v2026.04.13.5'
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
@@ -184,6 +184,25 @@ function Get-PreferredPythonVersionForInstall {
     if ($InstallEnv.HasPython310) { return '3.10' }
     if ($InstallEnv.HasPython313) { return '3.13' }
     return '3.11'
+}
+
+function Get-GitRuntimeStatus {
+    $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    $wingetCommand = Get-Command winget -ErrorAction SilentlyContinue
+    $gitVersion = $null
+
+    if ($gitCommand) {
+        try {
+            $gitVersion = (& $gitCommand.Source --version 2>$null | Out-String).Trim()
+        } catch { }
+    }
+
+    [pscustomobject]@{
+        Available       = [bool]$gitCommand
+        CommandPath     = if ($gitCommand) { $gitCommand.Source } else { $null }
+        Version         = $gitVersion
+        WingetAvailable = [bool]$wingetCommand
+    }
 }
 
 function Get-OpenClawSources {
@@ -1913,6 +1932,7 @@ function Get-UiState {
     }
 
     $resolvedCommand = Resolve-HermesCommand -InstallDir $installDir
+    $gitStatus = Get-GitRuntimeStatus
     $modelStatus = Test-HermesModelConfigured -HermesHome $hermesHome
     $openClawSources = @(Get-OpenClawSources)
     $gatewayStatus = Test-HermesGatewayReadiness -InstallDir $installDir -HermesHome $hermesHome
@@ -1925,6 +1945,7 @@ function Get-UiState {
         Branch          = $controls.BranchTextBox.Text.Trim()
         Status          = $status
         HermesCommand   = $resolvedCommand
+        GitStatus       = $gitStatus
         ModelStatus     = $modelStatus
         OpenClawSources = $openClawSources
         GatewayStatus   = $gatewayStatus
@@ -1973,6 +1994,17 @@ function Get-Recommendation {
     }
 
     if (-not ($state.Status.Installed -or $state.HermesCommand)) {
+        if (-not $state.GitStatus.Available) {
+            return [pscustomobject]@{
+                Headline = '先安装 Git'
+                Body     = 'Hermes 官方 Windows 安装脚本要求系统先具备 Git。当前还没有检测到 git 命令，因此不会继续启动 Hermes 安装。'
+                Hint     = if ($state.GitStatus.WingetAvailable) { '可直接点“安装 Git”；安装完成后回到启动器刷新状态，再继续安装 Hermes。' } else { '请先打开 Git 下载页完成安装，然后回到启动器刷新状态。' }
+                ActionId = if ($state.GitStatus.WingetAvailable) { 'install-git' } else { 'open-git-download' }
+                Label    = if ($state.GitStatus.WingetAvailable) { '安装 Git' } else { '打开 Git 下载页' }
+                Stage    = 'Install'
+                Enabled  = $true
+            }
+        }
         return [pscustomobject]@{
             Headline = '先完成安装'
             Body     = '当前没有检测到 Hermes 可执行文件，先执行安装或更新。'
@@ -2310,10 +2342,18 @@ function Set-StageView {
     switch ($StageId) {
         'Install' {
             $controls.DetailTitleText.Text = '步骤 1：安装 Hermes'
-            $controls.DetailSummaryText.Text = '当前只保留外部终端安装这条稳定路径。安装脚本会跳过官方 setup 菜单，也不会在安装结束时追问是否启动消息网关。'
-            $controls.DetailChecklistText.Text = "检查点`n• 安装目录和数据目录是否正确`n• Git 分支通常保持 main`n• 默认勾选【安装后不进入官方配置】`n• 目录入口固定在顶部，不在这里重复显示"
-            Set-ButtonAction 'DetailAction1Button' '安装 / 更新 Hermes' 'install-external'
-            Set-ButtonAction 'DetailAction2Button' '' '' $false
+            if (-not $state.GitStatus.Available) {
+                $controls.DetailSummaryText.Text = 'Hermes 官方 Windows 安装前需要先具备 Git。当前未检测到 git 命令，因此这一步先补齐 Git，再继续安装 Hermes。'
+                $controls.DetailChecklistText.Text = "检查点`n• 先安装 Git`n• 安装完成后点刷新状态`n• 再执行 Hermes 安装`n• 弱网环境下 Git 下载可能较慢"
+                Set-ButtonAction 'DetailAction1Button' (if ($state.GitStatus.WingetAvailable) { '安装 Git' } else { '打开 Git 下载页' }) (if ($state.GitStatus.WingetAvailable) { 'install-git' } else { 'open-git-download' }) $true
+                Set-ButtonAction 'DetailAction2Button' '打开 Git 下载页' 'open-git-download' $true
+            } else {
+                $gitHint = if ($state.GitStatus.Version) { "当前已检测到：$($state.GitStatus.Version)" } else { '当前已检测到 Git' }
+                $controls.DetailSummaryText.Text = "当前只保留外部终端安装这条稳定路径。安装脚本会跳过官方 setup 菜单，也不会在安装结束时追问是否启动消息网关。$gitHint。"
+                $controls.DetailChecklistText.Text = "检查点`n• 安装目录和数据目录是否正确`n• Git 分支通常保持 main`n• 默认勾选【安装后不进入官方配置】`n• 弱网环境下首次安装可能持续几分钟"
+                Set-ButtonAction 'DetailAction1Button' '安装 / 更新 Hermes' 'install-external'
+                Set-ButtonAction 'DetailAction2Button' '' '' $false
+            }
             Set-ButtonAction 'DetailAction3Button' '' '' $false
             Set-ButtonAction 'DetailAction4Button' '' '' $false
         }
@@ -2465,9 +2505,29 @@ function Invoke-AppAction {
             Open-InExplorer -Path $installDir
             Add-ActionLog -Action '打开安装目录' -Result '已请求打开 Hermes 安装目录' -Next '可查看仓库源码与 venv'
         }
+        'open-git-download' {
+            Start-Process 'https://git-scm.com/download/win' | Out-Null
+            Add-ActionLog -Action '打开 Git 下载页' -Result '已在浏览器中打开 Git for Windows 下载页' -Next '安装完成后回到启动器点击刷新状态'
+        }
+        'install-git' {
+            if (-not $state.GitStatus.WingetAvailable) {
+                Start-Process 'https://git-scm.com/download/win' | Out-Null
+                Add-ActionLog -Action '安装 Git' -Result '当前未检测到 winget，已改为打开 Git 下载页' -Next '安装完成后回到启动器点击刷新状态'
+                return
+            }
+            $wrapperScript = New-ExternalTerminalCommandWrapper -WorkingDirectory $env:TEMP -HermesHome $hermesHome -CommandLine 'winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements' -FailurePrompt 'Git 安装失败，'
+            $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
+            Add-ActionLog -Action '安装 Git' -Result '已打开 Git 安装终端。安装完成后请回到启动器刷新状态。' -Next '如果安装失败，可改用 Git 官网下载页'
+            Add-LogLine '当前执行：winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements'
+        }
         'install-external' {
             if (-not $installDir -or -not $hermesHome -or -not $state.Branch) {
                 [System.Windows.MessageBox]::Show('安装目录、数据目录和 Git 分支不能为空。', 'Hermes 启动器')
+                return
+            }
+            if (-not $state.GitStatus.Available) {
+                [System.Windows.MessageBox]::Show('当前未检测到 Git。请先安装 Git，再重新安装 Hermes。', 'Hermes 启动器')
+                Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已拦截本次安装：官方 Windows 安装前需要先具备 Git' -Next '先安装 Git，再刷新状态后继续'
                 return
             }
             try {
