@@ -101,6 +101,57 @@ function Resolve-UvCommand {
     return $null
 }
 
+function Get-WindowsInstallEnvironment {
+    $pyLauncherVersions = $null
+    $pythonVersion = $null
+    $uvVersion = $null
+    $wingetVersion = $null
+
+    try {
+        if (Get-Command py -ErrorAction SilentlyContinue) {
+            $pyLauncherVersions = (& py -0p 2>$null | Out-String).Trim()
+        }
+    } catch { }
+
+    try {
+        if (Get-Command python -ErrorAction SilentlyContinue) {
+            $pythonVersion = (& python --version 2>$null | Out-String).Trim()
+        }
+    } catch { }
+
+    try {
+        $uvCmd = Resolve-UvCommand
+        if ($uvCmd) {
+            $uvVersion = (& $uvCmd --version 2>$null | Out-String).Trim()
+        }
+    } catch { }
+
+    try {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            $wingetVersion = (& winget --version 2>$null | Out-String).Trim()
+        }
+    } catch { }
+
+    $allPythonText = @($pyLauncherVersions, $pythonVersion) -join "`n"
+    $hasPython311 = $allPythonText -match '3\.11'
+    $hasPython312 = $allPythonText -match '3\.12'
+    $hasPython310 = $allPythonText -match '3\.10'
+    $hasPython313 = $allPythonText -match '3\.13'
+    $hasOnlyPython313 = $hasPython313 -and -not ($hasPython311 -or $hasPython312 -or $hasPython310)
+
+    [pscustomobject]@{
+        PyLauncherVersions = $pyLauncherVersions
+        PythonVersion      = $pythonVersion
+        UvVersion          = $uvVersion
+        WingetVersion      = $wingetVersion
+        HasPython311       = [bool]$hasPython311
+        HasPython312       = [bool]$hasPython312
+        HasPython310       = [bool]$hasPython310
+        HasPython313       = [bool]$hasPython313
+        HasOnlyPython313   = [bool]$hasOnlyPython313
+    }
+}
+
 function Get-OpenClawSources {
     $candidates = @(
         (Join-Path $env:USERPROFILE '.openclaw'),
@@ -315,6 +366,21 @@ function New-TempScriptFromUrl {
 '@
     if ($content.Contains($rgOriginal)) {
         $content = $content.Replace($rgOriginal, $rgPatched)
+    }
+
+    $pythonFallbackOriginal = 'foreach ($fallbackVer in @("3.12", "3.13", "3.10")) {'
+    $pythonFallbackPatched = 'foreach ($fallbackVer in @("3.12", "3.10")) {'
+    if ($content.Contains($pythonFallbackOriginal)) {
+        $content = $content.Replace($pythonFallbackOriginal, $pythonFallbackPatched)
+    }
+
+    $pythonWarnOriginal = 'Write-Info " Or: winget install Python.Python.3.11"'
+    $pythonWarnPatched = @'
+Write-Info " Or: winget install Python.Python.3.11"
+Write-Info " GUI note: this launcher avoids auto-falling back to Python 3.13 because that path is less predictable on some Windows machines."
+'@
+    if ($content.Contains($pythonWarnOriginal)) {
+        $content = $content.Replace($pythonWarnOriginal, $pythonWarnPatched)
     }
 
     $skipPattern = 'function Install-SystemPackages \{.*?# ============================================================================\s+# Installation\s+# ============================================================================'
@@ -2273,6 +2339,7 @@ function Invoke-AppAction {
                 return
             }
             try {
+                $installEnv = Get-WindowsInstallEnvironment
                 Keep-LauncherVisible
                 $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl
                 $args = Build-InstallArguments -ScriptPath $tempScript -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
@@ -2280,6 +2347,25 @@ function Invoke-AppAction {
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。安装成功会自动关闭，失败会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
+                if ($installEnv.HasOnlyPython313) {
+                    Add-LogLine '安装前环境提示：当前只检测到 Python 3.13。官方文档主推 Python 3.11；GUI 安装器已禁用对 3.13 的自动回退。'
+                }
+                if ($installEnv.PyLauncherVersions) {
+                    Add-LogLine ('py 已检测到的 Python 版本: ' + ($installEnv.PyLauncherVersions -replace "`r?`n", ' | '))
+                }
+                if ($installEnv.PythonVersion) {
+                    Add-LogLine ('python --version: ' + $installEnv.PythonVersion)
+                }
+                if ($installEnv.UvVersion) {
+                    Add-LogLine ('uv 版本: ' + $installEnv.UvVersion)
+                } else {
+                    Add-LogLine 'uv 版本: 未检测到，官方安装脚本会尝试自动安装 uv。'
+                }
+                if ($installEnv.WingetVersion) {
+                    Add-LogLine ('winget 版本: ' + $installEnv.WingetVersion)
+                } else {
+                    Add-LogLine 'winget 版本: 未检测到。若 uv 自动安装 Python 失败，建议手动安装 Python 3.11。'
+                }
             } catch {
                 Add-ActionLog -Action '改用外部终端安装' -Result ('启动安装脚本失败：' + $_.Exception.Message) -Next '检查网络或终端报错后重试'
             }
