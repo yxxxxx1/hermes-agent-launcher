@@ -133,17 +133,36 @@ function Get-WindowsInstallEnvironment {
     } catch { }
 
     $allPythonText = @($pyLauncherVersions, $pythonVersion) -join "`n"
-    $hasPython311 = $allPythonText -match '3\.11'
-    $hasPython312 = $allPythonText -match '3\.12'
-    $hasPython310 = $allPythonText -match '3\.10'
-    $hasPython313 = $allPythonText -match '3\.13'
-    $hasOnlyPython313 = $hasPython313 -and -not ($hasPython311 -or $hasPython312 -or $hasPython310)
+    $versionMatches = [regex]::Matches($allPythonText, '3\.(\d+)(?:\.\d+)?')
+    $detectedMinorVersions = New-Object System.Collections.Generic.List[int]
+    foreach ($match in $versionMatches) {
+        $minorVersion = 0
+        if ([int]::TryParse($match.Groups[1].Value, [ref]$minorVersion)) {
+            if ($minorVersion -ge 10 -and -not $detectedMinorVersions.Contains($minorVersion)) {
+                [void]$detectedMinorVersions.Add($minorVersion)
+            }
+        }
+    }
+
+    $sortedDetectedMinorVersions = @($detectedMinorVersions | Sort-Object)
+    $preferredMinorVersion = $null
+    if ($sortedDetectedMinorVersions.Count -gt 0) {
+        $preferredMinorVersion = ($sortedDetectedMinorVersions | Sort-Object -Descending | Select-Object -First 1)
+    }
+
+    $hasPython311 = $sortedDetectedMinorVersions -contains 11
+    $hasPython312 = $sortedDetectedMinorVersions -contains 12
+    $hasPython310 = $sortedDetectedMinorVersions -contains 10
+    $hasPython313 = $sortedDetectedMinorVersions -contains 13
+    $hasOnlyPython313 = $hasPython313 -and ($sortedDetectedMinorVersions.Count -eq 1)
 
     [pscustomobject]@{
         PyLauncherVersions = $pyLauncherVersions
         PythonVersion      = $pythonVersion
         UvVersion          = $uvVersion
         WingetVersion      = $wingetVersion
+        DetectedPython3Minors = $sortedDetectedMinorVersions
+        PreferredPythonVersion = if ($preferredMinorVersion -ne $null) { '3.{0}' -f $preferredMinorVersion } else { $null }
         HasPython311       = [bool]$hasPython311
         HasPython312       = [bool]$hasPython312
         HasPython310       = [bool]$hasPython310
@@ -155,6 +174,9 @@ function Get-WindowsInstallEnvironment {
 function Get-PreferredPythonVersionForInstall {
     param($InstallEnv)
 
+    if ($InstallEnv.PreferredPythonVersion) {
+        return $InstallEnv.PreferredPythonVersion
+    }
     if ($InstallEnv.HasPython311) { return '3.11' }
     if ($InstallEnv.HasPython312) { return '3.12' }
     if ($InstallEnv.HasPython310) { return '3.10' }
@@ -2362,6 +2384,9 @@ function Invoke-AppAction {
                 Start-ExternalInstallMonitor -Process $proc
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。安装成功会自动关闭，失败会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
                 Add-LogLine ('安装器将优先使用的 Python 目标版本: ' + $preferredPythonVersion)
+                if ($installEnv.DetectedPython3Minors -and $installEnv.DetectedPython3Minors.Count -gt 0) {
+                    Add-LogLine ('检测到的本机 Python 3.x 版本: ' + (($installEnv.DetectedPython3Minors | ForEach-Object { '3.{0}' -f $_ }) -join ', '))
+                }
                 if ($installEnv.HasOnlyPython313) {
                     Add-LogLine '安装前环境提示：当前只检测到 Python 3.13。GUI 安装器会先尝试复用本机 3.13，而不是强制下载 3.11。'
                 }
