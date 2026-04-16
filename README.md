@@ -57,10 +57,49 @@ For the download page:
 index.html
 ```
 
+## Validate
+
+Run the Windows launcher's non-interactive self test:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\HermesGuiLauncher.ps1 -SelfTest
+```
+
+The command prints compact JSON with the launcher version, default paths, resolved `hermes` and `uv` commands, and the current install/config status. It is safe to run while the GUI launcher is already open.
+
+## Package
+
+Current downloadable artifacts live in `downloads/`:
+
+- `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
+- `Hermes-Windows-Launcher-v2026.04.14.2.zip`: versioned Windows download linked by `index.html`
+- `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
+- `Hermes-macOS-Launcher.zip`: alternate macOS archive
+
+Before publishing a Windows launcher update:
+
+1. Update `$script:LauncherVersion` in `HermesGuiLauncher.ps1`.
+2. Run the `-SelfTest` command from the Validate section.
+3. Create both the versioned Windows ZIP and the stable fallback ZIP:
+
+```powershell
+Compress-Archive -Path .\HermesGuiLauncher.ps1, .\Start-HermesGuiLauncher.cmd -DestinationPath .\downloads\Hermes-Windows-Launcher-vYYYY.MM.DD.N.zip -Force
+Copy-Item .\downloads\Hermes-Windows-Launcher-vYYYY.MM.DD.N.zip .\downloads\Hermes-Windows-Launcher.zip -Force
+```
+
+4. Update `index.html` so the primary Windows link and displayed version match the new ZIP and `$script:LauncherVersion`.
+
+Before publishing a macOS launcher update:
+
+```bash
+zip -j downloads/Hermes-macOS-Launcher.zip HermesMacGuiLauncher.command
+tar -czf downloads/Hermes-macOS-Launcher.tar.gz HermesMacGuiLauncher.command
+```
+
 ## Notes
 
-- The launcher uses the same default paths as the official Windows installer:
-  - `HERMES_HOME=%LOCALAPPDATA%\hermes`
+- The Windows launcher currently uses these defaults:
+  - `HERMES_HOME=%USERPROFILE%\.hermes`
   - `InstallDir=%LOCALAPPDATA%\hermes\hermes-agent`
 - The macOS launcher follows the current official docs and installer defaults:
   - `HERMES_HOME=~/.hermes`

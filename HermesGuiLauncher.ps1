@@ -5,14 +5,15 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:LauncherMutex = New-Object System.Threading.Mutex($false, 'Global\HermesGuiLauncher_SingleInstance')
-if (-not $script:LauncherMutex.WaitOne(0, $false)) {
-    $script:LauncherMutex.Dispose()
-    if (-not $SelfTest) {
+$script:LauncherMutex = $null
+if (-not $SelfTest) {
+    $script:LauncherMutex = New-Object System.Threading.Mutex($false, 'Global\HermesGuiLauncher_SingleInstance')
+    if (-not $script:LauncherMutex.WaitOne(0, $false)) {
+        $script:LauncherMutex.Dispose()
         Add-Type -AssemblyName PresentationFramework
         [System.Windows.MessageBox]::Show('Hermes 启动器已在运行中。', 'Hermes 启动器', 'OK', 'Information') | Out-Null
+        exit 0
     }
-    exit 0
 }
 
 Add-Type -AssemblyName PresentationFramework
@@ -2152,12 +2153,23 @@ Write-Host '卸载流程结束，可以关闭此窗口。' -ForegroundColor Cyan
 if ($SelfTest) {
     $defaults = Get-HermesDefaults
     $status = Test-HermesInstalled -InstallDir $defaults.InstallDir -HermesHome $defaults.HermesHome
+    $resolvedHermes = Resolve-HermesCommand -InstallDir $defaults.InstallDir
+    $resolvedUv = Resolve-UvCommand
     [pscustomobject]@{
+        SelfTest       = $true
+        LauncherVersion = $script:LauncherVersion
         DefaultsLoaded = [bool]$defaults
-        InstallDir     = $defaults.InstallDir
         HermesHome     = $defaults.HermesHome
+        InstallRoot    = $defaults.InstallRoot
+        InstallDir     = $defaults.InstallDir
+        ConfigPath     = $defaults.ConfigPath
+        EnvPath        = $defaults.EnvPath
+        LogsPath       = $defaults.LogsPath
+        HermesCommand  = $resolvedHermes
+        UvCommand      = $resolvedUv
         StatusChecked  = [bool]$status
-    } | ConvertTo-Json -Compress
+        Status         = $status
+    } | ConvertTo-Json -Depth 4 -Compress | Write-Output
     exit 0
 }
 
