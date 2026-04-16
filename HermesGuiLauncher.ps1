@@ -23,6 +23,13 @@ Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
 $script:LauncherVersion = 'Windows v2026.04.14.2'
+$script:HermesWebUiSourceRepo = 'nesquena/hermes-webui'
+$script:HermesWebUiVersionLabel = 'v0.50.63'
+$script:HermesWebUiCommit = 'a512f2020e01ef8c98989eb00c84a8d8cfc81ee1'
+$script:HermesWebUiArchiveUrl = "https://github.com/$($script:HermesWebUiSourceRepo)/archive/$($script:HermesWebUiCommit).zip"
+$script:HermesWebUiHost = '127.0.0.1'
+$script:HermesWebUiPortStart = 8787
+$script:HermesWebUiPortEnd = 8799
 
 Add-Type @"
 using System;
@@ -40,11 +47,18 @@ function Get-HermesDefaults {
     $hermesHome = Join-Path $env:USERPROFILE '.hermes'
     $installRoot = Join-Path $env:LOCALAPPDATA 'hermes'
     $installDir = Join-Path $installRoot 'hermes-agent'
+    $webUiDir = Join-Path $installRoot 'hermes-webui'
     $venvScripts = Join-Path $installDir 'venv\Scripts'
     [pscustomobject]@{
         HermesHome         = $hermesHome
         InstallRoot        = $installRoot
         InstallDir         = $installDir
+        WebUiDir           = $webUiDir
+        WebUiStagingDir    = Join-Path $installRoot 'hermes-webui-staging'
+        WebUiBackupDir     = Join-Path $installRoot 'hermes-webui-backup'
+        WebUiStateDir      = Join-Path $hermesHome 'webui'
+        WebUiLauncherState = Join-Path $hermesHome 'webui-launcher.json'
+        WebUiWorkspaceDir  = Join-Path $env:USERPROFILE 'HermesWorkspace'
         VenvScripts        = $venvScripts
         HermesExe          = Join-Path $venvScripts 'hermes.exe'
         PythonExe          = Join-Path $venvScripts 'python.exe'
@@ -114,6 +128,318 @@ function Resolve-UvCommand {
     }
 
     return $null
+}
+
+function Get-HermesWebUiDefaults {
+    param(
+        [string]$HermesHome,
+        [string]$InstallDir
+    )
+
+    $base = Get-HermesDefaults
+    if (-not $HermesHome) { $HermesHome = $base.HermesHome }
+    if (-not $InstallDir) { $InstallDir = $base.InstallDir }
+    $installRoot = Split-Path -Parent $InstallDir
+    if (-not $installRoot) { $installRoot = $base.InstallRoot }
+
+    [pscustomobject]@{
+        SourceRepo        = $script:HermesWebUiSourceRepo
+        VersionLabel      = $script:HermesWebUiVersionLabel
+        Commit            = $script:HermesWebUiCommit
+        ArchiveUrl        = $script:HermesWebUiArchiveUrl
+        Host              = $script:HermesWebUiHost
+        PortStart         = $script:HermesWebUiPortStart
+        PortEnd           = $script:HermesWebUiPortEnd
+        InstallDir        = Join-Path $installRoot 'hermes-webui'
+        StagingDir        = Join-Path $installRoot 'hermes-webui-staging'
+        BackupDir         = Join-Path $installRoot 'hermes-webui-backup'
+        StateDir          = Join-Path $HermesHome 'webui'
+        LauncherStatePath = Join-Path $HermesHome 'webui-launcher.json'
+        WorkspaceDir      = Join-Path $env:USERPROFILE 'HermesWorkspace'
+        LogsDir           = Join-Path (Join-Path $HermesHome 'logs') 'webui'
+        AgentDir          = $InstallDir
+        PythonExe         = Join-Path $InstallDir 'venv\Scripts\python.exe'
+        ConfigPath        = Join-Path $HermesHome 'config.yaml'
+        HermesHome        = $HermesHome
+    }
+}
+
+function Test-HermesWebUiInstalled {
+    param([string]$WebUiDir)
+
+    $serverPath = Join-Path $WebUiDir 'server.py'
+    $requirementsPath = Join-Path $WebUiDir 'requirements.txt'
+    $staticIndexPath = Join-Path (Join-Path $WebUiDir 'static') 'index.html'
+    [pscustomobject]@{
+        Installed          = [bool]((Test-Path $serverPath) -and (Test-Path $requirementsPath) -and (Test-Path $staticIndexPath))
+        WebUiDir           = $WebUiDir
+        ServerPath         = $serverPath
+        RequirementsPath   = $requirementsPath
+        StaticIndexPath    = $staticIndexPath
+        ServerExists       = [bool](Test-Path $serverPath)
+        RequirementsExists = [bool](Test-Path $requirementsPath)
+        StaticIndexExists  = [bool](Test-Path $staticIndexPath)
+        Commit             = $script:HermesWebUiCommit
+        VersionLabel       = $script:HermesWebUiVersionLabel
+    }
+}
+
+function Assert-SafeWebUiPath {
+    param(
+        [string]$Path,
+        [string]$InstallRoot
+    )
+
+    if (-not $Path -or -not $InstallRoot) { throw 'WebUI 路径为空。' }
+    $rootFull = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $pathFull = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if (-not $pathFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "拒绝操作安装根目录之外的 WebUI 路径：$pathFull"
+    }
+}
+
+function Install-HermesWebUi {
+    param(
+        $WebUiDefaults,
+        [bool]$Force = $false
+    )
+
+    $existing = Test-HermesWebUiInstalled -WebUiDir $WebUiDefaults.InstallDir
+    if ($existing.Installed -and -not $Force) {
+        return [pscustomobject]@{
+            Installed = $true
+            Changed   = $false
+            Message   = 'WebUI 已安装。'
+            Status    = $existing
+        }
+    }
+
+    $installRoot = Split-Path -Parent $WebUiDefaults.InstallDir
+    Assert-SafeWebUiPath -Path $WebUiDefaults.InstallDir -InstallRoot $installRoot
+    Assert-SafeWebUiPath -Path $WebUiDefaults.StagingDir -InstallRoot $installRoot
+    Assert-SafeWebUiPath -Path $WebUiDefaults.BackupDir -InstallRoot $installRoot
+    if (-not (Test-Path $installRoot)) {
+        New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+    }
+
+    if (Test-Path $WebUiDefaults.StagingDir) {
+        Remove-Item -LiteralPath $WebUiDefaults.StagingDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $WebUiDefaults.StagingDir -Force | Out-Null
+
+    $archivePath = Join-Path $WebUiDefaults.StagingDir ('hermes-webui-' + $WebUiDefaults.Commit + '.zip')
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $WebUiDefaults.ArchiveUrl -OutFile $archivePath
+        $extractDir = Join-Path $WebUiDefaults.StagingDir 'extract'
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir -Force
+        $inner = Get-ChildItem -LiteralPath $extractDir -Directory | Select-Object -First 1
+        if (-not $inner) { throw 'WebUI 压缩包内没有源码目录。' }
+        $candidate = $inner.FullName
+        $candidateStatus = Test-HermesWebUiInstalled -WebUiDir $candidate
+        if (-not $candidateStatus.Installed) {
+            throw 'WebUI 压缩包缺少 server.py、requirements.txt 或 static/index.html。'
+        }
+
+        if (Test-Path $WebUiDefaults.BackupDir) {
+            Remove-Item -LiteralPath $WebUiDefaults.BackupDir -Recurse -Force
+        }
+        if (Test-Path $WebUiDefaults.InstallDir) {
+            Move-Item -LiteralPath $WebUiDefaults.InstallDir -Destination $WebUiDefaults.BackupDir -Force
+        }
+
+        try {
+            Move-Item -LiteralPath $candidate -Destination $WebUiDefaults.InstallDir -Force
+        } catch {
+            if ((Test-Path $WebUiDefaults.BackupDir) -and -not (Test-Path $WebUiDefaults.InstallDir)) {
+                Move-Item -LiteralPath $WebUiDefaults.BackupDir -Destination $WebUiDefaults.InstallDir -Force
+            }
+            throw
+        }
+
+        $finalStatus = Test-HermesWebUiInstalled -WebUiDir $WebUiDefaults.InstallDir
+        if (-not $finalStatus.Installed) { throw 'WebUI 安装后校验失败。' }
+        return [pscustomobject]@{
+            Installed = $true
+            Changed   = $true
+            Message   = "WebUI 已安装到 $($WebUiDefaults.InstallDir)。"
+            Status    = $finalStatus
+        }
+    } finally {
+        if (Test-Path $WebUiDefaults.StagingDir) {
+            Remove-Item -LiteralPath $WebUiDefaults.StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-HermesWebUiPythonReady {
+    param([string]$PythonExe)
+
+    if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
+        return [pscustomobject]@{
+            Ready   = $false
+            Message = '未找到 Hermes Python。'
+        }
+    }
+
+    $output = & $PythonExe -c "import yaml; print('yaml-ok')" 2>&1
+    [pscustomobject]@{
+        Ready   = [bool]($LASTEXITCODE -eq 0)
+        Message = if ($LASTEXITCODE -eq 0) { 'pyyaml 已可用。' } else { ($output -join [Environment]::NewLine) }
+    }
+}
+
+function Ensure-HermesWebUiPythonDependency {
+    param(
+        [string]$PythonExe,
+        [string]$UvExe
+    )
+
+    $ready = Test-HermesWebUiPythonReady -PythonExe $PythonExe
+    if ($ready.Ready) {
+        return [pscustomobject]@{ Ready = $true; Changed = $false; Message = $ready.Message }
+    }
+
+    if ($UvExe -and (Test-Path $UvExe)) {
+        $uvOutput = & $UvExe pip install --python $PythonExe 'pyyaml>=6.0' 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return [pscustomobject]@{ Ready = $true; Changed = $true; Message = '已通过 uv 安装 pyyaml。' }
+        }
+    }
+
+    $pipOutput = & $PythonExe -m pip install --quiet 'pyyaml>=6.0' 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        return [pscustomobject]@{ Ready = $true; Changed = $true; Message = '已通过 pip 安装 pyyaml。' }
+    }
+
+    [pscustomobject]@{
+        Ready   = $false
+        Changed = $false
+        Message = if ($pipOutput) { ($pipOutput -join [Environment]::NewLine) } else { 'pyyaml 安装失败。' }
+    }
+}
+
+function Get-ObjectPropertyValue {
+    param(
+        $InputObject,
+        [string]$Name
+    )
+
+    if ($null -eq $InputObject) { return $null }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($property) { return $property.Value }
+    return $null
+}
+
+function Load-HermesWebUiRuntimeState {
+    param([string]$HermesHome)
+
+    $webUiDefaults = Get-HermesWebUiDefaults -HermesHome $HermesHome
+    $path = $webUiDefaults.LauncherStatePath
+    if (-not $path -or -not (Test-Path $path)) {
+        return [pscustomobject]@{
+            Exists       = $false
+            SourceRepo   = $script:HermesWebUiSourceRepo
+            VersionLabel = $script:HermesWebUiVersionLabel
+            Commit       = $script:HermesWebUiCommit
+            Pid          = $null
+            Port         = $null
+            Url          = $null
+            OutLog       = $null
+            ErrLog       = $null
+            InstalledAt  = $null
+            StartedAt    = $null
+            UpdatedAt    = $null
+        }
+    }
+
+    try {
+        $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        $pidValue = Get-ObjectPropertyValue -InputObject $data -Name 'pid'
+        $portValue = Get-ObjectPropertyValue -InputObject $data -Name 'port'
+        return [pscustomobject]@{
+            Exists       = $true
+            SourceRepo   = [string](Get-ObjectPropertyValue -InputObject $data -Name 'source_repo')
+            VersionLabel = [string](Get-ObjectPropertyValue -InputObject $data -Name 'version_label')
+            Commit       = [string](Get-ObjectPropertyValue -InputObject $data -Name 'commit')
+            WebUiDir     = [string](Get-ObjectPropertyValue -InputObject $data -Name 'webui_dir')
+            StateDir     = [string](Get-ObjectPropertyValue -InputObject $data -Name 'state_dir')
+            Workspace    = [string](Get-ObjectPropertyValue -InputObject $data -Name 'workspace')
+            Pid          = if ($pidValue) { [int]$pidValue } else { $null }
+            Port         = if ($portValue) { [int]$portValue } else { $null }
+            Url          = [string](Get-ObjectPropertyValue -InputObject $data -Name 'url')
+            OutLog       = [string](Get-ObjectPropertyValue -InputObject $data -Name 'out_log')
+            ErrLog       = [string](Get-ObjectPropertyValue -InputObject $data -Name 'err_log')
+            InstalledAt  = [string](Get-ObjectPropertyValue -InputObject $data -Name 'installed_at')
+            StartedAt    = [string](Get-ObjectPropertyValue -InputObject $data -Name 'started_at')
+            UpdatedAt    = [string](Get-ObjectPropertyValue -InputObject $data -Name 'updated_at')
+        }
+    } catch {
+        return [pscustomobject]@{
+            Exists       = $false
+            SourceRepo   = $script:HermesWebUiSourceRepo
+            VersionLabel = $script:HermesWebUiVersionLabel
+            Commit       = $script:HermesWebUiCommit
+            Pid          = $null
+            Port         = $null
+            Url          = $null
+            OutLog       = $null
+            ErrLog       = $null
+            InstalledAt  = $null
+            StartedAt    = $null
+            UpdatedAt    = $null
+        }
+    }
+}
+
+function Test-HermesWebUiHealth {
+    param(
+        [int]$Port,
+        [string]$HostName = $script:HermesWebUiHost,
+        [int]$TimeoutSec = 2
+    )
+
+    $url = "http://$HostName`:$Port"
+    try {
+        $health = Invoke-RestMethod -Uri "$url/health" -TimeoutSec $TimeoutSec
+        return [pscustomobject]@{
+            Healthy = [bool]($health.status -eq 'ok')
+            Url     = $url
+            Port    = $Port
+            Message = if ($health.status -eq 'ok') { 'WebUI health ok.' } else { 'WebUI health returned unexpected status.' }
+            Raw     = $health
+        }
+    } catch {
+        return [pscustomobject]@{
+            Healthy = $false
+            Url     = $url
+            Port    = $Port
+            Message = $_.Exception.Message
+            Raw     = $null
+        }
+    }
+}
+
+function Get-HermesWebUiStatus {
+    param(
+        [string]$HermesHome,
+        [string]$InstallDir
+    )
+
+    $webUiDefaults = Get-HermesWebUiDefaults -HermesHome $HermesHome -InstallDir $InstallDir
+    $installStatus = Test-HermesWebUiInstalled -WebUiDir $webUiDefaults.InstallDir
+    $runtime = Load-HermesWebUiRuntimeState -HermesHome $HermesHome
+    $health = $null
+    if ($runtime.Port) {
+        $health = Test-HermesWebUiHealth -Port $runtime.Port
+    }
+    [pscustomobject]@{
+        Defaults      = $webUiDefaults
+        InstallStatus = $installStatus
+        Runtime       = $runtime
+        Healthy       = [bool]($health -and $health.Healthy)
+        Health        = $health
+        Url           = if ($health -and $health.Healthy) { $health.Url } elseif ($runtime.Url) { $runtime.Url } else { $null }
+    }
 }
 
 function Get-OpenClawSources {
@@ -2155,6 +2481,7 @@ if ($SelfTest) {
     $status = Test-HermesInstalled -InstallDir $defaults.InstallDir -HermesHome $defaults.HermesHome
     $resolvedHermes = Resolve-HermesCommand -InstallDir $defaults.InstallDir
     $resolvedUv = Resolve-UvCommand
+    $webUiStatus = Get-HermesWebUiStatus -HermesHome $defaults.HermesHome -InstallDir $defaults.InstallDir
     [pscustomobject]@{
         SelfTest       = $true
         LauncherVersion = $script:LauncherVersion
@@ -2169,6 +2496,23 @@ if ($SelfTest) {
         UvCommand      = $resolvedUv
         StatusChecked  = [bool]$status
         Status         = $status
+        WebUi          = [pscustomobject]@{
+            SourceRepo     = $script:HermesWebUiSourceRepo
+            VersionLabel   = $script:HermesWebUiVersionLabel
+            Commit         = $script:HermesWebUiCommit
+            ArchiveUrl     = $script:HermesWebUiArchiveUrl
+            Installed      = [bool]$webUiStatus.InstallStatus.Installed
+            WebUiDir       = $webUiStatus.Defaults.InstallDir
+            StateDir       = $webUiStatus.Defaults.StateDir
+            WorkspaceDir   = $webUiStatus.Defaults.WorkspaceDir
+            LauncherState  = $webUiStatus.Defaults.LauncherStatePath
+            RuntimeKnown   = [bool]$webUiStatus.Runtime.Exists
+            RuntimeHealthy = [bool]$webUiStatus.Healthy
+            Port           = $webUiStatus.Runtime.Port
+            Url            = $webUiStatus.Url
+            OutLog         = $webUiStatus.Runtime.OutLog
+            ErrLog         = $webUiStatus.Runtime.ErrLog
+        }
     } | ConvertTo-Json -Depth 4 -Compress | Write-Output
     exit 0
 }
@@ -2486,6 +2830,230 @@ function Save-LauncherState {
         } | ConvertTo-Json -Compress
         [System.IO.File]::WriteAllText($path, $payload, [System.Text.Encoding]::UTF8)
     } catch { }
+}
+
+function Save-HermesWebUiRuntimeState {
+    param(
+        $WebUiDefaults,
+        [Nullable[int]]$ProcessId = $null,
+        [Nullable[int]]$Port = $null,
+        [string]$Url = $null,
+        [string]$OutLog = $null,
+        [string]$ErrLog = $null
+    )
+
+    $path = $WebUiDefaults.LauncherStatePath
+    $parent = Split-Path -Parent $path
+    if ($parent -and -not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $current = Load-HermesWebUiRuntimeState -HermesHome $WebUiDefaults.HermesHome
+    $payload = @{
+        source_repo   = $WebUiDefaults.SourceRepo
+        version_label = $WebUiDefaults.VersionLabel
+        commit        = $WebUiDefaults.Commit
+        webui_dir     = $WebUiDefaults.InstallDir
+        state_dir     = $WebUiDefaults.StateDir
+        workspace     = $WebUiDefaults.WorkspaceDir
+        pid           = if ($PSBoundParameters.ContainsKey('ProcessId')) { if ($null -ne $ProcessId) { [int]$ProcessId } else { $null } } else { $current.Pid }
+        port          = if ($null -ne $Port) { [int]$Port } else { $current.Port }
+        url           = if ($Url) { $Url } else { $current.Url }
+        out_log       = if ($OutLog) { $OutLog } else { $current.OutLog }
+        err_log       = if ($ErrLog) { $ErrLog } else { $current.ErrLog }
+        installed_at  = if ($current.InstalledAt) { $current.InstalledAt } else { (Get-Date).ToString('s') }
+        started_at    = if ($PSBoundParameters.ContainsKey('ProcessId') -or ($Url -and -not $current.StartedAt)) { (Get-Date).ToString('s') } else { $current.StartedAt }
+        updated_at    = (Get-Date).ToString('s')
+    } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($path, $payload, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Wait-HermesWebUiHealth {
+    param(
+        [int]$Port,
+        [int]$TimeoutSec = 25
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $health = Test-HermesWebUiHealth -Port $Port -TimeoutSec 2
+        if ($health.Healthy) { return $health }
+        Start-Sleep -Milliseconds 600
+    } while ((Get-Date) -lt $deadline)
+
+    return $health
+}
+
+function Resolve-HermesWebUiPort {
+    param($WebUiDefaults)
+
+    $state = Load-HermesWebUiRuntimeState -HermesHome $WebUiDefaults.HermesHome
+    if ($state.Port) {
+        $existingHealth = Test-HermesWebUiHealth -Port $state.Port
+        if ($existingHealth.Healthy) {
+            return [pscustomobject]@{ Port = [int]$state.Port; Reuse = $true; Health = $existingHealth }
+        }
+    }
+
+    for ($port = $WebUiDefaults.PortStart; $port -le $WebUiDefaults.PortEnd; $port++) {
+        $health = Test-HermesWebUiHealth -Port $port
+        if ($health.Healthy) {
+            return [pscustomobject]@{ Port = $port; Reuse = $true; Health = $health }
+        }
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $async = $client.BeginConnect($WebUiDefaults.Host, $port, $null, $null)
+            $connected = $async.AsyncWaitHandle.WaitOne(250, $false)
+            $client.Close()
+            if ($connected) { continue }
+        } catch { }
+        return [pscustomobject]@{ Port = $port; Reuse = $false; Health = $health }
+    }
+
+    throw "没有可用的 WebUI 本地端口（$($WebUiDefaults.PortStart)-$($WebUiDefaults.PortEnd)）。"
+}
+
+function Start-HermesWebUiRuntime {
+    param(
+        $WebUiDefaults,
+        [int]$Port
+    )
+
+    if (-not (Test-Path $WebUiDefaults.PythonExe)) {
+        throw "未找到 Hermes Python：$($WebUiDefaults.PythonExe)"
+    }
+    $serverPath = Join-Path $WebUiDefaults.InstallDir 'server.py'
+    if (-not (Test-Path $serverPath)) {
+        throw "未找到 WebUI server.py：$serverPath"
+    }
+    foreach ($dir in @($WebUiDefaults.StateDir, $WebUiDefaults.WorkspaceDir, $WebUiDefaults.LogsDir)) {
+        if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+    }
+
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $outLog = Join-Path $WebUiDefaults.LogsDir "$timestamp-webui.out.log"
+    $errLog = Join-Path $WebUiDefaults.LogsDir "$timestamp-webui.err.log"
+
+    $envBlock = @{
+        HERMES_HOME                    = $WebUiDefaults.HermesHome
+        HERMES_CONFIG_PATH             = $WebUiDefaults.ConfigPath
+        HERMES_WEBUI_AGENT_DIR         = $WebUiDefaults.AgentDir
+        HERMES_WEBUI_STATE_DIR         = $WebUiDefaults.StateDir
+        HERMES_WEBUI_DEFAULT_WORKSPACE = $WebUiDefaults.WorkspaceDir
+        HERMES_WEBUI_HOST              = $WebUiDefaults.Host
+        HERMES_WEBUI_PORT              = [string]$Port
+        HERMES_WEBUI_BOT_NAME          = 'Hermes'
+        PYTHONIOENCODING               = 'utf-8'
+        PYTHONUTF8                     = '1'
+    }
+
+    $oldEnv = @{}
+    foreach ($key in $envBlock.Keys) {
+        $oldEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+        [Environment]::SetEnvironmentVariable($key, $envBlock[$key], 'Process')
+    }
+    try {
+        $process = Start-Process -FilePath $WebUiDefaults.PythonExe -ArgumentList @($serverPath) -WorkingDirectory $WebUiDefaults.InstallDir -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru -WindowStyle Hidden
+    } finally {
+        foreach ($key in $oldEnv.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $oldEnv[$key], 'Process')
+        }
+    }
+
+    Save-HermesWebUiRuntimeState -WebUiDefaults $WebUiDefaults -ProcessId $process.Id -Port $Port -Url "http://$($WebUiDefaults.Host)`:$Port" -OutLog $outLog -ErrLog $errLog
+    return [pscustomobject]@{
+        Process = $process
+        Pid     = $process.Id
+        Port    = $Port
+        Url     = "http://$($WebUiDefaults.Host)`:$Port"
+        OutLog  = $outLog
+        ErrLog  = $errLog
+    }
+}
+
+function Set-HermesWebUiDefaults {
+    param(
+        [string]$Url,
+        $WebUiDefaults
+    )
+
+    $body = @{
+        language          = 'zh'
+        default_workspace = $WebUiDefaults.WorkspaceDir
+        theme             = 'dark'
+        send_key          = 'enter'
+        check_for_updates = $false
+        show_cli_sessions = $false
+        show_token_usage  = $false
+        bot_name          = 'Hermes'
+    } | ConvertTo-Json -Compress
+
+    Invoke-RestMethod -Uri "$Url/api/settings" -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 10 | Out-Null
+}
+
+function Stop-HermesWebUiRuntime {
+    param([string]$HermesHome)
+
+    $state = Load-HermesWebUiRuntimeState -HermesHome $HermesHome
+    if ($state.Pid) {
+        $process = Get-Process -Id $state.Pid -ErrorAction SilentlyContinue
+        if ($process) {
+            Stop-Process -Id $state.Pid -Force
+            return $true
+        }
+    }
+    return $false
+}
+
+function Ensure-HermesWebUiReady {
+    param(
+        [string]$HermesHome,
+        [string]$InstallDir,
+        [bool]$ForceInstall = $false,
+        [bool]$Restart = $false
+    )
+
+    $webUiDefaults = Get-HermesWebUiDefaults -HermesHome $HermesHome -InstallDir $InstallDir
+    if ($Restart) { Stop-HermesWebUiRuntime -HermesHome $HermesHome | Out-Null }
+
+    $installResult = Install-HermesWebUi -WebUiDefaults $webUiDefaults -Force:$ForceInstall
+    if (-not $installResult.Installed) {
+        throw $installResult.Message
+    }
+
+    $dependency = Ensure-HermesWebUiPythonDependency -PythonExe $webUiDefaults.PythonExe -UvExe (Resolve-UvCommand)
+    if (-not $dependency.Ready) {
+        throw "WebUI Python 依赖未就绪：$($dependency.Message)"
+    }
+
+    $portChoice = Resolve-HermesWebUiPort -WebUiDefaults $webUiDefaults
+    if ($portChoice.Reuse) {
+        Set-HermesWebUiDefaults -Url $portChoice.Health.Url -WebUiDefaults $webUiDefaults
+        Save-HermesWebUiRuntimeState -WebUiDefaults $webUiDefaults -ProcessId $null -Port $portChoice.Port -Url $portChoice.Health.Url
+        return [pscustomobject]@{
+            Ready   = $true
+            Reused  = $true
+            Url     = $portChoice.Health.Url
+            Message = '已复用正在运行的 WebUI。'
+            Details = $portChoice.Health
+        }
+    }
+
+    $runtime = Start-HermesWebUiRuntime -WebUiDefaults $webUiDefaults -Port $portChoice.Port
+    $health = Wait-HermesWebUiHealth -Port $runtime.Port -TimeoutSec 25
+    if (-not $health.Healthy) {
+        throw "WebUI 启动后没有通过健康检查：$($health.Message)。日志：$($runtime.OutLog) / $($runtime.ErrLog)"
+    }
+    Set-HermesWebUiDefaults -Url $health.Url -WebUiDefaults $webUiDefaults
+
+    [pscustomobject]@{
+        Ready   = $true
+        Reused  = $false
+        Url     = $health.Url
+        Message = 'WebUI 已启动。'
+        Details = $runtime
+    }
 }
 
 function Add-LogLine {
@@ -4130,6 +4698,21 @@ function Show-AdvancedPanel {
         [pscustomobject]@{ Label = '打开安装目录'; ActionId = 'browse-install'; Enabled = (Test-Path $state.InstallDir) },
         [pscustomobject]@{ Label = '打开日志目录'; ActionId = 'open-logs'; Enabled = (Test-Path (Join-Path $state.HermesHome 'logs')) }
     )
+    $webUiBody = if ($state.WebUiStatus.Healthy) {
+        "WebUI 正在运行：$($state.WebUiStatus.Url)"
+    } elseif ($state.WebUiStatus.InstallStatus.Installed) {
+        "WebUI 已安装，版本：$($script:HermesWebUiVersionLabel) / $($script:HermesWebUiCommit.Substring(0, 12))。"
+    } else {
+        'WebUI 尚未安装。点击【打开 WebUI】或首页【开始对话】会自动安装启动器内置稳定版。'
+    }
+    Add-SubPanelSection -DialogWindow $dialogRef.Window -Container $dialogRef.ContentPanel -Title 'WebUI' -Body $webUiBody -Actions @(
+        [pscustomobject]@{ Label = '打开 WebUI'; ActionId = 'launch-webui'; Enabled = [bool]$state.HermesCommand; Primary = $true },
+        [pscustomobject]@{ Label = '重启 WebUI'; ActionId = 'restart-webui'; Enabled = [bool]$state.HermesCommand },
+        [pscustomobject]@{ Label = '更新 WebUI'; ActionId = 'update-webui'; Enabled = [bool]$state.HermesCommand },
+        [pscustomobject]@{ Label = '打开 WebUI 日志'; ActionId = 'open-webui-logs'; Enabled = (Test-Path $state.WebUiStatus.Defaults.LogsDir) },
+        [pscustomobject]@{ Label = '打开 WebUI 目录'; ActionId = 'open-webui-dir'; Enabled = (Test-Path $state.WebUiStatus.Defaults.InstallDir) },
+        [pscustomobject]@{ Label = '打开命令行对话'; ActionId = 'launch-cli'; Enabled = [bool]$state.HermesCommand }
+    )
     Add-SubPanelSection -DialogWindow $dialogRef.Window -Container $dialogRef.ContentPanel -Title '维护' -Body '' -Actions @(
         [pscustomobject]@{ Label = '刷新状态'; ActionId = 'refresh'; Enabled = $true },
         [pscustomobject]@{ Label = '运行 update'; ActionId = 'update'; Enabled = [bool]$state.HermesCommand },
@@ -4667,6 +5250,7 @@ function Get-UiState {
     $gatewayStatus = Test-HermesGatewayReadiness -InstallDir $installDir -HermesHome $hermesHome
     $gatewayRuntime = Get-GatewayRuntimeStatus -HermesHome $hermesHome
     $launcherState = Load-LauncherState -HermesHome $hermesHome
+    $webUiStatus = Get-HermesWebUiStatus -HermesHome $hermesHome -InstallDir $installDir
 
     [pscustomobject]@{
         InstallDir      = $installDir
@@ -4679,6 +5263,7 @@ function Get-UiState {
         GatewayStatus   = $gatewayStatus
         GatewayRuntime  = $gatewayRuntime
         LauncherState   = $launcherState
+        WebUiStatus     = $webUiStatus
     }
 }
 
@@ -5342,6 +5927,9 @@ function Invoke-AppAction {
             Add-ActionLog -Action '运行 doctor' -Result '已打开官方诊断终端' -Next '根据终端输出修复问题后再刷新状态'
         }
         'launch' {
+            Invoke-AppAction 'launch-webui'
+        }
+        'launch-webui' {
             if (-not $hermesCommand) {
                 [System.Windows.MessageBox]::Show('未找到 Hermes 命令，请先安装 Hermes。', 'Hermes 启动器')
                 return
@@ -5351,15 +5939,83 @@ function Invoke-AppAction {
                 Invoke-AppAction 'model'
                 return
             }
+            try {
+                Add-ActionLog -Action '打开 WebUI' -Result '正在准备 Hermes WebUI' -Next '首次使用会下载启动器内置稳定版，请稍等'
+                $result = Ensure-HermesWebUiReady -HermesHome $hermesHome -InstallDir $installDir
+                Open-BrowserUrlSafe -Url $result.Url
+                $script:LocalChatVerificationPending = $false
+                $script:LocalChatVerified = $true
+                Save-LauncherState -HermesHome $hermesHome -LocalChatVerified $true
+                Add-ActionLog -Action '开始对话' -Result ("已打开 Hermes WebUI：{0}" -f $result.Url) -Next '浏览器中可以直接开始中文 WebUI 对话；命令行入口保留在“更多设置”'
+                Refresh-Status
+            } catch {
+                $message = @(
+                    'WebUI 启动失败。'
+                    ''
+                    $_.Exception.Message
+                    ''
+                    '可以先改用命令行对话，或打开 WebUI 日志排查。'
+                    ''
+                    '是否现在打开命令行对话？'
+                ) -join [Environment]::NewLine
+                Add-ActionLog -Action '打开 WebUI' -Result ('失败：' + $_.Exception.Message) -Next '可打开 WebUI 日志，或使用命令行对话作为备用入口'
+                $choice = [System.Windows.MessageBox]::Show($message, 'Hermes WebUI', [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+                if ($choice -eq [System.Windows.MessageBoxResult]::Yes) {
+                    Invoke-AppAction 'launch-cli'
+                }
+            }
+        }
+        'launch-cli' {
+            if (-not $hermesCommand) {
+                [System.Windows.MessageBox]::Show('未找到 Hermes 命令，请先安装 Hermes。', 'Hermes 启动器')
+                return
+            }
+            if (-not $state.ModelStatus.ReadyLikely) {
+                Add-ActionLog -Action '开始命令行对话' -Result '当前还没有完成模型配置，已转到模型配置入口' -Next '先保存模型配置，再重新点击“打开命令行对话”'
+                Invoke-AppAction 'model'
+                return
+            }
             $script:LocalChatVerificationPending = $true
             if (-not (Confirm-TerminalAction -ActionTitle '开始本地对话' -UserSteps @('终端打开后，直接在里面和 Hermes 对话。', '结束对话时可输入 exit，或按 Ctrl+C。', '首次验证本地对话时，确认能正常聊天即可。') -SuccessHint '关闭终端后回到启动器，可继续配置消息渠道。')) {
                 $script:LocalChatVerificationPending = $false
-                Add-ActionLog -Action '开始对话' -Result '已取消打开终端' -Next '准备好后可再次点击“开始对话”'
+                Add-ActionLog -Action '开始命令行对话' -Result '已取消打开终端' -Next '准备好后可再次点击“打开命令行对话”'
                 return
             }
             Start-InTerminal -WorkingDirectory $installDir -HermesHome $hermesHome -CommandLine ("& '$hermesCommand'") | Out-Null
-            Add-ActionLog -Action '开始对话' -Result '已打开 Hermes 本地对话终端' -Next '如需通过消息渠道继续对话，可进入“消息渠道”设置'
+            Add-ActionLog -Action '开始命令行对话' -Result '已打开 Hermes 本地对话终端' -Next '如需通过 WebUI 对话，可再次点击首页“开始对话”'
             Refresh-Status
+        }
+        'restart-webui' {
+            try {
+                $result = Ensure-HermesWebUiReady -HermesHome $hermesHome -InstallDir $installDir -Restart $true
+                Open-BrowserUrlSafe -Url $result.Url
+                Add-ActionLog -Action '重启 WebUI' -Result ("WebUI 已重启：{0}" -f $result.Url) -Next '浏览器已打开 WebUI'
+                Refresh-Status
+            } catch {
+                Add-ActionLog -Action '重启 WebUI' -Result ('失败：' + $_.Exception.Message) -Next '可打开 WebUI 日志或改用命令行对话'
+                [System.Windows.MessageBox]::Show(('重启 WebUI 失败：' + $_.Exception.Message), 'Hermes WebUI')
+            }
+        }
+        'update-webui' {
+            try {
+                $result = Ensure-HermesWebUiReady -HermesHome $hermesHome -InstallDir $installDir -ForceInstall $true -Restart $true
+                Open-BrowserUrlSafe -Url $result.Url
+                Add-ActionLog -Action '更新 WebUI' -Result ("已更新到启动器内置稳定版 {0}，并打开：{1}" -f $script:HermesWebUiVersionLabel, $result.Url) -Next '如遇异常，可打开 WebUI 日志排查'
+                Refresh-Status
+            } catch {
+                Add-ActionLog -Action '更新 WebUI' -Result ('失败：' + $_.Exception.Message) -Next '保留现有 WebUI 或改用命令行对话'
+                [System.Windows.MessageBox]::Show(('更新 WebUI 失败：' + $_.Exception.Message), 'Hermes WebUI')
+            }
+        }
+        'open-webui-logs' {
+            $webUiDefaults = Get-HermesWebUiDefaults -HermesHome $hermesHome -InstallDir $installDir
+            Open-InExplorer -Path $webUiDefaults.LogsDir
+            Add-ActionLog -Action '打开 WebUI 日志' -Result '已请求打开 WebUI 日志目录' -Next '可查看 stdout/stderr 日志'
+        }
+        'open-webui-dir' {
+            $webUiDefaults = Get-HermesWebUiDefaults -HermesHome $hermesHome -InstallDir $installDir
+            Open-InExplorer -Path $webUiDefaults.InstallDir
+            Add-ActionLog -Action '打开 WebUI 目录' -Result '已请求打开 WebUI 安装目录' -Next '可查看 upstream WebUI 源码'
         }
         'confirm-local-chat' {
             if (-not $hermesCommand) {

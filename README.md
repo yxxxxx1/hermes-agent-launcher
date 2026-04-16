@@ -67,6 +67,29 @@ powershell -ExecutionPolicy Bypass -File .\HermesGuiLauncher.ps1 -SelfTest
 
 The command prints compact JSON with the launcher version, default paths, resolved `hermes` and `uv` commands, and the current install/config status. It is safe to run while the GUI launcher is already open.
 
+## WebUI
+
+On Windows, the primary `开始对话` action is designed to open a local Hermes WebUI in the browser after Hermes and model configuration are ready. The command-line conversation path remains available from `更多设置` as `打开命令行对话`.
+
+The launcher installs WebUI from an approved upstream snapshot:
+
+- Source: `nesquena/hermes-webui`
+- Version label: `v0.50.63`
+- Commit: `a512f2020e01ef8c98989eb00c84a8d8cfc81ee1`
+- Archive: `https://github.com/nesquena/hermes-webui/archive/a512f2020e01ef8c98989eb00c84a8d8cfc81ee1.zip`
+
+Runtime paths:
+
+- WebUI install: `%LOCALAPPDATA%\hermes\hermes-webui`
+- WebUI staging: `%LOCALAPPDATA%\hermes\hermes-webui-staging`
+- WebUI backup: `%LOCALAPPDATA%\hermes\hermes-webui-backup`
+- WebUI state: `%USERPROFILE%\.hermes\webui`
+- Launcher WebUI state: `%USERPROFILE%\.hermes\webui-launcher.json`
+- Default workspace: `%USERPROFILE%\HermesWorkspace`
+- WebUI logs: `%USERPROFILE%\.hermes\logs\webui`
+
+The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on the LAN, configure a WebUI password, run Docker, or track upstream `master`. The update action reinstalls the launcher-approved stable WebUI commit bundled with this launcher version.
+
 ## Package
 
 Current downloadable artifacts live in `downloads/`:
