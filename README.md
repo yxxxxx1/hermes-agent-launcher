@@ -1,62 +1,69 @@
-﻿# Hermes Agent Launcher
+# Hermes Agent GUI Launcher
 
-This repository contains two launcher variants for [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent):
+This workspace contains desktop launchers for [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
 
-- Windows desktop console: full Chinese GUI launcher built with PowerShell + WPF
-- macOS lightweight launcher: utility-style launcher built with `osascript` + `Terminal`
-
-## Included Files
-
-- `HermesGuiLauncher.ps1`: Windows launcher source
-- `Start-HermesGuiLauncher.cmd`: Windows double-click entry
-- `HermesMacGuiLauncher.command`: macOS launcher source
-- `index.html`: static download page
-- `downloads/Hermes-Windows-Launcher.zip`: packaged Windows launcher
-- `downloads/Hermes-macOS-Launcher.tar.gz`: packaged macOS launcher
-
-## Product Positioning
-
-### Windows
-
-Windows uses a full desktop control panel with guided flow, status area, maintenance tools, and packaged downloads.
-
-### macOS
-
-macOS uses a lightweight utility launcher. It does not try to replicate the Windows step-by-step control panel. Installation runs the official `install.sh`, and the launcher mainly provides quick access to:
-
-- install/update
-- model configuration
-- local chat
-- messaging setup
-- gateway launch
-- maintenance and file shortcuts
-
-## Official Installers
+It wraps the current official installer scripts:
 
 - Windows: `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1`
 - macOS/Linux: `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh`
 
-## Notes
+and exposes common actions through a GUI:
 
-- Windows package is distributed as `.zip`
-- macOS package is distributed as `.tar.gz` to preserve executable permission on `HermesMacGuiLauncher.command`
-- macOS users may still need to allow the launcher in System Settings → Privacy & Security on first run
+- install or update Hermes
+- run the setup wizard
+- launch the Hermes CLI
+- run `hermes doctor`
+- run `hermes update`
+- open `config.yaml`, `.env`, and the logs folder
 
-### macOS Gatekeeper 处理
+## Files
 
-首次双击 `.command` 文件时，macOS 可能会弹出「无法打开，因为无法验证开发者」的安全提示。有以下几种处理方式：
+- `HermesGuiLauncher.ps1`: Windows WPF desktop launcher implemented in PowerShell
+- `Start-HermesGuiLauncher.cmd`: Windows double-click entry point
+- `HermesMacGuiLauncher.command`: macOS GUI launcher implemented with `osascript` + `Terminal`
+- `index.html`: static download page that auto-detects Windows/macOS and recommends the matching installer
+- `downloads/`: packaged ZIP downloads for Windows and macOS installers
 
-**方式一（推荐）：右键打开**
-1. 在 Finder 中右键点击 `HermesMacGuiLauncher.command`
-2. 选择「打开」
-3. 在弹出的对话框中点击「打开」确认
+## Run
 
-**方式二：终端命令解除隔离**
-```bash
-xattr -d com.apple.quarantine /path/to/HermesMacGuiLauncher.command
+Use either of these:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\HermesGuiLauncher.ps1
 ```
 
-**方式三：系统设置允许**
-1. 双击运行后会弹出安全警告
-2. 打开「系统设置」→「隐私与安全性」
-3. 找到 HermesMacGuiLauncher 相关提示，点击「仍要打开」
+or double-click:
+
+```text
+Start-HermesGuiLauncher.cmd
+```
+
+For macOS:
+
+```bash
+chmod +x ./HermesMacGuiLauncher.command
+./HermesMacGuiLauncher.command
+```
+
+or double-click:
+
+```text
+HermesMacGuiLauncher.command
+```
+
+For the download page:
+
+```text
+index.html
+```
+
+## Notes
+
+- The launcher uses the same default paths as the official Windows installer:
+  - `HERMES_HOME=%LOCALAPPDATA%\hermes`
+  - `InstallDir=%LOCALAPPDATA%\hermes\hermes-agent`
+- The macOS launcher follows the current official docs and installer defaults:
+  - `HERMES_HOME=~/.hermes`
+  - `InstallDir=~/.hermes/hermes-agent`
+- The official README page currently still says native Windows is not supported and recommends WSL2.
+- The current repository also ships `scripts/install.ps1`, so this launcher follows the repository's newer Windows installation flow instead of the older README note.
