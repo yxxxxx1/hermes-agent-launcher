@@ -24,6 +24,11 @@ and exposes common actions through a GUI:
 - `index.html`: static download page that auto-detects Windows/macOS and recommends the matching installer
 - `downloads/`: packaged ZIP downloads for Windows and macOS installers
 
+## Versions
+
+- Windows launcher: `Windows v2026.04.14.2`
+- macOS launcher: `macOS v2026.04.18.1`
+
 ## Run
 
 Use either of these:

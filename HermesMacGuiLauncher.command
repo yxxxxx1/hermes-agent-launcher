@@ -3,6 +3,7 @@
 set -euo pipefail
 
 APP_TITLE="Hermes Agent macOS 轻量启动器"
+LAUNCHER_VERSION="macOS v2026.04.18.1"
 OFFICIAL_INSTALL_URL="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 OFFICIAL_REPO_URL="https://github.com/NousResearch/hermes-agent"
 OFFICIAL_DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
@@ -397,6 +398,7 @@ Hermes 设置进度
 3. 开始对话：$chat_line
 
 消息渠道：$gateway_line
+版本：$LAUNCHER_VERSION
 
 数据目录：$HERMES_HOME
 最近操作：$LAST_ACTION_SUMMARY
@@ -798,7 +800,7 @@ handle_action() {
 
 main() {
     if [[ "${1:-}" == "--self-test" ]]; then
-        printf 'HermesHome=%s\nInstallDir=%s\nBranch=%s\n' "$HERMES_HOME" "$INSTALL_DIR" "$BRANCH"
+        printf 'Version=%s\nHermesHome=%s\nInstallDir=%s\nBranch=%s\n' "$LAUNCHER_VERSION" "$HERMES_HOME" "$INSTALL_DIR" "$BRANCH"
         exit 0
     fi
 
