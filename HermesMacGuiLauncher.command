@@ -3,10 +3,12 @@
 set -euo pipefail
 
 APP_TITLE="Hermes Agent macOS 轻量启动器"
-LAUNCHER_VERSION="macOS v2026.04.18.1"
+LAUNCHER_VERSION="macOS v2026.04.19.1"
 OFFICIAL_INSTALL_URL="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 OFFICIAL_REPO_URL="https://github.com/NousResearch/hermes-agent"
 OFFICIAL_DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+SELF_PATH="$SELF_DIR/$(basename "$0")"
 
 DEFAULT_HERMES_HOME="$HOME/.hermes"
 DEFAULT_INSTALL_DIR="$DEFAULT_HERMES_HOME/hermes-agent"
@@ -134,6 +136,7 @@ export PATH=$(quoted_line "$HOME/.local/bin:$PATH")
 export PYTHONIOENCODING=utf-8
 export PYTHONUTF8=1
 export HERMES_LAUNCHER_PLAIN_UI=1
+export HERMES_LAUNCHER_WINDOW_TITLE=$(quoted_line "$title")
 # Launcher sessions run inside Terminal.app; override inherited non-interactive
 # values from the parent shell so curses/prompt_toolkit UIs render correctly.
 if [[ -z "\${TERM:-}" || "\${TERM:-}" == "dumb" ]]; then
@@ -141,6 +144,24 @@ export TERM=xterm-256color
 fi
 export COLORTERM=truecolor
 unset NO_COLOR
+close_terminal_window_by_title() {
+local target_title="\${1:-\$HERMES_LAUNCHER_WINDOW_TITLE}"
+/usr/bin/osascript - "\$target_title" <<'OSA'
+on run argv
+    set targetTitle to item 1 of argv
+    tell application "Terminal"
+        repeat with w in windows
+            try
+                if name of w contains targetTitle then
+                    close w saving no
+                    exit repeat
+                end if
+            end try
+        end repeat
+    end tell
+end run
+OSA
+}
 printf '\033]0;%s\007' $(printf '%q' "$title")
 $( [[ -n "$log_path" && "$capture_output" == "true" ]] && printf 'exec > >(tee -a %s) 2>&1\n' "$(quoted_line "$log_path")" )
 $payload
@@ -202,6 +223,571 @@ state_get() {
     local key="$1"
     local state_blob="$2"
     printf '%s\n' "$state_blob" | awk -F= -v k="$key" '$1 == k { print substr($0, length($1) + 2); exit }'
+}
+
+html_escape() {
+    local value="$1"
+    value="${value//&/&amp;}"
+    value="${value//</&lt;}"
+    value="${value//>/&gt;}"
+    value="${value//\"/&quot;}"
+    value="${value//\'/&#39;}"
+    printf '%s' "$value"
+}
+
+ui_primary_copy() {
+    local state="$1"
+    local installed model_ready
+    installed="$(state_get installed "$state")"
+    model_ready="$(state_get model_ready "$state")"
+
+    if [[ "$installed" != "true" ]]; then
+        printf '继续安装\n'
+    elif [[ "$model_ready" != "true" ]]; then
+        printf '继续配置模型\n'
+    else
+        printf '开始第一次对话\n'
+    fi
+}
+
+next_primary_key() {
+    local state="$1"
+    local installed model_ready
+    installed="$(state_get installed "$state")"
+    model_ready="$(state_get model_ready "$state")"
+
+    if [[ "$installed" != "true" ]]; then
+        printf 'install\n'
+    elif [[ "$model_ready" != "true" ]]; then
+        printf 'model\n'
+    else
+        printf 'chat\n'
+    fi
+}
+
+ui_status_class() {
+    case "$1" in
+        "已完成") printf 'complete\n' ;;
+        "进行中"|"待完成"|"可以开始") printf 'active\n' ;;
+        *) printf 'muted\n' ;;
+    esac
+}
+
+write_native_ui_html() {
+    local state="$1"
+    local primary_key="$2"
+    local html_path="$3"
+    local installed model_ready gateway_configured gateway_running
+    local install_line model_line chat_line gateway_line support_line current_step primary_copy
+    local install_class model_class chat_class
+
+    installed="$(state_get installed "$state")"
+    model_ready="$(state_get model_ready "$state")"
+    gateway_configured="$(state_get gateway_configured "$state")"
+    gateway_running="$(state_get gateway_running "$state")"
+
+    install_line="未开始"
+    model_line="等待安装完成"
+    chat_line="尚不可用"
+    gateway_line="暂未配置"
+    support_line="日常使用暂不需要"
+    current_step="继续安装"
+    primary_copy="$(ui_primary_copy "$state")"
+
+    if [[ "$LAST_STAGE" == "install" && "$LAST_RESULT" == "running" ]]; then
+        install_line="进行中"
+    elif [[ "$installed" == "true" ]]; then
+        install_line="已完成"
+    fi
+
+    if [[ "$installed" == "true" && "$model_ready" == "false" ]]; then
+        model_line="待完成"
+    fi
+    if [[ "$LAST_STAGE" == "model" && "$LAST_RESULT" == "running" ]]; then
+        model_line="进行中"
+    elif [[ "$model_ready" == "true" ]]; then
+        model_line="已完成"
+        chat_line="可以开始"
+    fi
+
+    if [[ "$gateway_configured" == "true" ]]; then
+        gateway_line="已配置"
+        if [[ "$gateway_running" == "true" ]]; then
+            gateway_line="已配置，当前在线"
+        fi
+    fi
+
+    if [[ "$installed" != "true" ]]; then
+        current_step="继续安装"
+    elif [[ "$model_ready" != "true" ]]; then
+        current_step="继续配置模型"
+    else
+        current_step="开始第一次对话"
+        support_line="可选，用于维护与消息渠道"
+    fi
+
+    install_class="$(ui_status_class "$install_line")"
+    model_class="$(ui_status_class "$model_line")"
+    chat_class="$(ui_status_class "$chat_line")"
+
+    cat >"$html_path" <<EOF
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hermes Agent for macOS</title>
+  <style>
+    :root {
+      --bg0: #f6f2e9;
+      --bg1: #fbf8f2;
+      --panel: rgba(255, 251, 245, 0.78);
+      --panel-strong: rgba(255, 252, 247, 0.92);
+      --line: rgba(87, 63, 28, 0.14);
+      --line-strong: rgba(87, 63, 28, 0.24);
+      --ink: #1f1b16;
+      --muted: #6d655b;
+      --accent: #b88338;
+      --accent-strong: #8c6328;
+      --accent-ink: #2b2112;
+      --ok: #1d7f72;
+      --warn: #b57b2b;
+      --shadow: 0 30px 80px rgba(58, 39, 11, 0.14);
+      --radius-xl: 28px;
+      --radius-lg: 22px;
+      --radius-md: 16px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.75), transparent 36%),
+        radial-gradient(circle at bottom right, rgba(221, 187, 133, 0.18), transparent 30%),
+        linear-gradient(160deg, var(--bg0), var(--bg1));
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    .app {
+      min-height: 100%;
+      padding: 28px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 18px;
+    }
+    .surface {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px);
+      border-radius: var(--radius-xl);
+    }
+    .hero {
+      padding: 28px;
+      display: grid;
+      grid-template-columns: 1.35fr 0.9fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.7);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 6px rgba(184,131,56,0.14);
+    }
+    h1 {
+      margin: 16px 0 10px;
+      font-size: 42px;
+      line-height: 1.02;
+      letter-spacing: -0.05em;
+    }
+    .summary {
+      margin: 0;
+      max-width: 42ch;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+    .hero-side {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+    .stat {
+      padding: 18px 18px 16px;
+      border-radius: var(--radius-lg);
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+    }
+    .stat-label {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .stat-value {
+      margin: 0;
+      font-size: 27px;
+      line-height: 1.15;
+      letter-spacing: -0.04em;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 22px;
+      flex-wrap: wrap;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
+    }
+    .btn {
+      min-height: 52px;
+      padding: 0 18px;
+      border-radius: 16px;
+      transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn.primary {
+      background: linear-gradient(180deg, #c79242, var(--accent-strong));
+      color: #fff8ec;
+      box-shadow: 0 14px 36px rgba(140, 99, 40, 0.26);
+      font-weight: 700;
+    }
+    .btn.secondary {
+      background: rgba(255,255,255,0.72);
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+      font-weight: 600;
+    }
+    .dashboard {
+      padding: 22px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+    .stage {
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      display: grid;
+      gap: 12px;
+    }
+    .stage-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .stage-index {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .pill.complete { background: rgba(29,127,114,0.12); color: var(--ok); }
+    .pill.active { background: rgba(184,131,56,0.14); color: var(--accent-strong); }
+    .pill.muted { background: rgba(78, 63, 43, 0.08); color: var(--muted); }
+    .stage h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.04em;
+    }
+    .stage p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 18px;
+      align-items: start;
+    }
+    .panel {
+      padding: 22px;
+    }
+    .panel h3 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      letter-spacing: -0.03em;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: grid;
+      gap: 4px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.68);
+      border: 1px solid rgba(87, 63, 28, 0.08);
+    }
+    .row-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .row-value {
+      font-size: 14px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .maintenance {
+      display: grid;
+      gap: 12px;
+    }
+    .maintenance-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .maintenance button {
+      min-height: 46px;
+      padding: 0 14px;
+      border-radius: 14px;
+      text-align: left;
+      background: rgba(255,255,255,0.72);
+      color: var(--ink);
+      border: 1px solid rgba(87, 63, 28, 0.1);
+      font-weight: 600;
+    }
+    .fineprint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    @media (max-width: 900px) {
+      .hero, .meta-grid, .dashboard { grid-template-columns: 1fr; }
+      .app { padding: 18px; }
+      h1 { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="hero surface">
+      <div>
+        <div class="eyebrow">Hermes macOS Guided Utility</div>
+        <h1>现在只做当前这一步，其他都先不用管。</h1>
+        <p class="summary">这个启动器会先帮你走完安装、模型配置和第一次对话。维护工具依然保留，但不会打断首次使用。</p>
+        <div class="hero-actions">
+          <button class="btn primary" data-action="$(html_escape "$primary_key")">$(html_escape "$primary_copy")</button>
+          <button class="btn secondary" data-action="refresh">刷新状态</button>
+        </div>
+      </div>
+      <div class="hero-side">
+        <article class="stat">
+          <p class="stat-label">当前步骤</p>
+          <p class="stat-value">$(html_escape "$current_step")</p>
+        </article>
+        <article class="stat">
+          <p class="stat-label">版本</p>
+          <p class="stat-value">$(html_escape "$LAUNCHER_VERSION")</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="dashboard surface">
+      <article class="stage">
+        <div class="stage-top">
+          <span class="stage-index">Stage 01</span>
+          <span class="pill $install_class">$(html_escape "$install_line")</span>
+        </div>
+        <h2>安装 Hermes</h2>
+        <p>把运行环境和命令入口准备好。完成后，启动器会自动引导你进入模型配置。</p>
+      </article>
+      <article class="stage">
+        <div class="stage-top">
+          <span class="stage-index">Stage 02</span>
+          <span class="pill $model_class">$(html_escape "$model_line")</span>
+        </div>
+        <h2>配置模型</h2>
+        <p>选择 provider 和默认模型。只要配置完成，后面的本地对话就可以直接开始。</p>
+      </article>
+      <article class="stage">
+        <div class="stage-top">
+          <span class="stage-index">Stage 03</span>
+          <span class="pill $chat_class">$(html_escape "$chat_line")</span>
+        </div>
+        <h2>开始第一次对话</h2>
+        <p>打开 Terminal 进入 Hermes 对话界面。看到对话入口，就表示这套环境已经可以用了。</p>
+      </article>
+    </section>
+
+    <section class="meta-grid">
+      <section class="panel surface">
+        <h3>当前状态</h3>
+        <div class="list">
+          <div class="row">
+            <div class="row-label">消息渠道</div>
+            <div class="row-value">$(html_escape "$gateway_line")</div>
+          </div>
+          <div class="row">
+            <div class="row-label">维护入口</div>
+            <div class="row-value">$(html_escape "$support_line")</div>
+          </div>
+          <div class="row">
+            <div class="row-label">数据目录</div>
+            <div class="row-value">$(html_escape "$HERMES_HOME")</div>
+          </div>
+          <div class="row">
+            <div class="row-label">最近操作</div>
+            <div class="row-value">$(html_escape "$LAST_ACTION_SUMMARY")</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel surface maintenance">
+        <div>
+          <h3>维护与高级选项</h3>
+          <p class="fineprint">这些动作留给维护、排查和消息渠道配置。首次使用时，一般不需要先进入这里。</p>
+        </div>
+        <div class="maintenance-grid">
+          <button data-action="doctor">诊断问题</button>
+          <button data-action="update">更新 Hermes</button>
+          <button data-action="setup">重新执行完整设置</button>
+          <button data-action="tools">配置 tools</button>
+          <button data-action="gateway_setup">配置消息渠道</button>
+          <button data-action="gateway_run">打开消息网关</button>
+          <button data-action="open_config">打开 config.yaml</button>
+          <button data-action="open_env">打开 .env</button>
+          <button data-action="open_logs">打开日志目录</button>
+          <button data-action="open_home">打开数据目录</button>
+          <button data-action="open_install">打开安装目录</button>
+          <button data-action="docs">官方文档</button>
+          <button data-action="repo">官方仓库</button>
+          <button data-action="uninstall">卸载 Hermes</button>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script>
+    const postAction = (action) => {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hermes) {
+        window.webkit.messageHandlers.hermes.postMessage({ action });
+      }
+    };
+    document.querySelectorAll("[data-action]").forEach((node) => {
+      node.addEventListener("click", () => postAction(node.dataset.action));
+    });
+  </script>
+</body>
+</html>
+EOF
+}
+
+launch_native_ui() {
+    local state="$1"
+    local primary_key="$2"
+    local html_path jxa_path
+    html_path="/tmp/hermes-launcher-ui-$(date '+%Y%m%d-%H%M%S')-$RANDOM.html"
+    jxa_path="/tmp/hermes-launcher-ui-$(date '+%Y%m%d-%H%M%S')-$RANDOM.js"
+    write_native_ui_html "$state" "$primary_key" "$html_path"
+    cat >"$jxa_path" <<'EOF'
+ObjC.import('Cocoa');
+ObjC.import('WebKit');
+
+const htmlPath = ObjC.unwrap($.NSString.stringWithUTF8String($.getenv('HERMES_UI_HTML')));
+const launcherPath = ObjC.unwrap($.NSString.stringWithUTF8String($.getenv('HERMES_UI_LAUNCHER')));
+
+function launchAction(action) {
+  const task = $.NSTask.alloc.init;
+  task.setLaunchPath('/bin/bash');
+  task.setArguments($([launcherPath, '--dispatch-action', action]));
+  task.launch();
+}
+
+ObjC.registerSubclass({
+  name: 'HermesLauncherMessageHandler',
+  protocols: ['WKScriptMessageHandler', 'NSWindowDelegate'],
+  methods: {
+    'userContentController:didReceiveScriptMessage:': {
+      types: ['void', ['id', 'id']],
+      implementation: function(_controller, message) {
+        const body = ObjC.deepUnwrap(message.body);
+        const action = (body && body.action) ? String(body.action) : '';
+        if (!action) {
+          return;
+        }
+        launchAction(action);
+        $.NSApp.terminate(null);
+      }
+    },
+    'windowWillClose:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSApp.terminate(null);
+      }
+    }
+  }
+});
+
+const app = $.NSApplication.sharedApplication;
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
+
+const config = $.WKWebViewConfiguration.alloc.init;
+const controller = $.WKUserContentController.alloc.init;
+const handler = $.HermesLauncherMessageHandler.alloc.init;
+controller.addScriptMessageHandlerName(handler, 'hermes');
+config.setUserContentController(controller);
+
+const frame = $.NSMakeRect(0, 0, 1120, 820);
+const mask = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable | $.NSWindowStyleMaskResizable;
+const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(frame, mask, $.NSBackingStoreBuffered, false);
+window.setTitle('Hermes Agent for macOS');
+window.center();
+window.setDelegate(handler);
+window.setReleasedWhenClosed(false);
+
+const webView = $.WKWebView.alloc.initWithFrameConfiguration(frame, config);
+webView.setAutoresizingMask($.NSViewWidthSizable | $.NSViewHeightSizable);
+window.setContentView(webView);
+
+const fileURL = $.NSURL.fileURLWithPath(htmlPath);
+webView.loadFileURLAllowingReadAccessToURL(fileURL, fileURL.URLByDeletingLastPathComponent);
+
+window.makeKeyAndOrderFront(null);
+app.activateIgnoringOtherApps(true);
+app.run();
+EOF
+    chmod +x "$jxa_path"
+    HERMES_UI_HTML="$html_path" HERMES_UI_LAUNCHER="$SELF_PATH" /usr/bin/osascript -l JavaScript "$jxa_path"
 }
 
 resolve_hermes_command() {
@@ -366,6 +952,8 @@ build_dashboard_prompt() {
     local model_line="等待安装完成"
     local chat_line="尚不可用"
     local gateway_line="暂未配置"
+    local current_step="继续安装"
+    local support_line="日常使用暂不需要"
 
     if [[ "$LAST_STAGE" == "install" && "$LAST_RESULT" == "running" ]]; then
         install_line="进行中"
@@ -390,20 +978,33 @@ build_dashboard_prompt() {
         fi
     fi
 
-    cat <<EOF
-Hermes 设置进度
+    if [[ "$installed" != "true" ]]; then
+        current_step="继续安装"
+    elif [[ "$model_ready" != "true" ]]; then
+        current_step="继续配置模型"
+    else
+        current_step="开始第一次对话"
+        support_line="可选，用于维护与消息渠道"
+    fi
 
-1. 安装 Hermes：$install_line
-2. 配置模型：$model_line
-3. 开始对话：$chat_line
+    cat <<EOF
+Hermes macOS 启动器
+
+当前步骤：$current_step
+版本：$LAUNCHER_VERSION
+
+阶段总览
+1. 安装 Hermes     $install_line
+2. 配置模型        $model_line
+3. 开始第一次对话  $chat_line
 
 消息渠道：$gateway_line
-版本：$LAUNCHER_VERSION
+维护入口：$support_line
 
 数据目录：$HERMES_HOME
 最近操作：$LAST_ACTION_SUMMARY
 
-只需要完成当前高亮的下一步即可。
+只处理当前这一步即可，其余内容稍后再看。
 EOF
 }
 
@@ -443,11 +1044,11 @@ maybe_handle_stage_completion() {
     case "$LAST_STAGE" in
         install)
             if [[ "$LAST_RESULT" == "success" && "$installed" == "true" ]]; then
-                show_message "Hermes 已安装完成。\n\n下一步请继续配置模型，完成后就可以开始第一次对话。"
+                show_message "安装已完成。\n\n下一步继续配置模型。完成后，你就可以开始第一次对话。"
                 set_stage_state "none" "idle" "$LAST_LOG_PATH"
             else
                 local picked=""
-                picked="$(prompt_failure_action "安装步骤还没有完成。\n\n如果终端窗口已经报错或结束，可以选择重试，或者先打开日志查看原因。")" || return 0
+                picked="$(prompt_failure_action "安装还没有完成。\n\n如果终端里已经报错或提前结束，可以重新尝试，或先打开日志查看原因。")" || return 0
                 case "$picked" in
                     "重新尝试") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_install_flow ;;
                     "打开日志") open_path "$LAST_LOG_PATH"; set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
@@ -461,7 +1062,7 @@ maybe_handle_stage_completion() {
                 set_stage_state "none" "idle" "$LAST_LOG_PATH"
             else
                 local picked=""
-                picked="$(prompt_failure_action "还没有检测到完整模型配置。\n\n如果终端窗口已经结束，可以重新打开配置，或者先查看日志。")" || return 0
+                picked="$(prompt_failure_action "还没有检测到完整模型配置。\n\n如果配置流程已经结束，可以重新打开它，或先查看日志。")" || return 0
                 case "$picked" in
                     "重新尝试") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_model_flow "$(resolve_hermes_command 2>/dev/null || true)" ;;
                     "打开日志") open_path "$LAST_LOG_PATH"; set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
@@ -471,10 +1072,10 @@ maybe_handle_stage_completion() {
             ;;
         chat)
             if [[ "$LAST_RESULT" == "success" ]]; then
-                show_message "本地对话入口已经启动。\n\n如果终端里已经出现 Hermes 对话界面，就说明你可以开始使用了。"
+                show_message "本地对话入口已打开。\n\n如果终端里已经出现 Hermes 对话界面，现在就可以开始使用。"
             elif [[ -n "$LAST_LOG_PATH" ]]; then
                 local picked=""
-                picked="$(prompt_failure_action "本地对话入口没有正常启动。\n\n你可以重新尝试，或者先打开日志查看原因。")" || return 0
+                picked="$(prompt_failure_action "本地对话入口没有正常启动。\n\n你可以重新尝试，或先打开日志查看原因。")" || return 0
                 case "$picked" in
                     "重新尝试") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_chat_flow "$(resolve_hermes_command 2>/dev/null || true)" ;;
                     "打开日志") open_path "$LAST_LOG_PATH"; set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
@@ -573,6 +1174,7 @@ launch_install() {
     payload+="echo; if [[ \"\$INSTALL_EXIT\" -eq 0 ]]; then echo '安装流程已结束，可关闭此终端窗口。'; else echo '安装流程失败，请查看上方报错。'; fi; "
     payload+="FINAL_RESULT=failed; if [[ \"\$INSTALL_EXIT\" -eq 0 ]]; then FINAL_RESULT=success; fi; "
     payload+="printf 'LAST_STAGE=%s\nLAST_RESULT=%s\nLAST_LOG_PATH=%s\n' install \"\$FINAL_RESULT\" $(printf '%q' "$log_path") > $(printf '%q' "$LAUNCHER_STATE_FILE"); "
+    payload+="if [[ \"\$INSTALL_EXIT\" -eq 0 ]]; then (sleep 1; close_terminal_window_by_title) >/dev/null 2>&1 & fi; "
     payload+="exit \"\$INSTALL_EXIT\""
 
     if run_in_terminal "$payload" "Hermes 安装或更新" "$log_path" "true"; then
@@ -672,6 +1274,34 @@ run_doctor() {
     run_hermes_action "$hermes_cmd" "doctor" "doctor" "命令执行结束后，可关闭窗口。" "" "true"
 }
 
+print_doctor_test() {
+    ensure_launcher_dirs
+
+    local hermes_cmd=""
+    if hermes_cmd="$(resolve_hermes_command 2>/dev/null)"; then
+        ensure_config_scaffold
+    else
+        printf 'status=missing\n'
+        printf 'exit_code=127\n'
+        printf 'log_path=\n'
+        exit 0
+    fi
+
+    local log_path
+    log_path="$(build_log_path "doctor-inline")"
+
+    cd "$INSTALL_DIR"
+    if "$hermes_cmd" doctor >"$log_path" 2>&1; then
+        printf 'status=ok\n'
+        printf 'exit_code=0\n'
+    else
+        local exit_code=$?
+        printf 'status=failed\n'
+        printf 'exit_code=%s\n' "$exit_code"
+    fi
+    printf 'log_path=%s\n' "$log_path"
+}
+
 run_update() {
     local hermes_cmd="$1"
     run_hermes_action "$hermes_cmd" "update" "update" "命令执行结束后，可关闭窗口。" "" "true"
@@ -704,18 +1334,44 @@ uninstall_hermes() {
     run_in_terminal "$payload" "Hermes 卸载" "$log_path"
 }
 
+open_official_docs() { open "$OFFICIAL_DOCS_URL"; }
+open_official_repo() { open "$OFFICIAL_REPO_URL"; }
+
 open_official_resource() {
     local picked=""
     picked="$(choose_from_list "选择要打开的官方资源。" "官方文档" "官方文档" "官方仓库" "返回")" || return 0
     case "$picked" in
-        "官方文档") open "$OFFICIAL_DOCS_URL" ;;
-        "官方仓库") open "$OFFICIAL_REPO_URL" ;;
+        "官方文档") open_official_docs ;;
+        "官方仓库") open_official_repo ;;
+        *) ;;
+    esac
+}
+
+handle_advanced_action() {
+    local picked="$1"
+    local hermes_cmd="$2"
+    case "$picked" in
+        "诊断问题（doctor）"|doctor) run_doctor "$hermes_cmd" ;;
+        "更新 Hermes"|update) run_update "$hermes_cmd" ;;
+        "重新执行完整设置"|setup) run_full_setup "$hermes_cmd" ;;
+        "配置 tools"|tools) run_tools "$hermes_cmd" ;;
+        "配置消息渠道"|gateway_setup) configure_gateway "$hermes_cmd" ;;
+        "打开消息网关"|gateway_run) launch_gateway "$hermes_cmd" ;;
+        "打开配置文件 config.yaml"|open_config) ensure_config_scaffold; open_path "$HERMES_HOME/config.yaml" ;;
+        "打开环境变量 .env"|open_env) ensure_config_scaffold; open_path "$HERMES_HOME/.env" ;;
+        "打开日志目录"|open_logs) open_path "$HERMES_HOME/logs" ;;
+        "打开数据目录"|open_home) open_path "$HERMES_HOME" ;;
+        "打开安装目录"|open_install) open_path "$INSTALL_DIR" ;;
+        "官方文档 / 仓库") open_official_resource ;;
+        docs) open_official_docs ;;
+        repo) open_official_repo ;;
+        "卸载 Hermes"|uninstall) uninstall_hermes ;;
         *) ;;
     esac
 }
 
 maintenance_menu() {
-    choose_from_list "高级选项" "诊断问题（doctor）" \
+    choose_from_list "维护与高级选项" "诊断问题（doctor）" \
         "诊断问题（doctor）" \
         "更新 Hermes" \
         "重新执行完整设置" \
@@ -737,31 +1393,30 @@ main_menu() {
     local primary_action="$1"
     choose_from_list "$prompt" "$primary_action" \
         "$primary_action" \
-        "高级选项" \
+        "维护与高级选项" \
         "退出"
 }
 
 start_install_flow() {
-    local intro="接下来会打开一个终端窗口完成安装。\n\n这是正常现象，请不要手动关闭终端。\n安装过程可能持续几分钟。\n\n现在开始安装吗？"
+    local intro=$'接下来会打开 Terminal 开始安装。\n\n你需要做的只有一件事：等待安装完成。\n安装期间请不要关闭 Terminal。安装成功后，窗口会自动关闭。\n\n现在继续安装吗？'
     show_intro_dialog "$intro" "是" || return 0
     launch_install || return 0
-    show_message "安装终端已经打开。\n\n请等待终端完成安装；如果稍后出错，可以回到启动器查看日志或重新尝试。"
 }
 
 start_model_flow() {
     local hermes_cmd="$1"
-    local intro="接下来会打开终端进入模型配置流程。\n\n如果你已经准备好了 API Key，配置会更顺利。\n终端窗口打开后请按提示完成配置。\n\n现在开始配置模型吗？"
+    local intro=$'接下来会打开 Terminal 进入模型配置。\n\n如果你已经准备好 API Key，整个过程会更顺利。打开后按提示完成即可。\n\n现在继续配置模型吗？'
     show_intro_dialog "$intro" "是" || return 0
     configure_model "$hermes_cmd" || return 0
-    show_message "模型配置终端已经打开。\n\n完成后重新回到启动器，系统会继续引导你开始第一次对话。"
+    show_message $'模型配置窗口已经打开。\n\n完成后回到这里，启动器会继续引导你开始第一次对话。'
 }
 
 start_chat_flow() {
     local hermes_cmd="$1"
-    local intro="接下来会打开终端启动 Hermes 本地对话入口。\n\n如果成功看到对话入口，说明安装和基础配置已经可以使用。\n\n现在开始第一次对话吗？"
+    local intro=$'接下来会打开 Terminal 启动 Hermes 本地对话。\n\n如果终端里出现 Hermes 对话界面，就表示安装和基础配置已经可以使用。\n\n现在开始第一次对话吗？'
     show_intro_dialog "$intro" "是" || return 0
     launch_local_chat "$hermes_cmd" || return 0
-    show_message "本地对话入口已经打开。\n\n如果终端中出现 Hermes 对话界面，就说明你已经完成了首次可用配置。"
+    show_message $'本地对话窗口已经打开。\n\n如果终端中出现 Hermes 对话界面，你就已经完成首次可用配置。'
 }
 
 handle_action() {
@@ -772,25 +1427,10 @@ handle_action() {
         "开始安装") start_install_flow ;;
         "配置模型") start_model_flow "$hermes_cmd" ;;
         "开始第一次对话") start_chat_flow "$hermes_cmd" ;;
-        "高级选项")
+        "维护与高级选项")
             local picked=""
             picked="$(maintenance_menu)" || return 0
-            case "$picked" in
-                "诊断问题（doctor）") run_doctor "$hermes_cmd" ;;
-                "更新 Hermes") run_update "$hermes_cmd" ;;
-                "重新执行完整设置") run_full_setup "$hermes_cmd" ;;
-                "配置 tools") run_tools "$hermes_cmd" ;;
-                "配置消息渠道") configure_gateway "$hermes_cmd" ;;
-                "打开消息网关") launch_gateway "$hermes_cmd" ;;
-                "打开配置文件 config.yaml") ensure_config_scaffold; open_path "$HERMES_HOME/config.yaml" ;;
-                "打开环境变量 .env") ensure_config_scaffold; open_path "$HERMES_HOME/.env" ;;
-                "打开日志目录") open_path "$HERMES_HOME/logs" ;;
-                "打开数据目录") open_path "$HERMES_HOME" ;;
-                "打开安装目录") open_path "$INSTALL_DIR" ;;
-                "官方文档 / 仓库") open_official_resource ;;
-                "卸载 Hermes") uninstall_hermes ;;
-                *) ;;
-            esac
+            handle_advanced_action "$picked" "$hermes_cmd"
             ;;
         "__CANCEL__"|"退出") return 1 ;;
         *) show_warning "未识别的操作：$action" ;;
@@ -799,6 +1439,25 @@ handle_action() {
 }
 
 main() {
+    if [[ "${1:-}" == "--dispatch-action" ]]; then
+        ensure_launcher_dirs
+        load_session_state
+        local hermes_cmd=""
+        if hermes_cmd="$(resolve_hermes_command 2>/dev/null)"; then
+            ensure_config_scaffold
+        else
+            hermes_cmd=""
+        fi
+        case "${2:-}" in
+            install) handle_action "开始安装" "$hermes_cmd" ;;
+            model) handle_action "配置模型" "$hermes_cmd" ;;
+            chat) handle_action "开始第一次对话" "$hermes_cmd" ;;
+            refresh) exec "$SELF_PATH" ;;
+            *) handle_advanced_action "${2:-}" "$hermes_cmd" ;;
+        esac
+        exit 0
+    fi
+
     if [[ "${1:-}" == "--self-test" ]]; then
         printf 'Version=%s\nHermesHome=%s\nInstallDir=%s\nBranch=%s\n' "$LAUNCHER_VERSION" "$HERMES_HOME" "$INSTALL_DIR" "$BRANCH"
         exit 0
@@ -806,6 +1465,11 @@ main() {
 
     if [[ "${1:-}" == "--state-test" ]]; then
         print_state_test
+        exit 0
+    fi
+
+    if [[ "${1:-}" == "--doctor-test" ]]; then
+        print_doctor_test
         exit 0
     fi
 
@@ -836,6 +1500,13 @@ main() {
         prompt="$(build_dashboard_prompt "$state")"
         local primary_action=""
         primary_action="$(next_primary_action "$state")"
+        local primary_key=""
+        primary_key="$(next_primary_key "$state")"
+        if [[ "${HERMES_USE_LEGACY_UI:-0}" != "1" ]]; then
+            if launch_native_ui "$state" "$primary_key"; then
+                exit 0
+            fi
+        fi
         local action=""
         action="$(main_menu "$primary_action" "$prompt")" || exit 0
         handle_action "$action" "$hermes_cmd" || exit 0

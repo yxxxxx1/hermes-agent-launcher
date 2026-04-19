@@ -27,7 +27,7 @@ and exposes common actions through a GUI:
 ## Versions
 
 - Windows launcher: `Windows v2026.04.14.2`
-- macOS launcher: `macOS v2026.04.18.1`
+- macOS launcher: `macOS v2026.04.19.1`
 
 ## Run
 
