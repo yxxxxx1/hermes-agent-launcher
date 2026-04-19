@@ -3,9 +3,7 @@
 ## Purpose
 
 Define consistent success and failure feedback for the macOS launcher onboarding stages.
-
 ## Requirements
-
 ### Requirement: The launcher MUST persist lightweight session markers for onboarding stages
 
 The macOS launcher MUST record the last onboarding stage, the last stage result, and the last log path so it can evaluate completion when the user returns from Terminal.
@@ -58,23 +56,25 @@ The macOS launcher MUST provide a consistent recovery dialog when an onboarding 
 - And it offers opening the stage log
 - And it offers returning to the dashboard without forcing another action
 
-#### Scenario: First chat handoff fails
+#### Scenario: WebUI chat handoff fails
 
 - Given the last recorded stage is first chat
-- And the Terminal handoff did not succeed
+- And the WebUI server did not become healthy
 - When the launcher returns to the dashboard loop
 - Then it offers retry
-- And it offers opening the stage log
-- And it does not claim that a chat session is running
+- And it offers opening the WebUI bootstrap log
+- And it offers a Terminal chat fallback
+- And it does not claim that browser chat is ready
 
 ### Requirement: Successful first-chat handoff MUST be described conservatively
 
-The macOS launcher MUST describe first-chat success as a successful handoff to Terminal, not as a verified conversation session.
+The macOS launcher MUST describe first-chat success as a successful WebUI browser handoff, not as a verified conversation session.
 
 #### Scenario: First chat handoff succeeds
 
 - Given the last recorded stage is first chat
-- And the Terminal handoff succeeded
+- And the WebUI server became healthy
 - When the launcher shows completion feedback
-- Then it tells the user the local chat entrypoint has been opened
-- And it instructs the user to confirm the Hermes interface in Terminal
+- Then it tells the user the Hermes WebUI browser chat has been opened
+- And it instructs the user to confirm the Hermes interface in the browser
+

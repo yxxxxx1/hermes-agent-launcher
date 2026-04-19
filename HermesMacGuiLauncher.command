@@ -7,14 +7,24 @@ LAUNCHER_VERSION="macOS v2026.04.19.1"
 OFFICIAL_INSTALL_URL="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 OFFICIAL_REPO_URL="https://github.com/NousResearch/hermes-agent"
 OFFICIAL_DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
+WEBUI_REPO_URL="https://github.com/nesquena/hermes-webui.git"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 SELF_PATH="$SELF_DIR/$(basename "$0")"
 
 DEFAULT_HERMES_HOME="$HOME/.hermes"
 DEFAULT_INSTALL_DIR="$DEFAULT_HERMES_HOME/hermes-agent"
+DEFAULT_WEBUI_DIR="$DEFAULT_HERMES_HOME/hermes-webui"
+DEFAULT_WEBUI_STATE_DIR="$DEFAULT_HERMES_HOME/webui"
 
 HERMES_HOME="${HERMES_HOME:-$DEFAULT_HERMES_HOME}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+WEBUI_DIR="${HERMES_WEBUI_DIR:-$DEFAULT_WEBUI_DIR}"
+WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-$DEFAULT_WEBUI_STATE_DIR}"
+WEBUI_HOST="${HERMES_WEBUI_HOST:-127.0.0.1}"
+WEBUI_PORT="${HERMES_WEBUI_PORT:-8787}"
+WEBUI_LANGUAGE="${HERMES_WEBUI_LANGUAGE:-zh}"
+WEBUI_URL="http://localhost:$WEBUI_PORT"
+WEBUI_HEALTH_URL="http://$WEBUI_HOST:$WEBUI_PORT/health"
 BRANCH="main"
 LAUNCHER_LOG_DIR="$HERMES_HOME/logs/launcher"
 LAUNCHER_STATE_FILE="$LAUNCHER_LOG_DIR/state.env"
@@ -45,6 +55,15 @@ prompt_failure_action() {
     local prompt="$1"
     local default_item="${2:-重新尝试}"
     choose_from_list "$prompt" "$default_item" \
+        "重新尝试" \
+        "打开日志" \
+        "返回首页"
+}
+
+prompt_webui_failure_action() {
+    local prompt="$1"
+    choose_from_list "$prompt" "改用终端对话" \
+        "改用终端对话" \
         "重新尝试" \
         "打开日志" \
         "返回首页"
@@ -110,6 +129,7 @@ slugify_label() {
         install|"安装"|"安装或更新") printf 'install\n' ;;
         model|"模型配置") printf 'model\n' ;;
         chat|"本地对话") printf 'chat\n' ;;
+        chat-terminal|"终端对话") printf 'chat-terminal\n' ;;
         doctor) printf 'doctor\n' ;;
         update) printf 'update\n' ;;
         tools) printf 'tools\n' ;;
@@ -638,7 +658,7 @@ write_native_ui_html() {
           <span class="pill $model_class">$(html_escape "$model_line")</span>
         </div>
         <h2>配置模型</h2>
-        <p>选择 provider 和默认模型。只要配置完成，后面的本地对话就可以直接开始。</p>
+        <p>选择 provider 和默认模型。只要配置完成，后面的浏览器对话就可以直接开始。</p>
       </article>
       <article class="stage">
         <div class="stage-top">
@@ -646,7 +666,7 @@ write_native_ui_html() {
           <span class="pill $chat_class">$(html_escape "$chat_line")</span>
         </div>
         <h2>开始第一次对话</h2>
-        <p>打开 Terminal 进入 Hermes 对话界面。看到对话入口，就表示这套环境已经可以用了。</p>
+        <p>打开浏览器里的 Hermes WebUI。看到对话入口，就表示这套环境已经可以用了。</p>
       </article>
     </section>
 
@@ -911,12 +931,133 @@ detect_gateway_running() {
     fi
 }
 
+detect_webui_installed() {
+    if [[ -f "$WEBUI_DIR/bootstrap.py" && -f "$WEBUI_DIR/server.py" ]]; then
+        printf 'true\n'
+    else
+        printf 'false\n'
+    fi
+}
+
+find_webui_python() {
+    if [[ -n "${HERMES_WEBUI_PYTHON:-}" && -x "${HERMES_WEBUI_PYTHON:-}" ]]; then
+        printf '%s\n' "$HERMES_WEBUI_PYTHON"
+        return 0
+    fi
+
+    local candidates=(
+        "$INSTALL_DIR/venv/bin/python"
+        "$WEBUI_DIR/.venv/bin/python"
+        "$WEBUI_DIR/venv/bin/python"
+    )
+    local candidate=""
+    for candidate in "${candidates[@]}"; do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    if command -v python3 >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+
+    if command -v python >/dev/null 2>&1; then
+        command -v python
+        return 0
+    fi
+
+    return 1
+}
+
+webui_health_check() {
+    local python_cmd=""
+    python_cmd="$(find_webui_python 2>/dev/null || true)"
+    if [[ -z "$python_cmd" ]]; then
+        return 1
+    fi
+
+    "$python_cmd" - "$WEBUI_HEALTH_URL" <<'PY'
+import sys
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url, timeout=1.5) as response:
+        body = response.read()
+    raise SystemExit(0 if b'"status": "ok"' in body else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+}
+
+is_webui_port_listening() {
+    lsof -nP -iTCP:"$WEBUI_PORT" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+set_webui_port() {
+    WEBUI_PORT="$1"
+    WEBUI_URL="http://localhost:$WEBUI_PORT"
+    WEBUI_HEALTH_URL="http://$WEBUI_HOST:$WEBUI_PORT/health"
+}
+
+select_webui_port_for_launch() {
+    local log_path="$1"
+    local base_port="$WEBUI_PORT"
+    local candidate=""
+
+    for candidate in $(seq "$base_port" $((base_port + 9))); do
+        set_webui_port "$candidate"
+        if webui_health_check; then
+            if [[ "$(detect_webui_installed)" == "true" ]]; then
+                echo "发现可用的 Hermes 对话服务：$WEBUI_URL" >>"$log_path"
+                return 0
+            fi
+            echo "端口 $WEBUI_PORT 已有服务响应，但不是启动器管理的对话界面，尝试下一个端口。" >>"$log_path"
+            continue
+        fi
+        if is_webui_port_listening; then
+            echo "端口 $WEBUI_PORT 已被其他服务占用，尝试下一个端口。" >>"$log_path"
+            continue
+        fi
+        echo "选择端口 $WEBUI_PORT 启动 Hermes 对话服务。" >>"$log_path"
+        return 0
+    done
+
+    set_webui_port "$base_port"
+    echo "端口 $base_port-$((base_port + 9)) 都不可用，无法启动 Hermes 对话服务。" >>"$log_path"
+    return 1
+}
+
+wait_for_webui_health() {
+    local timeout="${1:-45}"
+    local deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        if webui_health_check; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+detect_webui_running() {
+    if webui_health_check; then
+        printf 'true\n'
+    else
+        printf 'false\n'
+    fi
+}
+
 compute_app_state() {
     local hermes_cmd="$1"
     local installed="false"
     local model_ready="false"
     local gateway_configured="false"
     local gateway_running="false"
+    local webui_installed="false"
+    local webui_running="false"
 
     if is_installed "$hermes_cmd"; then
         installed="true"
@@ -930,6 +1071,12 @@ compute_app_state() {
         if [[ "$(detect_gateway_running)" == "true" ]]; then
             gateway_running="true"
         fi
+        if [[ "$(detect_webui_installed)" == "true" ]]; then
+            webui_installed="true"
+        fi
+        if [[ "$(detect_webui_running)" == "true" ]]; then
+            webui_running="true"
+        fi
     fi
 
     cat <<EOF
@@ -937,6 +1084,9 @@ installed=$installed
 model_ready=$model_ready
 gateway_configured=$gateway_configured
 gateway_running=$gateway_running
+webui_installed=$webui_installed
+webui_running=$webui_running
+webui_url=$WEBUI_URL
 EOF
 }
 
@@ -1044,7 +1194,7 @@ maybe_handle_stage_completion() {
     case "$LAST_STAGE" in
         install)
             if [[ "$LAST_RESULT" == "success" && "$installed" == "true" ]]; then
-                show_message "安装已完成。\n\n下一步继续配置模型。完成后，你就可以开始第一次对话。"
+                show_message "安装已完成。\n\n下一步继续配置模型。完成后，你就可以开始和 Hermes 对话。"
                 set_stage_state "none" "idle" "$LAST_LOG_PATH"
             else
                 local picked=""
@@ -1072,11 +1222,12 @@ maybe_handle_stage_completion() {
             ;;
         chat)
             if [[ "$LAST_RESULT" == "success" ]]; then
-                show_message "本地对话入口已打开。\n\n如果终端里已经出现 Hermes 对话界面，现在就可以开始使用。"
+                show_message "Hermes WebUI 已打开。\n\n如果浏览器里已经出现 Hermes 对话界面，现在就可以开始使用。"
             elif [[ -n "$LAST_LOG_PATH" ]]; then
                 local picked=""
-                picked="$(prompt_failure_action "本地对话入口没有正常启动。\n\n你可以重新尝试，或先打开日志查看原因。")" || return 0
+                picked="$(prompt_webui_failure_action "Hermes 对话界面没有正常打开。\n\n你可以改用终端对话继续使用，或者重新尝试浏览器对话。")" || return 0
                 case "$picked" in
+                    "改用终端对话") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_terminal_chat_flow "$(resolve_hermes_command 2>/dev/null || true)" ;;
                     "重新尝试") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_chat_flow "$(resolve_hermes_command 2>/dev/null || true)" ;;
                     "打开日志") open_path "$LAST_LOG_PATH"; set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
                     *) set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
@@ -1196,6 +1347,7 @@ run_hermes_action() {
     local keep_note="${4:-命令执行结束后，可关闭窗口。}"
     local stage="${5:-}"
     local capture_output="${6:-true}"
+    local command_prefix="${7:-}"
     require_hermes "$hermes_cmd" || return 0
 
     local log_path
@@ -1205,7 +1357,7 @@ run_hermes_action() {
     if [[ "$capture_output" != "true" && -n "$log_path" ]]; then
         payload+="printf '%s %s\n' $(printf '%q' "[$(timestamp_now)]") $(printf '%q' "启动 $label") >> $(printf '%q' "$log_path"); "
     fi
-    payload+="if $(printf '%q' "$hermes_cmd") $args; then CMD_EXIT=0; else CMD_EXIT=\$?; fi; "
+    payload+="if $command_prefix $(printf '%q' "$hermes_cmd") $args; then CMD_EXIT=0; else CMD_EXIT=\$?; fi; "
     if [[ -n "$keep_note" ]]; then
         payload+="echo; echo $(printf '%q' "$keep_note"); "
     fi
@@ -1251,12 +1403,200 @@ print_state_test() {
 
 configure_model() {
     local hermes_cmd="$1"
-    run_hermes_action "$hermes_cmd" "模型配置" "model" "命令执行结束后，可关闭窗口。" "model" "true"
+    run_hermes_action "$hermes_cmd" "模型配置" "model" "命令执行结束后，可关闭窗口。" "model" "true" "TERM=dumb NO_COLOR=1 COLORTERM="
 }
 
-launch_local_chat() {
+launch_terminal_chat() {
     local hermes_cmd="$1"
-    run_hermes_action "$hermes_cmd" "本地对话" "chat" "" "chat" "false"
+    run_hermes_action "$hermes_cmd" "终端对话" "chat" "" "" "false"
+}
+
+ensure_webui_checkout() {
+    local log_path="$1"
+
+    mkdir -p "$(dirname "$WEBUI_DIR")" "$WEBUI_STATE_DIR"
+
+    if [[ -f "$WEBUI_DIR/bootstrap.py" && -f "$WEBUI_DIR/server.py" ]]; then
+        return 0
+    fi
+
+    if [[ -e "$WEBUI_DIR" ]]; then
+        {
+            echo "Hermes WebUI 目录已存在，但没有检测到 bootstrap.py/server.py：$WEBUI_DIR"
+            echo "请移动或删除这个目录后重试。"
+        } >>"$log_path"
+        return 1
+    fi
+
+    if ! command -v git >/dev/null 2>&1; then
+        echo "没有检测到 git，无法自动下载 Hermes WebUI。" >>"$log_path"
+        return 1
+    fi
+
+    echo "正在下载 Hermes WebUI：$WEBUI_REPO_URL" >>"$log_path"
+    git clone --depth 1 "$WEBUI_REPO_URL" "$WEBUI_DIR" >>"$log_path" 2>&1
+}
+
+ensure_webui_default_language() {
+    local log_path="$1"
+    local python_cmd=""
+    python_cmd="$(find_webui_python 2>/dev/null || true)"
+    if [[ -z "$python_cmd" ]]; then
+        echo "没有检测到可用的 Python，暂时无法写入 WebUI 默认语言。" >>"$log_path"
+        return 0
+    fi
+
+    mkdir -p "$WEBUI_STATE_DIR"
+    "$python_cmd" - "$WEBUI_STATE_DIR/settings.json" "$WEBUI_LANGUAGE" >>"$log_path" 2>&1 <<'PY'
+import json
+import sys
+from pathlib import Path
+
+settings_path = Path(sys.argv[1]).expanduser()
+language = sys.argv[2]
+settings = {}
+if settings_path.exists():
+    try:
+        loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            settings = loaded
+    except Exception:
+        settings = {}
+
+current = settings.get("language")
+if current in (None, "", "en"):
+    settings["language"] = language
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"WebUI default language set to {language}")
+else:
+    print(f"WebUI language preserved as {current}")
+PY
+}
+
+prepare_webui_checkout() {
+    local log_path="$1"
+
+    if ensure_webui_checkout "$log_path"; then
+        ensure_webui_default_language "$log_path"
+        return 0
+    fi
+
+    return 1
+}
+
+start_webui_server() {
+    local log_path="$1"
+    local python_cmd=""
+
+    python_cmd="$(find_webui_python 2>/dev/null || true)"
+    if [[ -z "$python_cmd" ]]; then
+        echo "没有检测到可用的 Python，无法启动 Hermes WebUI。" >>"$log_path"
+        return 1
+    fi
+
+    {
+        echo
+        echo "[$(timestamp_now)] 启动 Hermes WebUI"
+        echo "WebUI directory: $WEBUI_DIR"
+        echo "Agent directory: $INSTALL_DIR"
+        echo "State directory: $WEBUI_STATE_DIR"
+        echo "Default language: $WEBUI_LANGUAGE"
+        echo "URL: $WEBUI_URL"
+    } >>"$log_path"
+
+    (
+        cd "$WEBUI_DIR"
+        HERMES_HOME="$HERMES_HOME" \
+        HERMES_CONFIG_PATH="$HERMES_HOME/config.yaml" \
+        HERMES_WEBUI_AGENT_DIR="$INSTALL_DIR" \
+        HERMES_WEBUI_STATE_DIR="$WEBUI_STATE_DIR" \
+        HERMES_WEBUI_HOST="$WEBUI_HOST" \
+        HERMES_WEBUI_PORT="$WEBUI_PORT" \
+        HERMES_WEBUI_LANGUAGE="$WEBUI_LANGUAGE" \
+        "$python_cmd" "$WEBUI_DIR/bootstrap.py" --no-browser --skip-agent-install --host "$WEBUI_HOST" "$WEBUI_PORT"
+    ) >>"$log_path" 2>&1 &
+
+    local server_pid=$!
+    echo "Hermes 对话服务进程已启动，PID: $server_pid" >>"$log_path"
+    disown "$server_pid" 2>/dev/null || true
+}
+
+open_webui_browser() {
+    open "$WEBUI_URL"
+}
+
+handle_webui_launch_failure() {
+    local log_path="$1"
+    local message="$2"
+    local hermes_cmd="$3"
+    local picked=""
+
+    picked="$(prompt_webui_failure_action "$message\n\n你可以先改用终端对话继续使用，或打开日志查看原因。\n\n日志位置：\n$log_path")" || return 0
+    case "$picked" in
+        "改用终端对话") launch_terminal_chat "$hermes_cmd" ;;
+        "重新尝试") launch_webui_chat "$hermes_cmd" ;;
+        "打开日志") open_path "$log_path" ;;
+        *) ;;
+    esac
+}
+
+launch_webui_chat() {
+    local hermes_cmd="$1"
+    require_hermes "$hermes_cmd" || return 0
+
+    local log_path
+    log_path="$(build_log_path "webui")"
+    set_last_action "正在打开 Hermes WebUI，日志：$log_path"
+    set_stage_state "chat" "running" "$log_path"
+
+    if [[ "$(detect_webui_installed)" == "true" ]]; then
+        ensure_webui_default_language "$log_path"
+    fi
+
+    if ! select_webui_port_for_launch "$log_path"; then
+        set_last_action "Hermes 对话界面端口不可用，日志：$log_path"
+        set_stage_state "chat" "failed" "$log_path"
+        handle_webui_launch_failure "$log_path" "Hermes 对话界面暂时无法启动。\n\n端口 $WEBUI_PORT 附近都被占用或不可用。你可以关闭旧的 Hermes/WebUI 进程后重试。" "$hermes_cmd"
+        return 1
+    fi
+
+    if webui_health_check; then
+        open_webui_browser
+        set_last_action "已打开 Hermes WebUI：$WEBUI_URL"
+        set_stage_state "chat" "success" "$log_path"
+        return 0
+    fi
+
+    if ! ensure_webui_checkout "$log_path"; then
+        set_last_action "Hermes WebUI 准备失败，日志：$log_path"
+        set_stage_state "chat" "failed" "$log_path"
+        handle_webui_launch_failure "$log_path" "Hermes 对话界面没有准备成功。" "$hermes_cmd"
+        return 1
+    fi
+
+    ensure_webui_default_language "$log_path"
+
+    if ! start_webui_server "$log_path"; then
+        set_last_action "Hermes WebUI 启动失败，日志：$log_path"
+        set_stage_state "chat" "failed" "$log_path"
+        handle_webui_launch_failure "$log_path" "Hermes 对话界面没有启动成功。" "$hermes_cmd"
+        return 1
+    fi
+
+    if ! wait_for_webui_health 10; then
+        set_last_action "Hermes WebUI 健康检查失败，日志：$log_path"
+        set_stage_state "chat" "failed" "$log_path"
+        handle_webui_launch_failure "$log_path" "Hermes 对话界面已尝试启动，但暂时没有进入可用状态。" "$hermes_cmd"
+        return 1
+    fi
+
+    open_webui_browser
+    set_last_action "已打开 Hermes WebUI：$WEBUI_URL"
+    set_stage_state "chat" "success" "$log_path"
 }
 
 configure_gateway() {
@@ -1355,6 +1695,7 @@ handle_advanced_action() {
         "更新 Hermes"|update) run_update "$hermes_cmd" ;;
         "重新执行完整设置"|setup) run_full_setup "$hermes_cmd" ;;
         "配置 tools"|tools) run_tools "$hermes_cmd" ;;
+        "打开终端对话"|chat_terminal|chat-terminal) start_terminal_chat_flow "$hermes_cmd" ;;
         "配置消息渠道"|gateway_setup) configure_gateway "$hermes_cmd" ;;
         "打开消息网关"|gateway_run) launch_gateway "$hermes_cmd" ;;
         "打开配置文件 config.yaml"|open_config) ensure_config_scaffold; open_path "$HERMES_HOME/config.yaml" ;;
@@ -1376,6 +1717,7 @@ maintenance_menu() {
         "更新 Hermes" \
         "重新执行完整设置" \
         "配置 tools" \
+        "打开终端对话" \
         "配置消息渠道" \
         "打开消息网关" \
         "打开配置文件 config.yaml" \
@@ -1413,10 +1755,27 @@ start_model_flow() {
 
 start_chat_flow() {
     local hermes_cmd="$1"
-    local intro=$'接下来会打开 Terminal 启动 Hermes 本地对话。\n\n如果终端里出现 Hermes 对话界面，就表示安装和基础配置已经可以使用。\n\n现在开始第一次对话吗？'
+    local intro=""
+    if webui_health_check; then
+        launch_webui_chat "$hermes_cmd" || return 0
+        return 0
+    elif [[ "$(detect_webui_installed)" == "true" ]]; then
+        launch_webui_chat "$hermes_cmd" || return 0
+        return 0
+    else
+        intro=$'接下来会先准备 Hermes 对话界面，然后自动打开浏览器。\n\n这通常只会在第一次使用时发生，可能需要下载必要文件并准备 Python 依赖。\n\n现在开始和 Hermes 对话吗？'
+    fi
     show_intro_dialog "$intro" "是" || return 0
-    launch_local_chat "$hermes_cmd" || return 0
-    show_message $'本地对话窗口已经打开。\n\n如果终端中出现 Hermes 对话界面，你就已经完成首次可用配置。'
+    launch_webui_chat "$hermes_cmd" || return 0
+    show_message $'Hermes 对话界面已经打开。\n\n如果浏览器中出现对话界面，你就已经完成首次可用配置。'
+}
+
+start_terminal_chat_flow() {
+    local hermes_cmd="$1"
+    local intro=$'接下来会打开 Terminal 启动 Hermes 终端对话。\n\n这是浏览器对话无法启动时的备用入口。只要终端里出现 Hermes 对话界面，就可以继续使用。\n\n现在改用终端对话吗？'
+    show_intro_dialog "$intro" "是" || return 0
+    launch_terminal_chat "$hermes_cmd" || return 0
+    show_message $'终端对话窗口已经打开。\n\n如果终端中出现 Hermes 对话界面，你就可以继续使用。'
 }
 
 handle_action() {
@@ -1427,6 +1786,7 @@ handle_action() {
         "开始安装") start_install_flow ;;
         "配置模型") start_model_flow "$hermes_cmd" ;;
         "开始第一次对话") start_chat_flow "$hermes_cmd" ;;
+        "终端对话") start_terminal_chat_flow "$hermes_cmd" ;;
         "维护与高级选项")
             local picked=""
             picked="$(maintenance_menu)" || return 0
@@ -1452,6 +1812,7 @@ main() {
             install) handle_action "开始安装" "$hermes_cmd" ;;
             model) handle_action "配置模型" "$hermes_cmd" ;;
             chat) handle_action "开始第一次对话" "$hermes_cmd" ;;
+            chat_terminal|chat-terminal) handle_action "终端对话" "$hermes_cmd" ;;
             refresh) exec "$SELF_PATH" ;;
             *) handle_advanced_action "${2:-}" "$hermes_cmd" ;;
         esac
@@ -1459,7 +1820,7 @@ main() {
     fi
 
     if [[ "${1:-}" == "--self-test" ]]; then
-        printf 'Version=%s\nHermesHome=%s\nInstallDir=%s\nBranch=%s\n' "$LAUNCHER_VERSION" "$HERMES_HOME" "$INSTALL_DIR" "$BRANCH"
+        printf 'Version=%s\nHermesHome=%s\nInstallDir=%s\nWebUIDir=%s\nWebUIURL=%s\nWebUILanguage=%s\nBranch=%s\n' "$LAUNCHER_VERSION" "$HERMES_HOME" "$INSTALL_DIR" "$WEBUI_DIR" "$WEBUI_URL" "$WEBUI_LANGUAGE" "$BRANCH"
         exit 0
     fi
 

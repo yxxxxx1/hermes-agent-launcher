@@ -402,7 +402,7 @@ private struct SetupHero: View {
         case .model:
             return "接下来连接 AI 服务"
         case .chat:
-            return "最后做一次聊天测试"
+            return "最后打开浏览器对话"
         }
     }
 
@@ -413,7 +413,7 @@ private struct SetupHero: View {
         case .model:
             return "这一步会帮你填好 AI 服务相关设置。完成后，Hermes 才能真正开始工作。"
         case .chat:
-            return "这一步会做一次实际对话确认。完成后，这台 Mac 上的 Hermes 就可以直接用了。"
+            return "这一步会打开 Hermes 对话界面。以后日常聊天都在浏览器里完成，不再需要守着终端窗口。"
         }
     }
 
@@ -624,7 +624,7 @@ private struct ManagementHero: View {
                 .foregroundStyle(LauncherPalette.textPrimary)
                 .tracking(-0.8)
 
-            Text("它已经安装好，也已经连上 AI。你现在最需要做的，通常就是直接开始和它说话。")
+            Text("它已经安装好，也已经连上 AI。你现在最需要做的，通常就是打开浏览器和它说话。")
                 .font(.system(size: 16, weight: .regular, design: .rounded))
                 .foregroundStyle(LauncherPalette.textSecondary)
                 .lineSpacing(4)
@@ -639,6 +639,8 @@ private struct ManagementHero: View {
                 if store.snapshot.aiModel != "未配置" {
                     FriendlyPill(symbol: "cpu", text: "当前模型：\(store.snapshot.aiModel)")
                 }
+
+                FriendlyPill(symbol: "safari", text: store.snapshot.webuiStatus)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -664,6 +666,14 @@ private struct ManagementSimpleActionsSection: View {
             }
 
             VStack(spacing: 10) {
+                SimpleActionRow(
+                    title: "开始和 Hermes 对话",
+                    subtitle: "打开熟悉的对话界面，继续聊天、查看会话和处理任务。",
+                    symbol: "safari"
+                ) {
+                    store.perform(action: "chat")
+                }
+
                 SimpleActionRow(
                     title: "换一个 AI 模型",
                     subtitle: "如果你想切换到别的模型，从这里改就可以。",
@@ -1019,6 +1029,7 @@ private extension Notification.Name {
 }
 
 private let managementUsageActions: [ManagementAction] = [
+    ManagementAction(id: "chat", title: "开始和 Hermes 对话", subtitle: "打开对话界面，继续聊天和管理会话", symbolName: "safari"),
     ManagementAction(id: "doctor", title: "检查现在能不能正常用", subtitle: "自动检查 Hermes 当前是不是已经能正常工作", symbolName: "stethoscope"),
     ManagementAction(id: "model", title: "更换 AI 模型", subtitle: "重新选择你想使用的 AI 服务和默认模型", symbolName: "slider.horizontal.3"),
     ManagementAction(id: "gateway_setup", title: "连接消息通知", subtitle: "把 Hermes 接到微信、飞书、QQ等消息入口", symbolName: "message.badge.waveform"),
@@ -1030,6 +1041,7 @@ private let managementMaintenanceActions: [ManagementAction] = [
     ManagementAction(id: "open_config", title: "打开主设置", subtitle: "查看 Hermes 的主要设置", symbolName: "doc.text"),
     ManagementAction(id: "open_env", title: "查看密钥设置", subtitle: "检查 API Key 和环境变量", symbolName: "key"),
     ManagementAction(id: "open_logs", title: "打开问题记录", subtitle: "查看最近运行时留下的记录", symbolName: "doc.text.magnifyingglass"),
+    ManagementAction(id: "chat_terminal", title: "打开终端对话", subtitle: "浏览器对话无法启动时使用的备用入口", symbolName: "terminal"),
     ManagementAction(id: "open_home", title: "打开数据文件夹", subtitle: "查看 Hermes 保存的数据", symbolName: "house"),
     ManagementAction(id: "open_install", title: "打开安装位置", subtitle: "查看 Hermes 的程序文件", symbolName: "folder"),
     ManagementAction(id: "tools", title: "调整工具权限", subtitle: "处理工具权限或可用范围", symbolName: "shippingbox.and.arrow.backward"),

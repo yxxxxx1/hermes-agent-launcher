@@ -68,9 +68,22 @@ final class LauncherStore: ObservableObject {
             return
         }
 
-        busyMessage = "正在执行 \(action)"
+        busyMessage = busyMessage(for: action)
         runLauncher(arguments: ["--dispatch-action", action], updateBusy: true) { [weak self] _ in
             self?.refresh()
+        }
+    }
+
+    private func busyMessage(for action: String) -> String {
+        switch action {
+        case "chat":
+            return "正在准备浏览器对话"
+        case "model":
+            return "正在打开模型设置"
+        case "install":
+            return "正在准备安装"
+        default:
+            return "正在执行 \(action)"
         }
     }
 
@@ -98,6 +111,8 @@ final class LauncherStore: ObservableObject {
         let modelReady = fields["model_ready"] == "true"
         let gatewayConfigured = fields["gateway_configured"] == "true"
         let gatewayRunning = fields["gateway_running"] == "true"
+        let webuiInstalled = fields["webui_installed"] == "true"
+        let webuiRunning = fields["webui_running"] == "true"
         let lastResult = fields["last_result"] ?? "idle"
 
         var snapshot = LauncherSnapshot()
@@ -108,6 +123,14 @@ final class LauncherStore: ObservableObject {
         snapshot.aiModel = detectModel()
         snapshot.gatewayChannel = detectGatewayChannel()
         snapshot.chatAvailability = modelReady ? "可以开始" : "暂不可用"
+        snapshot.webuiURL = fields["webui_url"] ?? snapshot.webuiURL
+        if webuiRunning {
+            snapshot.webuiStatus = "浏览器对话已在运行"
+        } else if webuiInstalled {
+            snapshot.webuiStatus = "已准备，点击后打开"
+        } else {
+            snapshot.webuiStatus = "首次打开会自动准备"
+        }
 
         if !installed {
             snapshot.currentStep = "继续安装"
@@ -131,13 +154,13 @@ final class LauncherStore: ObservableObject {
             ]
         } else {
             snapshot.currentStep = "开始第一次对话"
-            snapshot.primaryButtonTitle = "开始第一次对话"
+            snapshot.primaryButtonTitle = "开始和 Hermes 对话"
             snapshot.primaryAction = "chat"
             snapshot.supportSummary = "可选，用于维护与消息渠道"
             snapshot.stages = [
                 StageCardModel(stage: .install, status: .complete, stateText: "这一步已经完成了"),
                 StageCardModel(stage: .model, status: .complete, stateText: "这一步已经完成了"),
-                StageCardModel(stage: .chat, status: .active, stateText: "现在可以直接开始")
+                StageCardModel(stage: .chat, status: .active, stateText: webuiRunning ? "浏览器对话已在运行" : "现在可以打开浏览器")
             ]
         }
 

@@ -46,7 +46,7 @@ The macOS launcher MUST present onboarding as a low-noise guided flow with one c
 
 ### Requirement: Install, model configuration, and first chat MUST use guided entry flows
 
-The macOS launcher MUST wrap each primary onboarding action in a short explanation dialog before opening Terminal.
+The macOS launcher MUST wrap setup-oriented onboarding actions in short explanation dialogs, keep Terminal handoffs for install and model configuration, and launch the first chat in Hermes WebUI instead of Terminal.
 
 #### Scenario: User starts installation
 
@@ -67,8 +67,9 @@ The macOS launcher MUST wrap each primary onboarding action in a short explanati
 
 - Given first chat is the next primary action
 - When the user chooses to continue
-- Then the launcher explains that Terminal will open for the local chat entrypoint
-- And it opens the chat flow in Terminal
+- Then the launcher explains that Hermes WebUI will open in the browser
+- And it starts or reuses the local Hermes WebUI server
+- And it opens the browser chat window without launching a Terminal chat session
 
 ### Requirement: Advanced maintenance actions MUST remain reachable
 

@@ -23,7 +23,7 @@ enum LauncherStage: Int, CaseIterable, Identifiable {
         case .model:
             return "把 AI 服务接好。填完后，Hermes 才能开始回答你。"
         case .chat:
-            return "实际说一句话试试看，确认 Hermes 现在已经能用了。"
+            return "打开浏览器对话窗口，确认 Hermes 现在已经能用了。"
         }
     }
 }
@@ -61,7 +61,7 @@ struct StageCardModel: Identifiable {
         switch stage {
         case .install: return "shippingbox.fill"
         case .model: return "slider.horizontal.3"
-        case .chat: return "terminal.fill"
+        case .chat: return "safari.fill"
         }
     }
 
@@ -85,6 +85,8 @@ struct LauncherSnapshot {
     var aiProvider = "未配置"
     var aiModel = "未配置"
     var chatAvailability = "暂不可用"
+    var webuiStatus = "未准备"
+    var webuiURL = "http://localhost:8787"
     var gatewayStatus = "暂未配置"
     var gatewayChannel = "未配置"
     var supportSummary = "日常使用暂不需要"
