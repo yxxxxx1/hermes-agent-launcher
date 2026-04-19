@@ -1,11 +1,8 @@
-# macos-management-center
+# macos-management-center Specification
 
 ## Purpose
-
-Define the macOS launcher management center as a simplified post-setup action hub for non-technical users.
-
+TBD - created by archiving change simplify-macos-launcher-information-architecture. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: The management center MUST prioritize high-frequency user actions
 
 The macOS launcher MUST present the most common post-setup actions on the first level of the management center.
@@ -50,3 +47,4 @@ The macOS launcher MUST use wording that non-technical users can understand with
 - When the user reads the first-level management actions
 - Then the labels describe user goals and expected outcomes
 - And they avoid technical file, log, directory, or environment terminology at the first level
+

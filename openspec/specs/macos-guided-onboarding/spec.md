@@ -3,9 +3,7 @@
 ## Purpose
 
 Define the macOS launcher onboarding flow as a guided, stage-driven experience for non-technical users.
-
 ## Requirements
-
 ### Requirement: The launcher MUST derive onboarding progress from local machine state
 
 The macOS launcher MUST determine onboarding progress from the detected Hermes installation, model readiness, and optional gateway state instead of from a persisted wizard checkpoint.
@@ -36,15 +34,15 @@ The macOS launcher MUST determine onboarding progress from the detected Hermes i
 
 ### Requirement: The top-level launcher menu MUST focus on one next step at a time
 
-The macOS launcher MUST replace the old flat action list with a dashboard that shows onboarding progress and one dynamic primary action.
+The macOS launcher MUST present onboarding as a low-noise guided flow with one clear next action, compact progress context, and no repeated system summaries that compete with the current step.
 
-#### Scenario: Launcher shows a guided dashboard
+#### Scenario: Install-stage launcher shows a guided flow
 
-- Given the launcher opens on macOS
-- When the top-level menu is displayed
-- Then it shows stage progress for install, model setup, and first chat
-- And it includes exactly one primary onboarding action
-- And it keeps advanced functionality behind a separate advanced menu entry
+- Given the launcher is in the install, model setup, or first-chat onboarding state
+- When the onboarding screen is displayed
+- Then it shows one primary onboarding action for the current step
+- And it shows compact progress for install, model setup, and first chat
+- And it does not show repeated stage summaries in multiple parallel cards
 
 ### Requirement: Install, model configuration, and first chat MUST use guided entry flows
 
@@ -74,11 +72,14 @@ The macOS launcher MUST wrap each primary onboarding action in a short explanati
 
 ### Requirement: Advanced maintenance actions MUST remain reachable
 
-The macOS launcher MUST preserve existing maintenance and support actions under an advanced menu.
+The macOS launcher MUST keep install-stage recovery available without exposing a full technical tools surface during onboarding.
 
-#### Scenario: User opens advanced options
+#### Scenario: User needs help during onboarding
 
-- Given the launcher is showing the top-level dashboard
-- When the user chooses advanced options
-- Then the launcher shows maintenance, diagnostics, gateway, file access, documentation, and uninstall actions
-- And those actions remain callable without changing the onboarding flow
+- Given the launcher is showing an onboarding step
+- When the user looks for help with that step
+- Then the launcher exposes a lightweight recovery entry
+- And the recovery entry is collapsed by default
+- And its first-level actions use plain language focused on what to try next
+- And it does not present logs, config files, directories, or environment files as primary onboarding actions
+

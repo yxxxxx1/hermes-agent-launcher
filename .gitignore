@@ -3,3 +3,5 @@
 .wrangler/
 .build/
 .swiftpm/
+.DS_Store
+downloads/*.app/
