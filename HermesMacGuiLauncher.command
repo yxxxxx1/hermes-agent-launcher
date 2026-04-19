@@ -3,7 +3,7 @@
 set -euo pipefail
 
 APP_TITLE="Hermes Agent macOS 轻量启动器"
-LAUNCHER_VERSION="macOS v2026.04.19.1"
+LAUNCHER_VERSION="macOS v2026.04.19.2"
 OFFICIAL_INSTALL_URL="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 OFFICIAL_REPO_URL="https://github.com/NousResearch/hermes-agent"
 OFFICIAL_DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation/"

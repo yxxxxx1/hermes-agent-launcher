@@ -78,7 +78,7 @@ struct StageCardModel: Identifiable {
 }
 
 struct LauncherSnapshot {
-    var version = "macOS v2026.04.19.1"
+    var version = "macOS v2026.04.19.2"
     var currentStep = "继续安装"
     var primaryButtonTitle = "继续安装"
     var primaryAction = "install"
