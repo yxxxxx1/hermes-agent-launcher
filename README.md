@@ -20,7 +20,8 @@ and exposes common actions through a GUI:
 
 - `HermesGuiLauncher.ps1`: Windows WPF desktop launcher implemented in PowerShell
 - `Start-HermesGuiLauncher.cmd`: Windows double-click entry point
-- `HermesMacGuiLauncher.command`: macOS GUI launcher implemented with `osascript` + `Terminal`
+- `macos-app/`: macOS Swift app wrapper used for the downloadable `.app`
+- `HermesMacGuiLauncher.command`: macOS helper script used by the app bundle and for source-tree development
 - `index.html`: static download page that auto-detects Windows/macOS and recommends the matching installer
 - `downloads/`: packaged ZIP downloads for Windows and macOS installers
 
@@ -43,17 +44,17 @@ or double-click:
 Start-HermesGuiLauncher.cmd
 ```
 
-For macOS:
+For macOS packaged downloads, unzip the archive and open:
+
+```text
+Hermes Launcher.app
+```
+
+For macOS source-tree development:
 
 ```bash
 chmod +x ./HermesMacGuiLauncher.command
 ./HermesMacGuiLauncher.command
-```
-
-or double-click:
-
-```text
-HermesMacGuiLauncher.command
 ```
 
 For the download page:
