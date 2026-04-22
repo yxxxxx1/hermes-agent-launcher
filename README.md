@@ -1,20 +1,43 @@
-# Hermes Agent GUI Launcher
+# Hermes Agent 启动器
 
-This workspace contains desktop launchers for [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
+> 让每一个想用 AI Agent 的普通人,都不用去啃英文文档和命令行.
 
-It wraps the current official installer scripts:
+## 这是什么
 
-- Windows: `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1`
-- macOS/Linux: `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh`
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) 是一个很强的开源 AI Agent.但装它需要:打开终端,运行英文命令,配置环境,读文档.
 
-and exposes common actions through a GUI:
+这对开发者没问题.但对一个想用 AI 的普通人——**太难了**.
 
-- install or update Hermes
-- run the setup wizard
-- launch the Hermes CLI
-- run `hermes doctor`
-- run `hermes update`
-- open `config.yaml`, `.env`, and the logs folder
+这个启动器把安装和配置的所有步骤,变成一个双击就能打开的图形界面.全中文.一路图形化.不会命令行也能用.
+
+## 下载
+
+**[hermes.aisuper.win](https://hermes.aisuper.win)** — 一键下载
+
+- Windows(需先装 WSL2,启动器会帮你)
+- macOS(直接双击打开)
+
+## 做了哪些事让它更好用
+
+- 🖱️ **全图形化**:模型配置,API Key,环境检测,都是点按钮
+- 🇨🇳 **全中文**:界面,错误提示,引导,都是中文
+- ✅ **自动校验**:填错的 API Key 当场就提示,不会等到对话时才发现
+- 🔧 **内置引导**:不知道选哪个模型?界面里有建议
+
+## 它不是什么
+
+- **不是 Hermes Agent 官方产品**:我是 [@yxxxxx1](https://github.com/yxxxxx1),一个想让身边人也能用上 AI 的 PM
+- **不代表官方支持**:遇到问题找我,别找 Nous Research
+- **不保证完美**:百人用户群在共同踩坑和反馈中迭代
+
+## 加入我们
+
+- 问题反馈:[Issues](https://github.com/yxxxxx1/hermes-agent-launcher/issues)
+- 交流群:[群链接占位,PM 稍后填入]
+
+遵循 MIT 协议开源.
+
+---
 
 ## Files
 
