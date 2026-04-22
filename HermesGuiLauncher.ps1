@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.16.1'
+$script:LauncherVersion = 'Windows v2026.04.22.1'
 $script:HermesWebUiSourceRepo = 'nesquena/hermes-webui'
 $script:HermesWebUiVersionLabel = 'v0.50.63'
 $script:HermesWebUiCommit = 'a512f2020e01ef8c98989eb00c84a8d8cfc81ee1'
@@ -468,22 +468,20 @@ function Test-HermesModelConfigured {
 
     if (Test-Path $configPath) {
         $configText = [System.IO.File]::ReadAllText($configPath)
-        $hasModelConfig = $configText -match '(?m)^\s*model\s*:' -and $configText -match '(?m)^\s+default\s*:\s*\S+'
+        $modelBlock = Get-YamlTopLevelBlockText -Text $configText -BlockName 'model'
 
-        if ($configText -match '(?m)^\s+provider\s*:\s*(\S+)') {
-            $configProvider = $matches[1].Trim()
-        } elseif ($configText -match '(?m)^\s*provider\s*:\s*(\S+)') {
-            $configProvider = $matches[1].Trim()
-        }
+        if ($modelBlock) {
+            $configProvider = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'provider'
+            $configModel = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'default'
+            if (-not $configModel) {
+                $configModel = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'model'
+            }
+            $configBaseUrl = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'base_url'
+            $hasModelConfig = [bool]$configModel
 
-        if ($configText -match '(?m)^\s+default\s*:\s*(\S+)') {
-            $configModel = $matches[1].Trim()
-        } elseif ($configText -match '(?m)^\s+model\s*:\s*(\S+)') {
-            $configModel = $matches[1].Trim()
-            $hasModelConfig = $true
-        }
-        if ($configText -match '(?m)^\s+base_url\s*:\s*(\S+)') {
-            $configBaseUrl = $matches[1].Trim()
+            # Bug 2: check api_key in config.yaml model block
+            $configApiKey = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'api_key'
+            if ($configApiKey) { $hasApiKey = $true }
         }
     }
 
@@ -622,7 +620,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '适合中文用户。只需要模型名和 API Key。'
             Help           = '推荐先用 DeepSeek 快速验证 Hermes 是否能正常对话。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://api.deepseek.com/v1'
         }
         [pscustomobject]@{
             Id             = 'openrouter'
@@ -635,7 +633,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '聚合多家模型平台。通常不需要自己填写 Base URL。'
             Help           = '模型名通常是带厂商前缀的完整名称，例如 openai/gpt-4.1-mini。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://openrouter.ai/api/v1'
         }
         [pscustomobject]@{
             Id             = 'openai'
@@ -674,7 +672,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '使用 Google / Gemini API Key。'
             Help           = '官方文档支持 GOOGLE_API_KEY 或 GEMINI_API_KEY，这里统一写 GOOGLE_API_KEY。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://generativelanguage.googleapis.com/v1beta/openai'
         }
         [pscustomobject]@{
             Id             = 'zai'
@@ -687,7 +685,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '使用智谱 z.ai / GLM 平台。'
             Help           = '如需覆盖官方默认地址，可后续在 .env 中追加 GLM_BASE_URL。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://open.bigmodel.cn/api/paas/v4'
         }
         [pscustomobject]@{
             Id             = 'kimi'
@@ -700,7 +698,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '使用 Moonshot / Kimi 接口。'
             Help           = '如需覆盖默认地址，可后续在 .env 中追加 KIMI_BASE_URL。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://api.moonshot.cn/v1'
         }
         [pscustomobject]@{
             Id             = 'minimax'
@@ -713,7 +711,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '使用 MiniMax 国际版接口。'
             Help           = '如需国内版，请选择下面的 MiniMax 中国区。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://api.minimax.chat/v1'
         }
         [pscustomobject]@{
             Id             = 'minimax-cn'
@@ -726,7 +724,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '使用 MiniMax 中国区接口。'
             Help           = '如需覆盖默认地址，可后续在 .env 中追加 MINIMAX_CN_BASE_URL。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://api.minimax.chat/v1'
         }
         [pscustomobject]@{
             Id             = 'alibaba'
@@ -739,7 +737,7 @@ function Get-ModelProviderCatalog {
             ApiKeyRequired = $true
             Description    = '使用阿里百炼 / DashScope / Qwen。'
             Help           = '官方 provider 是 alibaba；dashscope / qwen 只是别名。'
-            BaseUrlDefault = ''
+            BaseUrlDefault = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
         }
         [pscustomobject]@{
             Id             = 'huggingface'
@@ -968,6 +966,60 @@ function Set-EnvAssignmentValue {
     return (($lines.ToArray()) -join [Environment]::NewLine).Trim() + [Environment]::NewLine
 }
 
+function Get-YamlTopLevelBlockText {
+    param(
+        [string]$Text,
+        [string]$BlockName
+    )
+
+    if (-not $Text -or -not $BlockName) { return $null }
+    $lines = @($Text -split "`r?`n")
+    $start = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match ('^' + [regex]::Escape($BlockName) + '\s*:\s*$')) {
+            $start = $i + 1
+            break
+        }
+    }
+    if ($start -lt 0) { return $null }
+    $end = $start
+    while ($end -lt $lines.Count) {
+        if ($lines[$end] -match '^\S') { break }
+        $end++
+    }
+    if ($end -le $start) { return $null }
+    return ($lines[$start..($end - 1)] -join "`n")
+}
+
+function Get-YamlBlockFieldValue {
+    param(
+        [string]$BlockText,
+        [string]$FieldName
+    )
+
+    if (-not $BlockText -or -not $FieldName) { return $null }
+    $pattern = '(?m)^\s+' + [regex]::Escape($FieldName) + '\s*:\s*(.+?)\s*$'
+    $match = [regex]::Match($BlockText, $pattern)
+    if (-not $match.Success) { return $null }
+    $val = $match.Groups[1].Value.Trim()
+    # Remove surrounding quotes
+    if ($val.Length -ge 2 -and (($val[0] -eq '"' -and $val[-1] -eq '"') -or ($val[0] -eq "'" -and $val[-1] -eq "'"))) {
+        $val = $val.Substring(1, $val.Length - 2)
+    }
+    # Strip inline comment (but not for URLs containing ://)
+    if ($val -notmatch '://') {
+        $commentIdx = $val.IndexOf(' #')
+        if ($commentIdx -ge 0) { $val = $val.Substring(0, $commentIdx).TrimEnd() }
+    } else {
+        # For URLs: strip comment only after a space-hash sequence that follows the URL
+        if ($val -match '^(\S+)\s+#') {
+            $val = $matches[1]
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($val)) { return $null }
+    return $val
+}
+
 function Set-YamlTopLevelBlock {
     param(
         [string]$Text,
@@ -1027,14 +1079,25 @@ function Get-HermesModelSnapshot {
     $provider = $null
     $model = $null
     $baseUrl = $null
-    if ($configText -match '(?m)^\s+provider\s*:\s*(\S+)') { $provider = $matches[1].Trim() }
-    if ($configText -match '(?m)^\s+default\s*:\s*(\S+)') { $model = $matches[1].Trim() }
-    if ($configText -match '(?m)^\s+base_url\s*:\s*(\S+)') { $baseUrl = $matches[1].Trim() }
+    $apiKey = $null
+    $modelBlock = Get-YamlTopLevelBlockText -Text $configText -BlockName 'model'
+    if ($modelBlock) {
+        $provider = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'provider'
+        $model = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'default'
+        $baseUrl = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'base_url'
+        $apiKey = Get-YamlBlockFieldValue -BlockText $modelBlock -FieldName 'api_key'
+    }
+
+    # Bug 3: fallback to .env OPENAI_API_KEY only for custom provider
+    if (-not $apiKey -and $provider -eq 'custom') {
+        $apiKey = Get-EnvAssignmentValue -Text $envText -Name 'OPENAI_API_KEY'
+    }
 
     [pscustomobject]@{
         Provider   = $provider
         Model      = $model
         BaseUrl    = $baseUrl
+        ApiKey     = $apiKey
         ConfigText = $configText
         EnvText    = $envText
     }
@@ -1092,6 +1155,10 @@ function Save-HermesModelDialogConfig {
     if ($Provider.NeedsBaseUrl -and -not [string]::IsNullOrWhiteSpace($BaseUrl)) {
         $blockLines.Add(('  base_url: {0}' -f $BaseUrl.Trim())) | Out-Null
     }
+    # Bug 1: custom provider with non-empty api_key -> write api_key into config.yaml
+    if ($Provider.ConfigProvider -eq 'custom' -and -not [string]::IsNullOrWhiteSpace($ApiKey)) {
+        $blockLines.Add(('  api_key: {0}' -f $ApiKey.Trim())) | Out-Null
+    }
 
     $newConfigText = Set-YamlTopLevelBlock -Text $snapshot.ConfigText -BlockName 'model' -BlockLines $blockLines.ToArray()
     [System.IO.File]::WriteAllText((Join-Path $HermesHome 'config.yaml'), $newConfigText, [System.Text.Encoding]::UTF8)
@@ -1126,6 +1193,10 @@ function Save-HermesProviderConfigOnly {
     if ($Provider.NeedsBaseUrl -and -not [string]::IsNullOrWhiteSpace($BaseUrl)) {
         $blockLines.Add(('  base_url: {0}' -f $BaseUrl.Trim())) | Out-Null
     }
+    # Preserve existing api_key when only switching provider (don't lose user's key)
+    if ($Provider.ConfigProvider -eq 'custom' -and $snapshot.ApiKey) {
+        $blockLines.Add(('  api_key: {0}' -f $snapshot.ApiKey)) | Out-Null
+    }
 
     $newConfigText = Set-YamlTopLevelBlock -Text $snapshot.ConfigText -BlockName 'model' -BlockLines $blockLines.ToArray()
     [System.IO.File]::WriteAllText((Join-Path $HermesHome 'config.yaml'), $newConfigText, [System.Text.Encoding]::UTF8)
@@ -1133,6 +1204,97 @@ function Save-HermesProviderConfigOnly {
     return [pscustomobject]@{
         Provider = $Provider.Title
         Model    = $ModelName.Trim()
+    }
+}
+
+function Test-ModelProviderConnectivity {
+    param(
+        $Provider,
+        [string]$ModelName,
+        [string]$ApiKey,
+        [string]$BaseUrl
+    )
+
+    # Determine endpoint
+    $endpoint = ''
+    if ($Provider.NeedsBaseUrl -and -not [string]::IsNullOrWhiteSpace($BaseUrl)) {
+        $endpoint = $BaseUrl.TrimEnd('/')
+    } elseif ($Provider.BaseUrlDefault) {
+        $endpoint = $Provider.BaseUrlDefault.TrimEnd('/')
+    }
+    if (-not $endpoint) {
+        return [pscustomobject]@{ Success = $true; ErrorType = 'none'; Message = ''; Hint = ''; Detail = 'no endpoint to validate' }
+    }
+
+    $url = "$endpoint/chat/completions"
+    $timeout = if ($endpoint -match 'localhost|127\.0\.0\.1|0\.0\.0\.0') { 3 } else { 5 }
+
+    $headers = @{ 'Content-Type' = 'application/json' }
+    if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+        $headers['Authorization'] = "Bearer $($ApiKey.Trim())"
+    }
+
+    $body = @{
+        model      = $ModelName.Trim()
+        messages   = @(@{ role = 'user'; content = 'hi' })
+        max_tokens = 1
+    } | ConvertTo-Json -Depth 3
+
+    try {
+        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body -TimeoutSec $timeout
+        if ($response.choices) {
+            return [pscustomobject]@{ Success = $true; ErrorType = 'none'; Message = ''; Hint = ''; Detail = '' }
+        }
+        return [pscustomobject]@{ Success = $true; ErrorType = 'none'; Message = ''; Hint = ''; Detail = 'response ok but no choices' }
+    } catch {
+        $ex = $_.Exception
+        $statusCode = 0
+        $responseBody = ''
+        if ($ex.PSObject.Properties['Response'] -and $ex.Response) {
+            try { $statusCode = [int]$ex.Response.StatusCode } catch { }
+            try {
+                $stream = $ex.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($stream)
+                $responseBody = $reader.ReadToEnd()
+                $reader.Close()
+            } catch { }
+        }
+
+        $shortEndpoint = if ($endpoint.Length -gt 50) { $endpoint.Substring(0, 50) + '...' } else { $endpoint }
+
+        if ($statusCode -eq 401) {
+            return [pscustomobject]@{ Success = $false; ErrorType = 'auth'; Message = 'API Key 无效或已过期。'; Hint = '请检查 API Key 是否正确，或到平台官网重新生成。'; Detail = $responseBody }
+        }
+        if ($statusCode -eq 403) {
+            return [pscustomobject]@{ Success = $false; ErrorType = 'auth'; Message = 'API Key 没有权限访问该模型。'; Hint = '请确认账号权限或余额是否充足。'; Detail = $responseBody }
+        }
+        if ($statusCode -eq 404) {
+            return [pscustomobject]@{ Success = $false; ErrorType = 'not_found'; Message = "模型名 `"$($ModelName.Trim())`" 不存在。"; Hint = '请确认模型名拼写正确，或点"检查填写"查看可用列表。'; Detail = $responseBody }
+        }
+        if ($statusCode -ge 400 -and $statusCode -lt 500) {
+            $brief = if ($responseBody.Length -gt 120) { $responseBody.Substring(0, 120) + '...' } else { $responseBody }
+            return [pscustomobject]@{ Success = $false; ErrorType = 'unknown'; Message = "校验失败（HTTP $statusCode）：$brief"; Hint = ''; Detail = $responseBody }
+        }
+        if ($statusCode -ge 500) {
+            return [pscustomobject]@{ Success = $false; ErrorType = 'unknown'; Message = "服务端错误（HTTP $statusCode）。"; Hint = '平台服务可能暂时不可用，请稍后重试。'; Detail = $responseBody }
+        }
+
+        $msg = [string]$ex.Message
+        # Use WebExceptionStatus for reliable detection (error messages are localized on non-English systems)
+        $webStatus = if ($ex -is [System.Net.WebException]) { [string]$ex.Status } else { '' }
+        if ($webStatus -eq 'Timeout') {
+            $timeoutHint = if ($endpoint -match 'localhost|127\.0\.0\.1|0\.0\.0\.0') { '请确认本地模型服务已启动。' } else { '请检查网络连接是否正常。' }
+            return [pscustomobject]@{ Success = $false; ErrorType = 'timeout'; Message = "连接 $shortEndpoint 超时。"; Hint = $timeoutHint; Detail = $msg }
+        }
+        if ($webStatus -eq 'ConnectFailure') {
+            return [pscustomobject]@{ Success = $false; ErrorType = 'connection'; Message = "无法连接到 $shortEndpoint。"; Hint = '请检查 Base URL 是否正确，或确认网络可以访问该地址。'; Detail = $msg }
+        }
+        if ($webStatus -eq 'NameResolutionFailure') {
+            return [pscustomobject]@{ Success = $false; ErrorType = 'connection'; Message = "无法连接到 $shortEndpoint。"; Hint = '请检查 Base URL 中的域名是否正确。'; Detail = $msg }
+        }
+
+        $brief = if ($msg.Length -gt 120) { $msg.Substring(0, 120) + '...' } else { $msg }
+        return [pscustomobject]@{ Success = $false; ErrorType = 'unknown'; Message = "校验失败：$brief"; Hint = ''; Detail = $msg }
     }
 }
 
@@ -3303,7 +3465,7 @@ function Show-ModelConfigDialog {
             <Border Grid.Column="4" Padding="16" CornerRadius="16" Background="#111827" BorderBrush="#22314D" BorderThickness="1">
                 <StackPanel>
                     <TextBlock FontSize="18" FontWeight="SemiBold" Text="状态与引导"/>
-                    <TextBlock Margin="0,12,0,0" Foreground="#7DD3FC" Text="当前检测"/>
+                    <TextBlock Margin="0,12,0,0" Foreground="#7DD3FC" Text="已保存配置"/>
                     <TextBlock x:Name="CurrentSnapshotText" Margin="0,6,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"/>
                     <TextBlock Margin="0,16,0,0" Foreground="#7DD3FC" Text="当前表单状态"/>
                     <TextBlock x:Name="ValidationStatusText" Margin="0,6,0,0" Foreground="#CBD5E1" TextWrapping="Wrap" Text="尚未检查填写。"/>
@@ -3380,6 +3542,10 @@ function Show-ModelConfigDialog {
         AccountAuthenticated = $false
         AccountCredential = ''
         ModelOptionsByProvider = @{}
+        LastValidation       = $null
+        LastValidationTime   = $null
+        LastValidationKey    = ''
+        ValidationFailed     = $false
     }
 
     $findInitial = Get-InitialModelProvider -Providers $providers -Snapshot $snapshot
@@ -3389,9 +3555,9 @@ function Show-ModelConfigDialog {
 
     $dialogControls.CurrentSnapshotText.Text = if ($snapshot.Provider -or $snapshot.Model) {
         $detectedTitle = if ($findInitial) { $findInitial.Title } else { $snapshot.Provider }
-        "当前识别：$detectedTitle`n当前 provider：$($snapshot.Provider)`n当前模型：$($snapshot.Model)`n当前 Base URL：$($snapshot.BaseUrl)"
+        "已保存：$detectedTitle`nprovider：$($snapshot.Provider)`n模型：$($snapshot.Model)`nBase URL：$($snapshot.BaseUrl)"
     } else {
-        '还没有检测到已保存的模型配置。'
+        '还没有保存过模型配置。'
     }
 
     $setDialogResult = {
@@ -3661,6 +3827,7 @@ function Show-ModelConfigDialog {
         $dialogControls.FormTitleText.Text = $provider.Title
         $dialogControls.FormSubtitleText.Text = $provider.Description
         $dialogControls.FieldHintText.Text = $provider.Help
+        $dialogControls.FieldHintText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#CBD5E1')
         $cachedModels = $dialogState.ModelOptionsByProvider[$provider.Id]
         if ($cachedModels) {
             $dialogControls.ModelNameTextBox.ItemsSource = @($cachedModels.Models)
@@ -3692,7 +3859,14 @@ function Show-ModelConfigDialog {
         }
         if ($provider.AuthType -eq 'api_key' -and $provider.ApiKeyEnv) {
             if ($providerChanged -or [string]::IsNullOrWhiteSpace($dialogControls.ApiKeyPasswordBox.Password)) {
-                $existingKey = Get-EnvAssignmentValue -Text $snapshot.EnvText -Name $provider.ApiKeyEnv
+                $existingKey = $null
+                # Bug 3: for custom providers, prefer snapshot.ApiKey (reads config.yaml first, falls back to .env)
+                if ($provider.ConfigProvider -eq 'custom' -and $snapshot.ApiKey) {
+                    $existingKey = $snapshot.ApiKey
+                }
+                if (-not $existingKey) {
+                    $existingKey = Get-EnvAssignmentValue -Text $snapshot.EnvText -Name $provider.ApiKeyEnv
+                }
                 if ($existingKey) {
                     $dialogControls.ApiKeyPasswordBox.Password = $existingKey
                 } else {
@@ -3702,13 +3876,30 @@ function Show-ModelConfigDialog {
         } else {
             $dialogControls.ApiKeyPasswordBox.Password = ''
         }
+        # Reset validation state and visual feedback
+        $dialogState.ValidationFailed = $false
+        $dialogState.LastValidationKey = ''
+        $dialogControls.DialogSaveButton.Content = '保存配置'
+        $dialogControls.DialogSaveButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#1E293B')
+        $dialogControls.DialogSaveButton.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F8FAFC')
+        $dialogControls.DialogSaveButton.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#475569')
+        $dialogControls.ApiKeyPasswordBox.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#334155')
+        $dialogControls.ModelNameTextBox.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#334155')
+        $dialogControls.BaseUrlTextBox.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#334155')
+        if ($CanLaunchAfterSave -and $provider.AuthType -eq 'api_key') {
+            $dialogControls.DialogSaveLaunchButton.Visibility = 'Visible'
+        }
+
         $dialogControls.ValidationStatusText.Text = '尚未检查填写。'
         if (& $isManualLocalCatalogProvider -Provider $provider) {
             $dialogControls.DialogValidateButton.Content = '检测本地模型'
-            $dialogControls.DialogFooterText.Text = '先启动对应本地模型服务，再点“检测本地模型”读取模型列表。'
+            $dialogControls.DialogFooterText.Text = '先启动对应本地模型服务，再点”检测本地模型”读取模型列表。'
+        } elseif ($provider.Id -eq 'anthropic') {
+            $dialogControls.DialogValidateButton.Content = '检查填写'
+            $dialogControls.DialogFooterText.Text = '当前 provider 暂不支持自动校验，请确保 API Key 正确。'
         } else {
             $dialogControls.DialogValidateButton.Content = '检查填写'
-            $dialogControls.DialogFooterText.Text = if ($provider.AuthType -eq 'api_key') { '建议先点“检查填写”，确认字段完整后再保存。' } else { '账号登录型 provider 通过右侧登录卡片完成。' }
+            $dialogControls.DialogFooterText.Text = if ($provider.AuthType -eq 'api_key') { '保存时会进行一次小额 API 调用校验（通常不到 0.01 元），确保配置可用。' } else { '账号登录型 provider 通过右侧登录卡片完成。' }
         }
         $dialogState.PreviousSelected = $provider
         & $updateAccountPanel
@@ -3741,14 +3932,130 @@ function Show-ModelConfigDialog {
 
     $saveHandler = {
         param([bool]$LaunchAfterSave)
+
+        $provider = $dialogState.Selected
+        $modelName = $dialogControls.ModelNameTextBox.Text
+        $apiKey = $dialogControls.ApiKeyPasswordBox.Password
+        $baseUrl = $dialogControls.BaseUrlTextBox.Text
+
+        # If validation previously failed and user clicks "保留错误设置保存" without changing fields → skip validation, save directly
+        if ($dialogState.ValidationFailed) {
+            $saved = Save-HermesModelDialogConfig -InstallDir $InstallDir -HermesHome $HermesHome -Provider $provider -ModelName $modelName -ApiKey $apiKey -BaseUrl $baseUrl
+            & $setDialogResult $true $LaunchAfterSave "已通过图形界面保存模型配置（跳过校验）：$($saved.Provider) / $($saved.Model)"
+            return
+        }
+
+        # Field validation
         $validation = & $runValidation
         if (-not $validation.Valid) { return }
-        $saved = Save-HermesModelDialogConfig -InstallDir $InstallDir -HermesHome $HermesHome -Provider $dialogState.Selected -ModelName $dialogControls.ModelNameTextBox.Text -ApiKey $dialogControls.ApiKeyPasswordBox.Password -BaseUrl $dialogControls.BaseUrlTextBox.Text
+
+        # Connectivity check — wrapped in try-catch because $ErrorActionPreference='Stop' and
+        # any unhandled error in a WPF click handler kills the process (DispatcherUnhandledException without Handled=$true)
+        $skipConnectivity = $provider.AuthType -ne 'api_key' -or $provider.Id -eq 'anthropic'
+        if (-not $skipConnectivity) {
+            try {
+                # Check cache: 10s window, same config fingerprint
+                $fingerprint = "$($provider.Id)|$modelName|$apiKey|$baseUrl"
+                $now = Get-Date
+                $cached = $dialogState.LastValidation
+                if ($cached -and $dialogState.LastValidationKey -eq $fingerprint -and $dialogState.LastValidationTime -and ($now - $dialogState.LastValidationTime).TotalSeconds -lt 10) {
+                    if (-not $cached.Success) {
+                        # Cached failure — already showing error state, enter "skip" mode
+                        $dialogState.ValidationFailed = $true
+                        return
+                    }
+                    # Cached success — proceed to save
+                } else {
+                    # Run connectivity check (Invoke-RestMethod blocks the UI thread for up to 5s)
+                    $dialogControls.ValidationStatusText.Text = '正在验证配置…'
+
+                    $connResult = Test-ModelProviderConnectivity -Provider $provider -ModelName $modelName -ApiKey $apiKey -BaseUrl $baseUrl
+                    $dialogState.LastValidation = $connResult
+                    $dialogState.LastValidationTime = $now
+                    $dialogState.LastValidationKey = $fingerprint
+
+                    if (-not $connResult.Success) {
+                        # Show specific error near the input fields (FieldHintText is right below them)
+                        $dialogControls.FieldHintText.Text = $connResult.Message
+                        $dialogControls.FieldHintText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#EF4444')
+                        # Right panel status — keep in sync
+                        $dialogControls.ValidationStatusText.Text = $connResult.Message
+                        # Footer: specific reason + warning (no separate generic hint)
+                        $dialogControls.DialogFooterText.Text = "$($connResult.Message) 保存后可能无法正常使用。"
+
+                        # Red border on relevant input
+                        $redBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#EF4444')
+                        if ($connResult.ErrorType -eq 'auth') {
+                            $dialogControls.ApiKeyPasswordBox.BorderBrush = $redBrush
+                        } elseif ($connResult.ErrorType -eq 'not_found') {
+                            $dialogControls.ModelNameTextBox.BorderBrush = $redBrush
+                        } elseif ($connResult.ErrorType -in @('timeout', 'connection')) {
+                            $dialogControls.BaseUrlTextBox.BorderBrush = $redBrush
+                        }
+
+                        # Change save button to warning style
+                        $dialogControls.DialogSaveButton.Content = '保留错误设置保存'
+                        $dialogControls.DialogSaveButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#92400E')
+                        $dialogControls.DialogSaveButton.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FEF3C7')
+                        $dialogControls.DialogSaveButton.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#B45309')
+
+                        # Hide "save and launch" — no point launching with broken config
+                        $dialogControls.DialogSaveLaunchButton.Visibility = 'Collapsed'
+
+                        $dialogState.ValidationFailed = $true
+                        return
+                    }
+                }
+            } catch {
+                # Connectivity check failed unexpectedly — degrade gracefully, skip validation and proceed to save
+                Write-CrashLog ("ConnectivityCheck error (non-fatal): " + $_.Exception.ToString())
+                $dialogControls.ValidationStatusText.Text = '连通性校验出现异常，已跳过。'
+            }
+        }
+
+        $saved = Save-HermesModelDialogConfig -InstallDir $InstallDir -HermesHome $HermesHome -Provider $provider -ModelName $modelName -ApiKey $apiKey -BaseUrl $baseUrl
         & $setDialogResult $true $LaunchAfterSave "已通过图形界面保存模型配置：$($saved.Provider) / $($saved.Model)"
     }.GetNewClosure()
 
     $dialogControls.DialogSaveButton.Add_Click({ & $saveHandler $false }.GetNewClosure())
     $dialogControls.DialogSaveLaunchButton.Add_Click({ & $saveHandler $true }.GetNewClosure())
+
+    # Reset validation-failed state when user edits any field
+    # Inline logic with try-catch — avoids closure-in-closure (.GetNewClosure() nesting)
+    # which causes "& expression produced invalid object" in PowerShell 5.1
+    $onFieldEdited = {
+        try {
+            if (-not $dialogState.ValidationFailed) { return }
+            $dialogState.ValidationFailed = $false
+            $dialogState.LastValidationKey = ''
+            $defaultBorder = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#334155')
+            $dialogControls.ApiKeyPasswordBox.BorderBrush = $defaultBorder
+            $dialogControls.ModelNameTextBox.BorderBrush = $defaultBorder
+            $dialogControls.BaseUrlTextBox.BorderBrush = $defaultBorder
+            $dialogControls.DialogSaveButton.Content = '保存配置'
+            $dialogControls.DialogSaveButton.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#1E293B')
+            $dialogControls.DialogSaveButton.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F8FAFC')
+            $dialogControls.DialogSaveButton.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#475569')
+            $p = $dialogState.Selected
+            if ($CanLaunchAfterSave -and $p -and $p.AuthType -eq 'api_key') {
+                $dialogControls.DialogSaveLaunchButton.Visibility = 'Visible'
+            }
+            $dialogControls.ValidationStatusText.Text = '尚未检查填写。'
+            # Restore FieldHintText to provider help (was showing error in red)
+            $dialogControls.FieldHintText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#CBD5E1')
+            if ($p) { $dialogControls.FieldHintText.Text = $p.Help }
+            if ($p -and $p.Id -eq 'anthropic') {
+                $dialogControls.DialogFooterText.Text = '当前 provider 暂不支持自动校验，请确保 API Key 正确。'
+            } else {
+                $dialogControls.DialogFooterText.Text = '保存时会进行一次小额 API 调用校验（通常不到 0.01 元），确保配置可用。'
+            }
+        } catch { }
+    }.GetNewClosure()
+
+    $dialogControls.ModelNameTextBox.Add_DropDownClosed($onFieldEdited)
+    $dialogControls.ApiKeyPasswordBox.Add_PasswordChanged($onFieldEdited)
+    $dialogControls.BaseUrlTextBox.Add_TextChanged($onFieldEdited)
+
     $dialogControls.AccountOpenBrowserButton.Add_Click({
         if ($dialogState.AccountSession -and $dialogState.AccountSession.verification_url) {
             Open-BrowserUrlSafe -Url $dialogState.AccountSession.verification_url
