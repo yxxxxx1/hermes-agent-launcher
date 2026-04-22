@@ -101,3 +101,42 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 - 给我一堆可能的原因让我选
 
 你是工程师 + 测试 + 架构师，我是用户 + 产品决策者。你的活不要让我干。
+
+## 发版流程
+
+### 版本号更新（4 处）
+1. `HermesGuiLauncher.ps1` 第 25 行 `$script:LauncherVersion`
+2. `index.html` 下载链接（`href="./downloads/Hermes-Windows-Launcher-vX.X.X.X.zip"`）
+3. `index.html` 版本显示文本（`当前版本：<code>Windows vX.X.X.X</code>`）
+4. `README.md` Package 章节的 zip 文件名
+
+版本号格式：`vYYYY.MM.DD.N`（N 为当天第几次发版，从 1 开始）。
+
+### 发版步骤
+1. 更新 4 处版本号
+2. 跑 SelfTest：`powershell -ExecutionPolicy Bypass -File .\HermesGuiLauncher.ps1 -SelfTest`
+3. 打包 Windows zip：
+   ```powershell
+   Compress-Archive -Path .\HermesGuiLauncher.ps1, .\Start-HermesGuiLauncher.cmd -DestinationPath .\downloads\Hermes-Windows-Launcher-vX.X.X.X.zip -Force
+   Copy-Item .\downloads\Hermes-Windows-Launcher-vX.X.X.X.zip .\downloads\Hermes-Windows-Launcher.zip -Force
+   ```
+4. Git commit + push
+5. 部署到 Cloudflare Pages：
+   ```bash
+   npx wrangler pages deploy . --project-name=hermes-gui-launcher-20260410 --branch=main --commit-hash=<hash> --commit-message="Release Windows launcher vX.X.X.X"
+   ```
+
+### 发版前安全检查
+- 扫描 `sk-`、`api_key`、`token`、`secret`、`password` 等敏感关键词
+- 确认不存在 `.env` 文件
+- 确认 `.cloudflareignore` 存在且排除了内部文档
+
+### 发版后验证（3 步）
+1. 打开 hermes.aisuper.win，确认版本号已更新
+2. 点下载链接，确认 zip 文件大小正确
+3. 访问 hermes.aisuper.win/CLAUDE.md，确认返回 404（内部文档未泄露）
+
+### 注意事项
+- Cloudflare Pages 是手动部署（Git Provider=No），push 到 GitHub 不会自动上线
+- 线上生产实际跑的是 `codex/next-flow-upgrade` 分支，部署时用 `--branch=main` 标记
+- macOS 端如无改动，不需要重新打包

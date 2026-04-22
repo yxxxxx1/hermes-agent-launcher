@@ -43,3 +43,11 @@ WPF 的 `ComboBox` 在 `IsEditable="True"` 模式下，内部的 `PART_EditableT
 **影响范围**：仅模型名下拉框（`ModelNameTextBox`），不影响功能。
 
 **优先级**：低。视觉问题，不影响操作。等 Windows 端整体风格迁移时一并处理。
+
+---
+
+### 发版流程工具化（低优先级）
+
+当前发版依赖手动跑 wrangler 命令。将来可以写个 deploy.ps1 脚本把完整流程封装起来（更新版本号 + 打包 + .cloudflareignore 检查 + 部署 + 验证提示）。本次先不做，等下次发版体感不顺时再做。
+
+**优先级**：低。

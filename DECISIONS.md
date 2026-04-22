@@ -4,6 +4,18 @@
 
 ---
 
+### 2026-04-22 — 发版流程经验总结
+
+**部署方式**：Cloudflare Pages 手动部署（Git Provider=No），不是 GitHub 自动触发。每次发版必须手动跑 `npx wrangler pages deploy`，push 到 GitHub 不会自动上线。
+
+**线上生产分支**：`codex/next-flow-upgrade`，不是 `main`。历史遗留，部署时用 `--branch=main` 标记为 Production 环境。短期不改，但需要知道这个事实。
+
+**安全措施**：`.cloudflareignore` 文件排除内部文档（CLAUDE.md、DECISIONS.md、TODO.md、tasks/、openspec/、.claude/）。每次新增内部文档类型时要同步更新这个文件，否则会被部署到 CDN 上可公开访问。
+
+**发版前安全检查**：部署前必须扫描敏感内容（sk-*、api_key、.env 文件等），确认无真实凭据泄露。
+
+---
+
 ### 产品沟通原则：版本说明要按用户感知裁剪，不按内部工作量写
 
 发版说明的长度和详细度，应该**匹配用户实际感知到的变化**，而不是
