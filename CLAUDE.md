@@ -326,6 +326,39 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #11 部署分支与 main 分支的 index.html 不同步
+
+**触发条件**：从 `codex/next-flow-upgrade` 分支部署，而 main 分支的 index.html 有单独更新（如 Mac 版本号）
+
+**坑的表现**：部署后网站上 Mac 下载区的版本号、下载链接、app 名称丢失或回退到旧版
+
+**预防动作**：
+- 部署前必须 `git diff main -- index.html` 检查两个分支的差异
+- 如果 main 有 index.html 的改动（特别是 Mac 相关），先合并过来再部署
+- deploy.sh 中可加入自动检查步骤
+
+**踩过日期**：2026-04-28
+
+---
+
+### #12 Cloudflare Pages 手动部署不删旧资产且不读 .cloudflareignore
+
+**触发条件**：用 `wrangler pages deploy` 手动部署（非 Git Provider 模式）
+
+**坑的表现**：
+- `.cloudflareignore` 完全无效（只在 Git 集成模式下才生效）
+- 之前部署过的文件（如 CLAUDE.md）即使新部署不包含，仍然在 CDN 上可访问
+- `_redirects` 无法覆盖已存在的静态文件
+
+**预防动作**：
+- 必须用 `deploy.sh`（白名单方式）部署，不直接 `wrangler pages deploy .`
+- deploy.sh 里用 dummy 文件覆盖之前泄露的内部文档
+- 部署后必须 `curl` 验证 CLAUDE.md 返回的不是真实内容
+
+**踩过日期**：2026-04-28
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。
