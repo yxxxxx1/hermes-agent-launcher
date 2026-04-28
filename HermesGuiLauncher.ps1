@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.28.1'
+$script:LauncherVersion = 'Windows v2026.04.28.2'
 $script:HermesWebUiSourceRepo = 'nesquena/hermes-webui'
 $script:HermesWebUiVersionLabel = 'v0.50.63'
 $script:HermesWebUiCommit = 'a512f2020e01ef8c98989eb00c84a8d8cfc81ee1'
