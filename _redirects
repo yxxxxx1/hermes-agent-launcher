@@ -1,0 +1,10 @@
+# Block internal documents from public access
+/CLAUDE.md /404.html 404
+/DECISIONS.md /404.html 404
+/TODO.md /404.html 404
+/WORKFLOW.md /404.html 404
+/tasks/* /404.html 404
+/.claude/* /404.html 404
+/.agents/* /404.html 404
+/openspec/* /404.html 404
+/files.zip /404.html 404
