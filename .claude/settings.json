@@ -95,8 +95,6 @@
       "Bash(rmdir *)",
       "Bash(rd *)",
 
-      "Bash(npx wrangler pages deploy*)",
-      "Bash(wrangler pages deploy*)",
       "Bash(wrangler deploy*)",
       "Bash(npm run deploy*)",
       "Bash(yarn deploy*)",
