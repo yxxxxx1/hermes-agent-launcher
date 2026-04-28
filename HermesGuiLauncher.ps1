@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.22.1'
+$script:LauncherVersion = 'Windows v2026.04.28.1'
 $script:HermesWebUiSourceRepo = 'nesquena/hermes-webui'
 $script:HermesWebUiVersionLabel = 'v0.50.63'
 $script:HermesWebUiCommit = 'a512f2020e01ef8c98989eb00c84a8d8cfc81ee1'
@@ -2121,6 +2121,117 @@ function Confirm-TerminalAction {
     return ($choice -eq [System.Windows.MessageBoxResult]::Yes)
 }
 
+# ============================================================================
+# 多源安装支持（Mirror Fallback）
+# 检测网络环境 + 镜像源配置 + 自动 fallback 下载
+# ============================================================================
+
+function Test-NetworkEnvironment {
+    # 测试 raw.githubusercontent.com 是否可达（5 秒超时）
+    # 返回 "overseas"（可达，用官方源）或 "china"（不可达，用镜像源）
+    $testUrl = 'https://raw.githubusercontent.com'
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($testUrl)
+        $req.Method = 'HEAD'
+        $req.Timeout = 5000
+        $req.AllowAutoRedirect = $true
+        $resp = $req.GetResponse()
+        $resp.Close()
+        return 'overseas'
+    } catch [System.Net.WebException] {
+        # 用 WebExceptionStatus 判断，不用消息文本（避免中文 Windows 错误消息匹配问题）
+        $webEx = $_ -as [System.Management.Automation.ErrorRecord]
+        $status = $null
+        if ($webEx -and $webEx.Exception -is [System.Net.WebException]) {
+            $status = ([System.Net.WebException]$webEx.Exception).Status
+        }
+        # 如果是超时或连接失败，说明在国内网络
+        if ($status -eq [System.Net.WebExceptionStatus]::Timeout -or
+            $status -eq [System.Net.WebExceptionStatus]::ConnectFailure -or
+            $status -eq [System.Net.WebExceptionStatus]::NameResolutionFailure -or
+            $status -eq [System.Net.WebExceptionStatus]::SendFailure -or
+            $status -eq [System.Net.WebExceptionStatus]::ReceiveFailure -or
+            $status -eq [System.Net.WebExceptionStatus]::ConnectionClosed) {
+            return 'china'
+        }
+        # 其他 WebException（如 403）说明能连上，算 overseas
+        return 'overseas'
+    } catch {
+        # 任何其他异常默认当作国内（保守策略，优先保证安装成功）
+        return 'china'
+    }
+}
+
+function Get-MirrorConfig {
+    # 返回各下载源的镜像配置（写死优先级：阿里>清华>中科大/豆瓣，ghproxy>其他）
+    [pscustomobject]@{
+        # GitHub raw 文件镜像：用于下载 install.ps1
+        # 格式：直接替换 raw.githubusercontent.com
+        GitHubRaw = @(
+            'https://raw.githubusercontent.com',           # 官方（overseas 首选）
+            'https://raw.gitmirror.com',                   # gitmirror
+            'https://gh.api.99988866.xyz/https://raw.githubusercontent.com',  # 99988866 代理
+            'https://ghproxy.cn/https://raw.githubusercontent.com'            # ghproxy.cn
+        )
+        # GitHub 仓库镜像：用于 git clone（注入到安装脚本 env）
+        GitHubRepo = @(
+            'https://github.com',                          # 官方（overseas 首选）
+            'https://kgithub.com',                         # kgithub
+            'https://hub.gitmirror.com'                    # gitmirror
+        )
+        # PyPI 镜像：注入 PIP_INDEX_URL 环境变量
+        PyPI = @(
+            'https://pypi.org/simple/',                    # 官方（overseas 首选）
+            'https://mirrors.aliyun.com/pypi/simple/',     # 阿里（国内首选）
+            'https://pypi.tuna.tsinghua.edu.cn/simple/',   # 清华
+            'https://pypi.mirrors.ustc.edu.cn/simple/'     # 中科大
+        )
+        # npm 镜像：注入 NPM_CONFIG_REGISTRY 环境变量
+        Npm = @(
+            'https://registry.npmjs.org',                  # 官方（overseas 首选）
+            'https://registry.npmmirror.com',              # 淘宝镜像（国内首选）
+            'https://r.cnpmjs.org'                         # cnpm
+        )
+    }
+}
+
+function Invoke-WithMirrorFallback {
+    # 执行下载操作，主源失败时自动 fallback 到下一个镜像，每源最多重试 2 次
+    param(
+        [string[]]$Urls,          # 按优先级排列的 URL 列表（第一个是首选）
+        [scriptblock]$DownloadAction,  # 接受 $url 参数的下载动作
+        [string]$ActionDescription = '下载',
+        [scriptblock]$OnFallback = $null  # 可选：切换到下一源时的回调，接受 ($fromUrl, $toUrl, $attemptIndex) 参数
+    )
+
+    $lastException = $null
+    $urlIndex = 0
+    foreach ($url in $Urls) {
+        $retryCount = 0
+        while ($retryCount -lt 2) {
+            try {
+                $result = & $DownloadAction $url
+                return $result
+            } catch {
+                $lastException = $_
+                $retryCount++
+                if ($retryCount -lt 2) {
+                    # 同一个源的第一次失败，短暂等待后重试
+                    Start-Sleep -Seconds 2
+                }
+            }
+        }
+        # 该源 2 次都失败，尝试下一个镜像
+        $urlIndex++
+        if ($OnFallback -ne $null -and $urlIndex -lt $Urls.Count) {
+            try { & $OnFallback $url $Urls[$urlIndex] $urlIndex } catch { }
+        }
+    }
+
+    # 所有镜像源都失败
+    throw "已尝试所有镜像源，请检查网络连接。上次错误：$($lastException.Exception.Message)"
+}
+
 function Build-InstallArguments {
     param(
         [string]$ScriptPath,
@@ -2138,15 +2249,52 @@ function Build-InstallArguments {
 }
 
 function New-TempScriptFromUrl {
-    param([string]$Url)
+    param(
+        [string]$Url,
+        [string]$NetworkEnv = 'overseas',   # 'overseas' 或 'china'，由 Test-NetworkEnvironment 传入
+        [scriptblock]$OnFallback = $null    # 可选：切换源时的日志回调，透传给 Invoke-WithMirrorFallback
+    )
 
     $tempPath = Join-Path $env:TEMP ('hermes-install-' + [guid]::NewGuid().ToString('N') + '.ps1')
-    $response = Invoke-WebRequest -UseBasicParsing -Uri $Url
-    if (-not $response.Content) {
-        throw "未能从 $Url 下载到安装脚本内容。"
+    $mirrorCfg = Get-MirrorConfig
+
+    # 根据网络环境，构造下载 URL 候选列表（官方源 或 镜像替换）
+    if ($NetworkEnv -eq 'china') {
+        # 将原 URL 中的 raw.githubusercontent.com 替换为各镜像域名
+        $candidateUrls = @()
+        foreach ($base in $mirrorCfg.GitHubRaw) {
+            if ($base -eq 'https://raw.githubusercontent.com') {
+                $candidateUrls += $Url
+            } else {
+                # 对于代理型镜像（URL 以 /https:// 结尾），直接拼接原始 URL
+                if ($base -match '/https?://$') {
+                    $candidateUrls += $base + $Url
+                } else {
+                    # 域名替换型：把 raw.githubusercontent.com 换掉
+                    $candidateUrls += $Url -replace 'https://raw\.githubusercontent\.com', $base
+                }
+            }
+        }
+        # 国内网络：从第二个开始（跳过官方），官方放最后兜底
+        $orderedUrls = @($candidateUrls[1..($candidateUrls.Count - 1)]) + @($candidateUrls[0])
+    } else {
+        # 海外网络：直接用官方 URL
+        $orderedUrls = @($Url)
     }
 
-    $content = $response.Content
+    # 使用 Invoke-WithMirrorFallback 下载
+    $content = Invoke-WithMirrorFallback -Urls $orderedUrls -ActionDescription '下载安装脚本' -OnFallback $OnFallback -DownloadAction {
+        param($downloadUrl)
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -TimeoutSec 30
+        if (-not $resp.Content) {
+            throw "未能从 $downloadUrl 下载到安装脚本内容。"
+        }
+        return $resp.Content
+    }
+
+    if (-not $content) {
+        throw "已尝试所有镜像源，请检查网络连接。"
+    }
 
     $rgOriginal = @'
     Write-Info "Checking ripgrep (fast file search)..."
@@ -2227,6 +2375,26 @@ function Install-SystemPackages {
 '@
     if ($content.Contains($gatewayPromptOriginal)) {
         $content = $content.Replace($gatewayPromptOriginal, $gatewayPromptPatched)
+    }
+
+    # === 国内网络：在安装脚本开头注入 PyPI 和 npm 镜像环境变量 ===
+    # 通过在脚本顶部插入 $env: 赋值，让 pip / uv / npm 自动使用国内镜像
+    # 不修改上游逻辑，只是预先设置环境变量（上游 pip/uv 会读取这些变量）
+    if ($NetworkEnv -eq 'china') {
+        $pypiMirror = $mirrorCfg.PyPI[1]   # 阿里源（国内首选）
+        $npmMirror  = $mirrorCfg.Npm[1]    # 淘宝 npmmirror（国内首选）
+        $mirrorHeader = @"
+# === 由 Hermes 启动器注入：国内镜像源配置 ===
+`$env:PIP_INDEX_URL = '$pypiMirror'
+`$env:UV_INDEX_URL = '$pypiMirror'
+`$env:UV_EXTRA_INDEX_URL = ''
+`$env:NPM_CONFIG_REGISTRY = '$npmMirror'
+`$env:UV_DEFAULT_INDEX = '$pypiMirror'
+Write-Host '[Hermes 启动器] 已切换到国内镜像源，加速安装...' -ForegroundColor Cyan
+# === 镜像源配置结束 ===
+
+"@
+        $content = $mirrorHeader + $content
     }
 
     [System.IO.File]::WriteAllText($tempPath, $content, (New-Object System.Text.UTF8Encoding $true))
@@ -5290,17 +5458,41 @@ function Test-InstallPreflight {
         }
     }
 
+    # 网络检测：先测官方源，如果官方源不通则检查是否有镜像源可用
+    # （多源支持后，官方源不通 = 国内网络，会自动用镜像，不应阻塞安装）
     $networkOk = $false
+    $networkEnvResult = 'unknown'
     try {
-        $resp = Invoke-WebRequest -UseBasicParsing -Uri $defaults.OfficialInstallUrl -Method Head -TimeoutSec 12
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri $defaults.OfficialInstallUrl -Method Head -TimeoutSec 8
         if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400) {
             $passed.Add('已检测到官方安装脚本下载地址可访问。') | Out-Null
             $networkOk = $true
+            $networkEnvResult = 'overseas'
         } else {
             $warnings.Add(("安装脚本地址返回状态异常：{0}" -f $resp.StatusCode)) | Out-Null
         }
     } catch {
-        $blocking.Add('访问官方安装脚本地址失败。当前网络无法拉取官方安装脚本。') | Out-Null
+        # 官方源不通 → 检测是否为国内网络（会用镜像源），不硬性阻塞
+        $mirrorCfg = Get-MirrorConfig
+        $mirrorReachable = $false
+        foreach ($mirrorBase in $mirrorCfg.GitHubRaw[1..2]) {
+            try {
+                $mirrorUrl = $defaults.OfficialInstallUrl -replace 'https://raw\.githubusercontent\.com', $mirrorBase
+                if ($mirrorBase -match '/https?://$') { $mirrorUrl = $mirrorBase + $defaults.OfficialInstallUrl }
+                $mResp = Invoke-WebRequest -UseBasicParsing -Uri $mirrorUrl -Method Head -TimeoutSec 6
+                if ($mResp.StatusCode -ge 200 -and $mResp.StatusCode -lt 400) {
+                    $mirrorReachable = $true
+                    break
+                }
+            } catch { }
+        }
+        if ($mirrorReachable) {
+            $passed.Add('官方安装脚本地址不可访问，但国内镜像源可用。安装将自动切换到国内镜像。') | Out-Null
+            $networkOk = $true
+            $networkEnvResult = 'china'
+        } else {
+            $blocking.Add('访问官方安装脚本及所有镜像源均失败。请检查网络连接后重试。') | Out-Null
+        }
     }
 
     [pscustomobject]@{
@@ -5310,6 +5502,7 @@ function Test-InstallPreflight {
         HasGit   = [bool]$gitCommand
         HasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
         NetworkOk = $networkOk
+        NetworkEnv = $networkEnvResult
         CanInstall = ($blocking.Count -eq 0)
     }
 }
@@ -6153,14 +6346,28 @@ function Invoke-AppAction {
                     return
                 }
                 Keep-LauncherVisible
-                $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl
+                # 复用 preflight 中已完成的网络检测结果，避免重复等待
+                $networkEnv = $preflight.NetworkEnv
+                if ($networkEnv -eq 'china') {
+                    Add-LogLine '网络检测：当前网络环境下，已自动切换到国内加速通道。'
+                } elseif ($networkEnv -eq 'overseas') {
+                    Add-LogLine '网络检测：网络畅通，使用官方源安装。'
+                } else {
+                    Add-LogLine '网络状态未知，将尝试直连官方源...'
+                }
+                # fallback 日志回调：切换源时写日志，让用户在日志区看到
+                $fallbackLogger = {
+                    param($fromUrl, $toUrl, $attemptIndex)
+                    Add-LogLine "镜像源 $attemptIndex 失败，正在尝试备用源..."
+                }
+                $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl -NetworkEnv $networkEnv -OnFallback $fallbackLogger
                 $args = Build-InstallArguments -ScriptPath $tempScript -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
                 $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $args
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。安装成功会自动关闭，失败会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
             } catch {
-                Add-ActionLog -Action '改用外部终端安装' -Result ('启动安装脚本失败：' + $_.Exception.Message) -Next '检查网络或终端报错后重试'
+                Add-ActionLog -Action '改用外部终端安装' -Result ('启动安装脚本失败：' + $_.Exception.Message) -Next '检查网络连接或稍后重试；如持续失败请联系作者'
             }
         }
         'openclaw-preview' {

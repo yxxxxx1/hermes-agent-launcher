@@ -5,3 +5,8 @@ DECISIONS.md
 TODO.md
 tasks/
 openspec/
+prompts/
+WORKFLOW.md
+RETROSPECTIVE-*.md
+.agents/
+files.zip
