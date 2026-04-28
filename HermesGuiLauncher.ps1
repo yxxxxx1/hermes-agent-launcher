@@ -5426,7 +5426,10 @@ function Test-InstallPreflight {
         $blocking.Add('未检测到 Git。官方安装脚本需要 Git 才能拉取仓库。') | Out-Null
     }
 
-    $pythonCommand = Get-Command py,python -ErrorAction SilentlyContinue | Select-Object -First 1
+    $pythonCommand = @(
+        (Get-Command py -ErrorAction SilentlyContinue),
+        (Get-Command python -ErrorAction SilentlyContinue)
+    ) | Where-Object { $_ } | Select-Object -First 1
     if ($pythonCommand) {
         $passed.Add(("已检测到 Python 命令：{0}" -f $pythonCommand.Name)) | Out-Null
     } else {
@@ -6764,7 +6767,11 @@ $controls.BranchTextBox.Add_TextChanged({
 })
 
 Add-LogLine ("启动器已就绪。版本：{0}" -f $script:LauncherVersion)
-Refresh-Status
+try {
+    Refresh-Status
+} catch {
+    Add-LogLine ("启动时状态刷新失败：{0}" -f $_.Exception.Message)
+}
 try {
     $window.ShowDialog() | Out-Null
 } finally {

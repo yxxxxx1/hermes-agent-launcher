@@ -51,3 +51,29 @@ WPF 的 `ComboBox` 在 `IsEditable="True"` 模式下，内部的 `PART_EditableT
 当前发版依赖手动跑 wrangler 命令。将来可以写个 deploy.ps1 脚本把完整流程封装起来（更新版本号 + 打包 + .cloudflareignore 检查 + 部署 + 验证提示）。本次先不做，等下次发版体感不顺时再做。
 
 **优先级**：低。
+
+---
+
+### 待办：Refresh-Status 其他裸调用加保护（Medium）
+
+**背景**：本次 Python 闪退 bug 修复（第 6767 行）为 Refresh-Status 加了 try-catch，但全文还有约 30 处裸调用未做同等保护。如果这些位置的上下文环境异常，同样可能导致静默闪退或日志中断。
+
+**建议方案**：统一封装一个 `Invoke-RefreshStatus` 包装函数，内含 try-catch + 日志写入，全局替换裸调用。
+
+**优先级**：中。等 Python 修复上线验证稳定后，下一个专项任务处理。
+
+---
+
+### 待办：Refresh-Status 异常时增加用户可见 fallback UI（Low-Medium）
+
+**背景**：当前 catch 块只写日志，用户不知道环境检测出了问题。建议：异常时设置安装模式 + 在界面某处显示"环境检测遇到异常，请查看日志"提示。
+
+**优先级**：低-中。用户已不会闪退，只是体验未达最优。可与上条裸调用整改一起做。
+
+---
+
+### 待办：Invoke-AppAction 中裸 Refresh-Status 调用加保护（Medium）
+
+**背景**：质检发现 `Invoke-AppAction` 函数内也有无保护的 Refresh-Status 调用，属于同类风险点。
+
+**优先级**：中。纳入下次 Refresh-Status 整改范围一起处理。
