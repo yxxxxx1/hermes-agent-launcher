@@ -34,6 +34,8 @@ $script:GatewayProcess = $null
 $script:GatewayHermesExe = $null
 $script:EnvWatcher = $null
 $script:EnvWatcherTimer = $null
+$script:LaunchTimer = $null
+$script:LaunchState = $null
 
 Add-Type @"
 using System;
@@ -2161,6 +2163,273 @@ function Flush-UIRender {
     } catch { }
 }
 
+function Start-LaunchAsync {
+    <#
+    .SYNOPSIS
+    Kick off the async launch state machine.
+    Disables the primary button and starts a DispatcherTimer that drives
+    install → start → open-browser through non-blocking phases.
+    #>
+    param([string]$InstallDir, [string]$HermesCommand)
+
+    $controls.PrimaryActionButton.IsEnabled = $false
+
+    # Check if already running
+    $health = Test-HermesWebUiHealth
+    if ($health.Healthy) {
+        Open-BrowserUrlSafe -Url $health.Url
+        Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $health.Url) -Next '在浏览器中完成模型配置和对话'
+        $controls.PrimaryActionButton.IsEnabled = $true
+        return
+    }
+
+    $script:LaunchState = @{
+        Phase           = 'check-install'
+        InstallDir      = $InstallDir
+        HermesCommand   = $HermesCommand
+        WebClient       = $null
+        DownloadZipPath = $null
+        DownloadDone    = $false
+        DownloadError   = $null
+        NpmProcess      = $null
+        HealthDeadline  = $null
+    }
+
+    Add-ActionLog -Action '开始使用' -Result '正在检查环境...' -Next '请稍候'
+    Set-Footer '正在检查环境...'
+
+    if (-not $script:LaunchTimer) {
+        $script:LaunchTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:LaunchTimer.Interval = [TimeSpan]::FromMilliseconds(800)
+        $script:LaunchTimer.Add_Tick({ Step-LaunchSequence })
+    }
+    $script:LaunchTimer.Start()
+}
+
+function Stop-LaunchAsync {
+    param([string]$ErrorMessage)
+    if ($script:LaunchTimer) { $script:LaunchTimer.Stop() }
+    $script:LaunchState = $null
+    $controls.PrimaryActionButton.IsEnabled = $true
+    Set-Footer ''
+    if ($ErrorMessage) {
+        Add-ActionLog -Action '开始使用' -Result ('失败：' + $ErrorMessage) -Next '可改用命令行对话'
+        $message = @(
+            'hermes-web-ui 启动失败。'
+            ''
+            $ErrorMessage
+            ''
+            '可以先改用命令行对话。'
+            ''
+            '是否现在打开命令行对话？'
+        ) -join [Environment]::NewLine
+        $choice = [System.Windows.MessageBox]::Show($message, 'hermes-web-ui', [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+        if ($choice -eq [System.Windows.MessageBoxResult]::Yes) {
+            Invoke-AppAction 'launch-cli'
+        }
+    }
+}
+
+function Step-LaunchSequence {
+    <#
+    .SYNOPSIS
+    State machine tick — called every 800ms by LaunchTimer.
+    Each phase does a small non-blocking check/action and returns immediately,
+    keeping the WPF UI responsive throughout the install+start process.
+    #>
+    $s = $script:LaunchState
+    if (-not $s) { $script:LaunchTimer.Stop(); return }
+
+    try {
+        switch ($s.Phase) {
+            # ── Phase 1: Check if web-ui is already installed ──
+            'check-install' {
+                $installStatus = Test-HermesWebUiInstalled
+                if ($installStatus.Installed) {
+                    # Check if upgrade needed
+                    $installedVer = Get-HermesWebUiInstalledVersion
+                    if ($installedVer -and $installedVer -ne $script:HermesWebUiVersion) {
+                        Add-LogLine ("hermes-web-ui 当前版本 {0}，目标版本 {1}，需要升级" -f $installedVer, $script:HermesWebUiVersion)
+                        $s.Phase = 'npm-install'
+                    } else {
+                        $s.Phase = 'start-gateway'
+                    }
+                } else {
+                    $webUi = Get-HermesWebUiDefaults
+                    if (Test-Path $webUi.NodeExe) {
+                        $s.Phase = 'npm-install'
+                    } else {
+                        $s.Phase = 'download-node'
+                    }
+                }
+            }
+
+            # ── Phase 2: Download Node.js (async via WebClient) ──
+            'download-node' {
+                if (-not $s.WebClient) {
+                    # Start async download
+                    $webUi = Get-HermesWebUiDefaults
+                    if (-not (Test-Path $webUi.NodeRoot)) {
+                        New-Item -ItemType Directory -Path $webUi.NodeRoot -Force | Out-Null
+                    }
+                    $zipPath = Join-Path $env:TEMP ('node-' + [guid]::NewGuid().ToString('N') + '.zip')
+                    $s.DownloadZipPath = $zipPath
+                    $s.DownloadDone = $false
+                    $s.DownloadError = $null
+
+                    $wc = [System.Net.WebClient]::new()
+                    $wc.Add_DownloadFileCompleted({
+                        param($sender, $e)
+                        $script:LaunchState.DownloadDone = $true
+                        if ($e.Error) { $script:LaunchState.DownloadError = $e.Error.Message }
+                    })
+                    $s.WebClient = $wc
+
+                    Add-ActionLog -Action '开始使用' -Result '正在下载 Node.js（约 30MB）...' -Next '下载完成后自动继续'
+                    Set-Footer '正在下载 Node.js...'
+                    Add-LogLine '正在下载 Node.js...'
+                    $wc.DownloadFileAsync([Uri]$script:NodeDownloadUrl, $zipPath)
+                    return
+                }
+
+                # Poll download status
+                if (-not $s.DownloadDone) { return }
+
+                # Download finished
+                $s.WebClient.Dispose()
+                $s.WebClient = $null
+
+                if ($s.DownloadError) {
+                    throw ("Node.js 下载失败：{0}" -f $s.DownloadError)
+                }
+                if (-not (Test-Path $s.DownloadZipPath) -or (Get-Item $s.DownloadZipPath).Length -lt 1024) {
+                    throw '下载文件为空或不完整。'
+                }
+
+                Add-LogLine '正在解压 Node.js...'
+                Set-Footer '正在解压 Node.js...'
+                $webUi = Get-HermesWebUiDefaults
+                Expand-Archive -Path $s.DownloadZipPath -DestinationPath $webUi.NodeRoot -Force
+                Remove-Item $s.DownloadZipPath -Force -ErrorAction SilentlyContinue
+
+                if (-not (Test-Path $webUi.NodeExe)) {
+                    throw "解压后未找到 node.exe：$($webUi.NodeExe)"
+                }
+                Add-LogLine 'Node.js 安装完成。'
+                $s.Phase = 'npm-install'
+            }
+
+            # ── Phase 3: npm install hermes-web-ui (background process) ──
+            'npm-install' {
+                if (-not $s.NpmProcess) {
+                    $webUi = Get-HermesWebUiDefaults
+                    if (-not (Test-Path $webUi.NpmPrefix)) {
+                        New-Item -ItemType Directory -Path $webUi.NpmPrefix -Force | Out-Null
+                    }
+                    $env:PATH = "$($webUi.NodeDir);$($webUi.NpmPrefix);$env:PATH"
+                    $npmArgs = @('install', '-g', "$($script:HermesWebUiNpmPackage)@$($script:HermesWebUiVersion)", '--prefix', $webUi.NpmPrefix)
+
+                    Add-ActionLog -Action '开始使用' -Result '正在安装 hermes-web-ui（约需 1-2 分钟）...' -Next '安装完成后自动启动'
+                    Set-Footer '正在安装 hermes-web-ui...'
+                    Add-LogLine ("正在安装 hermes-web-ui@{0}..." -f $script:HermesWebUiVersion)
+
+                    $s.NpmProcess = Start-Process -FilePath $webUi.NpmCmd -ArgumentList $npmArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-npm-install.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-npm-install-err.log')
+                    return
+                }
+
+                # Poll npm process
+                if (-not $s.NpmProcess.HasExited) { return }
+
+                if ($s.NpmProcess.ExitCode -ne 0) {
+                    $errLog = ''
+                    try { $errLog = Get-Content (Join-Path $env:TEMP 'hermes-npm-install-err.log') -Raw } catch { }
+                    throw ("npm install 失败（退出码 {0}）。{1}" -f $s.NpmProcess.ExitCode, $errLog)
+                }
+
+                $check = Test-HermesWebUiInstalled
+                if (-not $check.Installed) {
+                    throw '安装完成但未找到 hermes-web-ui 命令，请检查日志。'
+                }
+                Add-LogLine 'hermes-web-ui 安装完成。'
+                $s.Phase = 'start-gateway'
+            }
+
+            # ── Phase 4: Start gateway + platform deps ──
+            'start-gateway' {
+                Set-Footer '正在启动 Hermes Gateway...'
+                Add-LogLine '正在启动 Gateway...'
+                Start-HermesGateway -HermesInstallDir $s.InstallDir
+                $s.Phase = 'start-webui'
+            }
+
+            # ── Phase 5: Start web-ui process ──
+            'start-webui' {
+                $webUi = Get-HermesWebUiDefaults
+                if (-not (Test-Path $webUi.WebUiCmd)) {
+                    throw "未找到 hermes-web-ui 命令：$($webUi.WebUiCmd)"
+                }
+
+                # Set up environment
+                $pathParts = @($webUi.NodeDir, $webUi.NpmPrefix)
+                $venvScripts = Join-Path $s.InstallDir 'venv\Scripts'
+                if (Test-Path $venvScripts) {
+                    $pathParts += $venvScripts
+                    $env:HERMES_BIN = Join-Path $venvScripts 'hermes.exe'
+                }
+                $env:PATH = ($pathParts -join ';') + ";$env:PATH"
+                $env:PORT = [string]$webUi.Port
+                $env:NPM_CONFIG_PREFIX = $webUi.NpmPrefix
+                $env:PYTHONIOENCODING = 'utf-8'
+
+                Add-ActionLog -Action '开始使用' -Result '正在启动 hermes-web-ui...' -Next '等待服务就绪'
+                Set-Footer '正在启动 hermes-web-ui...'
+                Add-LogLine '正在启动 hermes-web-ui...'
+
+                Start-Process -FilePath $webUi.WebUiCmd -ArgumentList @('start', $webUi.Port) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-webui-start.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-webui-start-err.log')
+
+                $s.HealthDeadline = (Get-Date).AddSeconds(30)
+                $s.Phase = 'wait-healthy'
+            }
+
+            # ── Phase 6: Poll health check ──
+            'wait-healthy' {
+                $health = Test-HermesWebUiHealth
+                if ($health.Healthy) {
+                    $script:LaunchTimer.Stop()
+
+                    # Read token for URL
+                    $webUi = Get-HermesWebUiDefaults
+                    $tokenFile = Join-Path $webUi.WebUiHome '.token'
+                    $token = $null
+                    if (Test-Path $tokenFile) {
+                        try { $token = (Get-Content $tokenFile -Raw).Trim() } catch { }
+                    }
+                    $url = if ($token) { "http://$($webUi.Host):$($webUi.Port)/#/?token=$token" } else { "http://$($webUi.Host):$($webUi.Port)" }
+
+                    Open-BrowserUrlSafe -Url $url
+                    Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $url) -Next '在浏览器中完成模型配置和对话'
+                    Set-Footer ''
+
+                    $hermesHome = Join-Path $env:USERPROFILE '.hermes'
+                    Save-LauncherState -HermesHome $hermesHome -LocalChatVerified $true
+                    Start-GatewayEnvWatcher
+                    Refresh-Status
+                    $controls.PrimaryActionButton.IsEnabled = $true
+                    $script:LaunchState = $null
+                    return
+                }
+
+                if ((Get-Date) -gt $s.HealthDeadline) {
+                    throw 'hermes-web-ui 启动后未能就绪（30 秒超时）。请检查日志。'
+                }
+                # Keep polling on next tick
+            }
+        }
+    } catch {
+        Stop-LaunchAsync -ErrorMessage $_.Exception.Message
+    }
+}
+
 function Keep-LauncherVisible {
     $handle = [System.Windows.Interop.WindowInteropHelper]::new($window).Handle
     try {
@@ -3584,54 +3853,7 @@ function Invoke-AppAction {
                 [System.Windows.MessageBox]::Show('未找到 Hermes 命令，请先安装 Hermes。', 'Hermes 启动器')
                 return
             }
-            try {
-                # Step 1: Check if hermes-web-ui is already running
-                $health = Test-HermesWebUiHealth
-                if ($health.Healthy) {
-                    Open-BrowserUrlSafe -Url $health.Url
-                    Add-ActionLog -Action '开始使用' -Result (“已打开 hermes-web-ui：{0}” -f $health.Url) -Next '在浏览器中完成模型配置和对话'
-                    return
-                }
-
-                # Step 2: Install if needed (Node.js + npm install -g hermes-web-ui)
-                $installStatus = Test-HermesWebUiInstalled
-                if (-not $installStatus.Installed) {
-                    Add-ActionLog -Action '开始使用' -Result '正在安装 hermes-web-ui，首次需要几分钟...' -Next '安装完成后会自动打开浏览器'
-                    Set-Footer '正在准备 hermes-web-ui...'
-                    Flush-UIRender  # 强制渲染进度提示，否则下载期间窗口看起来没反应
-                    $installResult = Install-HermesWebUi
-                    if (-not $installResult.Installed) {
-                        throw $installResult.Message
-                    }
-                }
-
-                # Step 3: Start hermes-web-ui (pass hermes install dir so gateway can auto-start)
-                Add-ActionLog -Action '开始使用' -Result '正在启动 hermes-web-ui...' -Next '等待服务就绪后会自动打开浏览器'
-                Set-Footer '正在启动 hermes-web-ui...'
-                Flush-UIRender  # 强制渲染进度提示
-                $runtime = Start-HermesWebUiRuntime -HermesInstallDir $installDir
-
-                # Step 4: Open browser
-                Open-BrowserUrlSafe -Url $runtime.Url
-                Add-ActionLog -Action '开始使用' -Result (“已打开 hermes-web-ui：{0}” -f $runtime.Url) -Next '在浏览器中完成模型配置和对话'
-                Save-LauncherState -HermesHome $hermesHome -LocalChatVerified $true
-                Refresh-Status
-            } catch {
-                $message = @(
-                    'hermes-web-ui 启动失败。'
-                    ''
-                    $_.Exception.Message
-                    ''
-                    '可以先改用命令行对话。'
-                    ''
-                    '是否现在打开命令行对话？'
-                ) -join [Environment]::NewLine
-                Add-ActionLog -Action '开始使用' -Result ('失败：' + $_.Exception.Message) -Next '可改用命令行对话'
-                $choice = [System.Windows.MessageBox]::Show($message, 'hermes-web-ui', [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
-                if ($choice -eq [System.Windows.MessageBoxResult]::Yes) {
-                    Invoke-AppAction 'launch-cli'
-                }
-            }
+            Start-LaunchAsync -InstallDir $installDir -HermesCommand $hermesCommand
         }
         'launch-webui' {
             Invoke-AppAction 'launch'
