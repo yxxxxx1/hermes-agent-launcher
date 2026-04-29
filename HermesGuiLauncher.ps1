@@ -191,7 +191,9 @@ function Install-HermesNode {
 
     $zipPath = Join-Path $env:TEMP ('node-' + [guid]::NewGuid().ToString('N') + '.zip')
     try {
-        Add-LogLine '正在下载 Node.js...'
+        Add-LogLine '正在下载 Node.js（约 30MB，请稍候）...'
+        Set-Footer '正在下载 Node.js...'
+        Flush-UIRender
         $progressPref = $ProgressPreference
         $ProgressPreference = 'SilentlyContinue'
         try {
@@ -204,6 +206,8 @@ function Install-HermesNode {
         }
 
         Add-LogLine '正在解压 Node.js...'
+        Set-Footer '正在解压 Node.js...'
+        Flush-UIRender
         Expand-Archive -Path $zipPath -DestinationPath $webUi.NodeRoot -Force
 
         if (-not (Test-Path $webUi.NodeExe)) {
@@ -271,6 +275,8 @@ function Install-HermesWebUi {
     $action = if ($needsUpgrade) { '升级' } else { '安装' }
     try {
         Add-LogLine ("正在{0} hermes-web-ui（约需 1-2 分钟）..." -f $action)
+        Set-Footer ("正在{0} hermes-web-ui..." -f $action)
+        Flush-UIRender
         $env:PATH = "$($webUi.NodeDir);$($webUi.NpmPrefix);$env:PATH"
         $npmArgs = @('install', '-g', "$($script:HermesWebUiNpmPackage)@$($script:HermesWebUiVersion)", '--prefix', $webUi.NpmPrefix)
         $proc = Start-Process -FilePath $webUi.NpmCmd -ArgumentList $npmArgs -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-npm-install.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-npm-install-err.log')
@@ -2138,6 +2144,22 @@ function Set-Footer {
     $controls.FooterText.Text = $Text
 }
 
+function Flush-UIRender {
+    <#
+    .SYNOPSIS
+    Force WPF to process pending UI updates (render queued text changes).
+    Call before any long-running synchronous operation so the user sees progress.
+    Uses Dispatcher.Invoke at Background priority to flush the render queue
+    without DoEvents() reentrancy risk (陷阱 #1).
+    #>
+    try {
+        $window.Dispatcher.Invoke(
+            [Action]{ },
+            [System.Windows.Threading.DispatcherPriority]::Background
+        )
+    } catch { }
+}
+
 function Keep-LauncherVisible {
     $handle = [System.Windows.Interop.WindowInteropHelper]::new($window).Handle
     try {
@@ -3575,6 +3597,7 @@ function Invoke-AppAction {
                 if (-not $installStatus.Installed) {
                     Add-ActionLog -Action '开始使用' -Result '正在安装 hermes-web-ui，首次需要几分钟...' -Next '安装完成后会自动打开浏览器'
                     Set-Footer '正在准备 hermes-web-ui...'
+                    Flush-UIRender  # 强制渲染进度提示，否则下载期间窗口看起来没反应
                     $installResult = Install-HermesWebUi
                     if (-not $installResult.Installed) {
                         throw $installResult.Message
@@ -3584,6 +3607,7 @@ function Invoke-AppAction {
                 # Step 3: Start hermes-web-ui (pass hermes install dir so gateway can auto-start)
                 Add-ActionLog -Action '开始使用' -Result '正在启动 hermes-web-ui...' -Next '等待服务就绪后会自动打开浏览器'
                 Set-Footer '正在启动 hermes-web-ui...'
+                Flush-UIRender  # 强制渲染进度提示
                 $runtime = Start-HermesWebUiRuntime -HermesInstallDir $installDir
 
                 # Step 4: Open browser
