@@ -4,6 +4,23 @@
 
 ---
 
+### 2026-04-29 — v2026.04.29.2 安装流程健壮性修复
+
+**问题**：新电脑首次安装时遇到三个连环问题：
+1. 安装参数重复传递（Build-InstallArguments 返回了 PowerShell 级参数，wrapper 又加了一遍）
+2. 安装终端闪退看不到报错（上游脚本退出码 0 时 wrapper 直接关窗口）
+3. 上次安装失败残留的目录无法删除（Python venv 长路径超过 260 字符限制，"MS-DOS 功能无效"）
+
+**修复**：
+- Build-InstallArguments 只返回脚本参数，不再包含 -ExecutionPolicy/-File
+- wrapper 成功时保留 5 秒、失败时要求按 Enter，都有中文提示
+- Test-InstallPreflight 增加残留目录检测，三级清理：Remove-Item → cmd rd → robocopy 空目录镜像
+- 清理失败时弹窗 + 打开文件资源管理器帮用户定位
+
+**教训**：PowerShell 方法调用中 `-f` 格式化运算符的逗号会被解析为方法参数分隔符，必须先格式化成变量再传入。
+
+---
+
 ### 教训：分支分叉状态下，文档类更新要同步到 main
 
 本项目当前 main 和 codex/next-flow-upgrade 两个分支分叉。

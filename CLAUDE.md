@@ -391,6 +391,52 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #15 安装参数重复传递导致上游脚本报错
+
+**触发条件**：构建安装参数时混入了 PowerShell 级别参数（-ExecutionPolicy、-File），而 wrapper 脚本已经硬编码了这些参数
+
+**坑的表现**：上游 install.ps1 收到多余的 `-ExecutionPolicy Bypass -File <路径>` 作为脚本参数，可能导致参数绑定错误或不可预测行为
+
+**预防动作**：
+- `Build-InstallArguments` 只返回脚本级参数（-InstallDir、-HermesHome 等），不返回 PowerShell 级参数
+- wrapper 脚本负责 PowerShell 级参数（-NoProfile、-ExecutionPolicy Bypass、-File）
+- 不要用 `$args` 作为变量名（PowerShell 保留自动变量）
+
+**踩过日期**：2026-04-29
+
+---
+
+### #16 上次安装失败残留目录导致重装必定失败
+
+**触发条件**：首次安装中途失败（依赖报错、网络断开等），留下不完整的安装目录（有文件但没有 .git）
+
+**坑的表现**：上游 install.ps1 检测到"目录存在但不是 git 仓库"直接报错退出，用户无法重新安装
+
+**预防动作**：
+- 环境检测阶段（Test-InstallPreflight）自动检测并清理残留目录
+- Python venv 会创建超过 260 字符的深层路径，普通 Remove-Item 和 rd 都删不掉（"MS-DOS 功能无效"）
+- 必须用 robocopy 空目录镜像方式清理：`robocopy $emptyDir $targetDir /MIR` 再 `rd`
+- 如果三种方法都失败，弹窗帮用户打开文件资源管理器定位到该目录
+
+**踩过日期**：2026-04-29
+
+---
+
+### #17 安装终端闪退用户看不到报错
+
+**触发条件**：安装脚本执行完毕，退出码为 0（上游脚本 ErrorActionPreference=Continue 时即使有报错也可能返回 0）
+
+**坑的表现**：wrapper 脚本只在退出码非 0 时暂停，退出码 0 直接关窗口。用户看到依赖报错但来不及读内容
+
+**预防动作**：
+- 失败时（非 0）：显示中文提示 + 要求用户截图 + 按 Enter 才关闭
+- 成功时（0）：也保留 5 秒并提示"如有报错请截图"，给用户缓冲时间
+- wrapper 用 try/catch 包裹内部 powershell 调用，防止异常直接退出
+
+**踩过日期**：2026-04-29
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。

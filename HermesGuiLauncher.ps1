@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.29.1'
+$script:LauncherVersion = 'Windows v2026.04.29.2'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -1526,7 +1526,6 @@ function Invoke-WithMirrorFallback {
 
 function Build-InstallArguments {
     param(
-        [string]$ScriptPath,
         [string]$InstallDir,
         [string]$HermesHome,
         [string]$Branch,
@@ -1534,10 +1533,10 @@ function Build-InstallArguments {
         [bool]$SkipSetup
     )
 
-    $args = @('-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-InstallDir', $InstallDir, '-HermesHome', $HermesHome, '-Branch', $Branch)
-    if ($NoVenv) { $args += '-NoVenv' }
-    if ($SkipSetup) { $args += '-SkipSetup' }
-    return $args
+    $scriptArgs = @('-InstallDir', $InstallDir, '-HermesHome', $HermesHome, '-Branch', $Branch)
+    if ($NoVenv) { $scriptArgs += '-NoVenv' }
+    if ($SkipSetup) { $scriptArgs += '-SkipSetup' }
+    return $scriptArgs
 }
 
 function New-TempScriptFromUrl {
@@ -2614,13 +2613,26 @@ function New-ExternalInstallWrapperScript {
 `$env:PYTHONUTF8 = '1'
 chcp 65001 > `$null
 `$installArgs = @($argLiteral)
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$InstallScriptPath' @installArgs
-`$code = `$LASTEXITCODE
+`$code = 0
+try {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$InstallScriptPath' @installArgs
+    `$code = `$LASTEXITCODE
+} catch {
+    Write-Host ''
+    Write-Host (`$_.Exception.Message) -ForegroundColor Red
+    `$code = 1
+}
 if (`$code -ne 0) {
     Write-Host ''
-    Write-Host ('安装失败，退出码: ' + `$code) -ForegroundColor Red
+    Write-Host ('安装过程出错，退出码: ' + `$code) -ForegroundColor Red
+    Write-Host '请截图或复制上方报错信息，反馈给开发者。' -ForegroundColor Yellow
     Write-Host '按 Enter 关闭此窗口。' -ForegroundColor Yellow
     [void](Read-Host)
+} else {
+    Write-Host ''
+    Write-Host '安装脚本已执行完成。' -ForegroundColor Green
+    Write-Host '如果上方有报错信息，请截图反馈。窗口将在 5 秒后自动关闭...' -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
 }
 exit `$code
 "@
@@ -3129,6 +3141,53 @@ function Test-InstallPreflight {
             $passed.Add(("目录可写：{0}" -f $dir)) | Out-Null
         } catch {
             $blocking.Add(("目录不可写：{0}" -f $dir)) | Out-Null
+        }
+    }
+
+    # 残留目录检测：安装目录存在但不是 git 仓库 → 上次安装中途失败留下的残留
+    # 上游 install.ps1 遇到这种情况会直接报错退出，所以必须在安装前清理
+    if (Test-Path $InstallDir) {
+        $gitDir = Join-Path $InstallDir '.git'
+        if (-not (Test-Path $gitDir)) {
+            $staleRemoved = $false
+            # 方法 1：PowerShell Remove-Item
+            try {
+                Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction Stop
+                $staleRemoved = $true
+            } catch { }
+            # 方法 2：cmd /c rd
+            if (-not $staleRemoved) {
+                try {
+                    cmd /c "rd /s /q `"$InstallDir`"" 2>&1 | Out-Null
+                    if (-not (Test-Path $InstallDir)) { $staleRemoved = $true }
+                } catch { }
+            }
+            # 方法 3：robocopy 空目录镜像（能处理超过 260 字符的长路径）
+            if (-not $staleRemoved) {
+                try {
+                    $emptyDir = Join-Path $env:TEMP ('hermes-empty-' + [guid]::NewGuid().ToString('N'))
+                    New-Item -ItemType Directory -Force -Path $emptyDir | Out-Null
+                    robocopy $emptyDir $InstallDir /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np 2>&1 | Out-Null
+                    Remove-Item $emptyDir -Force -ErrorAction SilentlyContinue
+                    cmd /c "rd /s /q `"$InstallDir`"" 2>&1 | Out-Null
+                    if (-not (Test-Path $InstallDir)) { $staleRemoved = $true }
+                } catch { }
+            }
+            if ($staleRemoved) {
+                $warnings.Add(("已自动清理上次安装失败残留的目录：{0}" -f $InstallDir)) | Out-Null
+            } else {
+                # 自动清理失败 → 弹窗帮用户打开目录所在的文件夹
+                $parentDir = Split-Path -Parent $InstallDir
+                $dirName = Split-Path -Leaf $InstallDir
+                $staleMsg = ("上次安装未完成，留下了残留目录，需要删除后才能重新安装。`n`n" +
+                     "路径：{0}`n`n" +
+                     "点击「确定」为你打开该目录所在的文件夹，请删除其中的「{1}」文件夹后，回到启动器点击「重新检测」。") -f $InstallDir, $dirName
+                $msgResult = [System.Windows.MessageBox]::Show($staleMsg, 'Hermes 启动器', 'OKCancel', 'Warning')
+                if ($msgResult -eq 'OK') {
+                    Start-Process explorer.exe -ArgumentList "/select,`"$InstallDir`""
+                }
+                $blocking.Add('需要先删除上次安装失败残留的目录（已打开文件夹），删除后点击"重新检测"。') | Out-Null
+            }
         }
     }
 
@@ -3790,11 +3849,11 @@ function Invoke-AppAction {
                     Add-LogLine "镜像源 $attemptIndex 失败，正在尝试备用源..."
                 }
                 $tempScript = New-TempScriptFromUrl -Url $defaults.OfficialInstallUrl -NetworkEnv $networkEnv -OnFallback $fallbackLogger
-                $args = Build-InstallArguments -ScriptPath $tempScript -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
-                $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $args
+                $installArgs = Build-InstallArguments -InstallDir $installDir -HermesHome $hermesHome -Branch $state.Branch -NoVenv ([bool]$controls.NoVenvCheckBox.IsChecked) -SkipSetup ([bool]$controls.SkipSetupCheckBox.IsChecked)
+                $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $installArgs
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
-                Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。安装成功会自动关闭，失败会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
+                Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。成功时终端会在 5 秒后自动关闭，失败时会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
             } catch {
                 Add-ActionLog -Action '改用外部终端安装' -Result ('启动安装脚本失败：' + $_.Exception.Message) -Next '检查网络连接或稍后重试；如持续失败请联系作者'
             }
