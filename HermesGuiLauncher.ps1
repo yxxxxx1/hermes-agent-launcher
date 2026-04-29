@@ -348,20 +348,19 @@ function Install-GatewayPlatformDeps {
         $configured = $envLines | Where-Object { $_ -match "^\s*$($dep.EnvKey)\s*=\s*.+" }
         if (-not $configured) { continue }
 
-        # Check if the Python package is already installed (timeout 10s to avoid hanging)
-        $importProc = Start-Process -FilePath $pythonExe -ArgumentList @('-c', $dep.ImportTest) -WindowStyle Hidden -Wait -PassThru -ErrorAction SilentlyContinue
-        if ($importProc -and $importProc.ExitCode -eq 0) { continue }
+        # Check if the Python package is already installed
+        $result = & $pythonExe -c $dep.ImportTest 2>&1
+        if ($LASTEXITCODE -eq 0) { continue }
 
-        # Package missing — install it (timeout 120s)
+        # Package missing — install it
         Add-LogLine ("正在安装渠道依赖：{0}..." -f $dep.Package)
         try {
             $uvExe = Get-Command uv -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
             if ($uvExe) {
-                $installProc = Start-Process -FilePath $uvExe -ArgumentList @('pip', 'install', $dep.Package, '--python', $pythonExe) -WindowStyle Hidden -Wait -PassThru
+                & $uvExe pip install $dep.Package --python $pythonExe 2>&1 | Out-Null
             } else {
-                $installProc = Start-Process -FilePath $pythonExe -ArgumentList @('-m', 'pip', 'install', $dep.Package) -WindowStyle Hidden -Wait -PassThru
+                & $pythonExe -m pip install $dep.Package 2>&1 | Out-Null
             }
-            $LASTEXITCODE = if ($installProc) { $installProc.ExitCode } else { 1 }
             if ($LASTEXITCODE -eq 0) {
                 Add-LogLine ("{0} 安装成功" -f $dep.Package)
             } else {
@@ -2147,16 +2146,18 @@ function Set-Footer {
 function Flush-UIRender {
     <#
     .SYNOPSIS
-    Force WPF to process pending UI updates (render queued text changes).
+    Force WPF to process all pending UI updates (layout, render, data binding).
     Call before any long-running synchronous operation so the user sees progress.
-    Uses Dispatcher.Invoke at Background priority to flush the render queue
-    without DoEvents() reentrancy risk (陷阱 #1).
+    Uses DispatcherFrame (standard WPF pattern) instead of DoEvents() to avoid
+    reentrancy risk (陷阱 #1).
     #>
     try {
-        $window.Dispatcher.Invoke(
-            [Action]{ },
-            [System.Windows.Threading.DispatcherPriority]::Background
+        $frame = [System.Windows.Threading.DispatcherFrame]::new()
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+            [System.Windows.Threading.DispatcherPriority]::Background,
+            [Action]{ $frame.Continue = $false }
         )
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
     } catch { }
 }
 
