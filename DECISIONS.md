@@ -4,6 +4,19 @@
 
 ---
 
+### 教训：分支分叉状态下，文档类更新要同步到 main
+
+本项目当前 main 和 codex/next-flow-upgrade 两个分支分叉。
+Cloudflare 部署用的是 codex 分支，但 GitHub 仓库首页默认展示 main 分支。
+
+对用户可见的"显示类"文件（README.md、LICENSE、图片等），
+更新时必须同时推到 main，否则 GitHub 访客看到的是老版本。
+
+约定：以后 Claude Code 改这几类文件时，主动询问 PM
+"是否需要同步到 main 分支"，不要默认只推到当前工作分支。
+
+---
+
 ### 2026-04-22 — 发版流程经验总结
 
 **部署方式**：Cloudflare Pages 手动部署（Git Provider=No），不是 GitHub 自动触发。每次发版必须手动跑 `npx wrangler pages deploy`，push 到 GitHub 不会自动上线。
