@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.29.4'
+$script:LauncherVersion = 'Windows v2026.04.30.1'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -357,16 +357,23 @@ function Install-GatewayPlatformDeps {
         # Package missing — install it
         Add-LogLine ("正在安装渠道依赖：{0}..." -f $dep.Package)
         try {
-            $uvExe = Get-Command uv -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+            $uvExe = Resolve-UvCommand
+            # Also check uv inside the hermes venv Scripts dir
+            if (-not $uvExe) {
+                $venvUv = Join-Path $HermesInstallDir 'venv\Scripts\uv.exe'
+                if (Test-Path $venvUv) { $uvExe = $venvUv }
+            }
             if ($uvExe) {
-                & $uvExe pip install $dep.Package --python $pythonExe 2>&1 | Out-Null
+                $installOutput = & $uvExe pip install $dep.Package --python $pythonExe 2>&1
+                Add-LogLine ("uv 安装输出：{0}" -f ($installOutput | Select-Object -Last 3 | Out-String).Trim())
             } else {
-                & $pythonExe -m pip install $dep.Package 2>&1 | Out-Null
+                $installOutput = & $pythonExe -m pip install $dep.Package 2>&1
+                Add-LogLine ("pip 安装输出：{0}" -f ($installOutput | Select-Object -Last 3 | Out-String).Trim())
             }
             if ($LASTEXITCODE -eq 0) {
                 Add-LogLine ("{0} 安装成功" -f $dep.Package)
             } else {
-                Add-LogLine ("{0} 安装失败，该渠道可能无法使用" -f $dep.Package)
+                Add-LogLine ("{0} 安装失败（退出码 {1}），该渠道可能无法使用" -f $dep.Package, $LASTEXITCODE)
             }
         } catch {
             Add-LogLine ("{0} 安装失败：{1}" -f $dep.Package, $_.Exception.Message)
