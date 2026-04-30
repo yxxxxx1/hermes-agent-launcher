@@ -576,6 +576,25 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #27 快速路径不等 Gateway 健康 + 不初始化 GatewayHermesExe → "未连接" + 渠道不响应
+
+**触发条件**：WebUI 已在运行时用户再次点击"开始使用"（走快速路径），或 Gateway 由上次启动器会话启动
+
+**坑的表现**：
+1. 快速路径启动 Gateway 后不等健康检查 → 立即打开浏览器 → WebUI 显示"未连接"
+2. `$script:GatewayHermesExe` 在快速路径未初始化 → `.env` 文件监听触发重启时找不到可执行文件 → 跳过重启 → 用户在 WebUI 配置 Telegram/微信后发消息无回应
+3. 快速路径未验证已运行的 Gateway 是否真正健康（进程存在 ≠ API 可用）
+
+**预防动作**：
+- 快速路径中始终初始化 `$script:GatewayHermesExe`（从 InstallDir 推导）
+- 启动/重启 Gateway 后轮询 `/health` 最多 15 秒
+- 已有 Gateway 进程也要做 API 健康检查，不健康则重启
+- `.env` watcher 在 Gateway 变量就绪后才启动
+
+**踩过日期**：2026-05-01
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.01.1'
+$script:LauncherVersion = 'Windows v2026.05.01.2'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -781,6 +781,9 @@ function Restart-HermesGateway {
     try { Install-GatewayPlatformDeps -HermesInstallDir $hermesInstallDir } catch {
         Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
     }
+
+    # Ensure port is correct before restart (陷阱 #20)
+    Repair-GatewayApiPort
 
     try {
         # Kill existing gateway — don't use --replace (crashes on Windows, 陷阱 #18)
@@ -2603,11 +2606,20 @@ function Start-LaunchAsync {
     # Check if webui already running — if so, just open browser (fast path, no blocking)
     $health = Test-HermesWebUiHealth
     if ($health.Healthy) {
-        # Start .env watcher so webui config changes trigger gateway restart
-        Start-GatewayEnvWatcher
-
         # Ensure config port is correct, gateway is alive, and deps installed.
         Repair-GatewayApiPort
+
+        # Ensure $script:GatewayHermesExe is set so the .env watcher can restart
+        # gateway later.  When gateway was started by a PREVIOUS launcher session,
+        # this variable is null → Restart-HermesGateway silently skips → user
+        # configures Telegram/WeChat in webui → .env changes → gateway never
+        # reloads → "发消息均无回应".
+        if (-not $script:GatewayHermesExe) {
+            $hermesExe = Join-Path $InstallDir 'venv\Scripts\hermes.exe'
+            if (Test-Path $hermesExe) {
+                $script:GatewayHermesExe = $hermesExe
+            }
+        }
 
         # Check if any gateway is running
         $gatewayAlive = $script:GatewayProcess -and -not $script:GatewayProcess.HasExited
@@ -2622,13 +2634,51 @@ function Start-LaunchAsync {
             Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
         }
 
+        $gatewayStartedOrRestarted = $false
         if (-not $gatewayAlive) {
             Add-LogLine "Gateway 未在运行，正在启动..."
             Start-HermesGateway -HermesInstallDir $InstallDir
+            $gatewayStartedOrRestarted = $true
         } elseif ($depsInstalled) {
             Add-LogLine "检测到新安装的渠道依赖，正在重启 Gateway..."
             Restart-HermesGateway
+            $gatewayStartedOrRestarted = $true
         }
+
+        # Wait for gateway health before opening browser (陷阱 #23).
+        # Without this, webui opens against an unready gateway → "未连接".
+        if ($gatewayStartedOrRestarted) {
+            $gwDeadline = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $gwDeadline) {
+                Start-Sleep -Milliseconds 1000
+                try {
+                    $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 2 -ErrorAction Stop
+                    Add-LogLine 'Gateway 健康检查通过。'
+                    break
+                } catch { }
+            }
+        } else {
+            # Gateway was already running — verify it's actually healthy
+            try {
+                $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 3 -ErrorAction Stop
+            } catch {
+                # Gateway process exists but API not responding — restart
+                Add-LogLine "Gateway 进程存在但 API 未响应，正在重启..."
+                Start-HermesGateway -HermesInstallDir $InstallDir
+                $gwDeadline = (Get-Date).AddSeconds(15)
+                while ((Get-Date) -lt $gwDeadline) {
+                    Start-Sleep -Milliseconds 1000
+                    try {
+                        $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 2 -ErrorAction Stop
+                        Add-LogLine 'Gateway 健康检查通过。'
+                        break
+                    } catch { }
+                }
+            }
+        }
+
+        # Start .env watcher so webui config changes trigger gateway restart
+        Start-GatewayEnvWatcher
 
         Open-BrowserUrlSafe -Url $health.Url
         Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $health.Url) -Next '在浏览器中完成模型配置和对话'
