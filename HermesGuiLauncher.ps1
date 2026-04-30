@@ -500,6 +500,42 @@ function Test-PythonSyntax {
     } catch { return $false }
 }
 
+function Restore-CorruptedUpstreamFiles {
+    <#
+    .SYNOPSIS
+    Pre-flight: restore any Python files corrupted by a previous bad patch.
+    Must run BEFORE gateway starts — if these files have syntax errors,
+    gateway crashes on import.  Only restores, never patches.
+    #>
+    param([string]$HermesInstallDir)
+    $pythonExe = Join-Path $HermesInstallDir 'venv\Scripts\python.exe'
+    if (-not (Test-Path $pythonExe)) { return }
+    $gitDir = Join-Path $HermesInstallDir '.git'
+    if (-not (Test-Path $gitDir)) { return }
+
+    $filesToCheck = @(
+        'tools\environments\base.py',
+        'tools\environments\local.py',
+        'tools\browser_tool.py'
+    )
+    foreach ($relPath in $filesToCheck) {
+        $fullPath = Join-Path $HermesInstallDir $relPath
+        if (-not (Test-Path $fullPath)) { continue }
+        if (-not (Test-PythonSyntax -FilePath $fullPath -PythonExe $pythonExe)) {
+            $gitRelPath = $relPath.Replace('\', '/')
+            try {
+                Push-Location $HermesInstallDir
+                & git checkout -- $gitRelPath 2>$null
+                Pop-Location
+                Add-LogLine ("已自动恢复被损坏的上游文件：{0}" -f $gitRelPath)
+            } catch {
+                Pop-Location
+                Add-LogLine ("恢复文件失败：{0} - {1}" -f $gitRelPath, $_.Exception.Message)
+            }
+        }
+    }
+}
+
 function Repair-HermesUpstreamForWindows {
     <#
     .SYNOPSIS
@@ -521,24 +557,8 @@ function Repair-HermesUpstreamForWindows {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $patched = @()
 
-    # Pre-check: if any target file has broken syntax (from a previous bad patch),
-    # restore it from git before attempting new patches.
-    $gitExe = Join-Path $HermesInstallDir '.git'
-    if (Test-Path $gitExe) {
-        foreach ($f in @($localFile, $baseFile, $browserFile)) {
-            if ((Test-Path $f) -and -not (Test-PythonSyntax -FilePath $f -PythonExe $pythonExe)) {
-                $relPath = $f.Substring($HermesInstallDir.Length + 1).Replace('\', '/')
-                try {
-                    Push-Location $HermesInstallDir
-                    & git checkout -- $relPath 2>$null
-                    Pop-Location
-                    Add-LogLine ("已恢复被损坏的文件：{0}" -f $relPath)
-                } catch {
-                    Pop-Location
-                }
-            }
-        }
-    }
+    # Pre-check is now handled by Restore-CorruptedUpstreamFiles (called
+    # before gateway start).  No need to duplicate here.
 
     # --- P1: local.py — POSIX-to-Windows path conversion (陷阱 #24) ---
     if (Test-Path $localFile) {
@@ -795,6 +815,12 @@ function Start-HermesGateway {
 
     # Ensure gateway API port matches what webui expects (陷阱 #20)
     Repair-GatewayApiPort
+
+    # Pre-flight: restore any Python files corrupted by a previous bad patch.
+    # A broken base.py/local.py causes gateway to crash on import (SyntaxError).
+    try { Restore-CorruptedUpstreamFiles -HermesInstallDir $HermesInstallDir } catch {
+        Add-LogLine ("文件预检跳过：{0}" -f $_.Exception.Message)
+    }
 
     # NOTE: upstream Python patching (Repair-HermesUpstreamForWindows) is deliberately
     # NOT called here.  Those patches fix terminal-tool issues (#24 #25 #26) but are
