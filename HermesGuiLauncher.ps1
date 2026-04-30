@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.4'
+$script:LauncherVersion = 'Windows v2026.04.30.5'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -324,13 +324,15 @@ function Install-GatewayPlatformDeps {
     Auto-install missing Python packages for messaging platforms configured in .env.
     Reads ~/.hermes/.env, checks which platforms are enabled, and installs their
     optional dependencies (e.g. lark-oapi for Feishu) via uv pip.
+    Returns $true if any new package was installed (caller may need to restart gateway).
     #>
     param([string]$HermesInstallDir)
 
     $envFile = Join-Path $env:USERPROFILE '.hermes\.env'
-    if (-not (Test-Path $envFile)) { return }
+    if (-not (Test-Path $envFile)) { return $false }
     $pythonExe = Join-Path $HermesInstallDir 'venv\Scripts\python.exe'
-    if (-not (Test-Path $pythonExe)) { return }
+    if (-not (Test-Path $pythonExe)) { return $false }
+    $anyInstalled = $false
 
     # Map: env-var-that-enables-platform → Python-import-test → pip-package-name
     $platformDeps = @(
@@ -387,6 +389,7 @@ function Install-GatewayPlatformDeps {
             }
             if ($LASTEXITCODE -eq 0) {
                 Add-LogLine ("{0} 安装成功" -f $dep.Package)
+                $anyInstalled = $true
             } else {
                 Add-LogLine ("{0} 安装失败（退出码 {1}），该渠道可能无法使用" -f $dep.Package, $LASTEXITCODE)
             }
@@ -394,6 +397,7 @@ function Install-GatewayPlatformDeps {
             Add-LogLine ("{0} 安装失败：{1}" -f $dep.Package, $_.Exception.Message)
         }
     }
+    return $anyInstalled
 }
 
 function Stop-ExistingGateway {
@@ -403,38 +407,38 @@ function Stop-ExistingGateway {
     On Windows, 'hermes gateway run --replace' crashes with PermissionError
     when reading gateway.lock held by the running process (陷阱 #18).
     We must kill the process ourselves and remove the stale lock.
+    Designed to be fast (no WMI queries, no long sleeps).
     #>
+    $killed = $false
     # Kill process tracked by this launcher session
     if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
         try {
             $oldPid = $script:GatewayProcess.Id
             Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
             Add-LogLine ("已停止 Gateway 进程（PID: {0}）" -f $oldPid)
+            $killed = $true
         } catch { }
     }
-    # Also kill any orphan hermes gateway processes (e.g. from a previous launcher session)
+    # Also kill any orphan hermes gateway processes (e.g. from a previous launcher session).
+    # Use taskkill which is fast and doesn't need WMI.
     try {
-        $hermesProcs = Get-Process -Name 'hermes' -ErrorAction SilentlyContinue
-        foreach ($p in $hermesProcs) {
-            try {
-                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)" -ErrorAction SilentlyContinue).CommandLine
-                if ($cmdLine -and $cmdLine -match 'gateway') {
-                    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-                    Add-LogLine ("已停止残留 Gateway 进程（PID: {0}）" -f $p.Id)
-                }
-            } catch { }
+        $result = cmd /c "taskkill /f /im hermes.exe 2>&1" | Out-String
+        if ($result -match 'SUCCESS') {
+            Add-LogLine "已停止残留 hermes 进程"
+            $killed = $true
         }
     } catch { }
     # Remove stale gateway.lock so the new process starts cleanly
-    $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
-    if (Test-Path $lockFile) {
-        try {
-            Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
-            Add-LogLine "已清理 gateway.lock"
-        } catch { }
+    if ($killed) {
+        $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
+        if (Test-Path $lockFile) {
+            Start-Sleep -Milliseconds 300
+            try {
+                Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+                Add-LogLine "已清理 gateway.lock"
+            } catch { }
+        }
     }
-    # Brief pause for OS to release file handles
-    Start-Sleep -Milliseconds 500
 }
 
 function Start-HermesGateway {
@@ -2266,31 +2270,25 @@ function Start-LaunchAsync {
 
     $controls.PrimaryActionButton.IsEnabled = $false
 
-    # Always restart gateway to pick up new platform deps and env config,
-    # even if webui is already running (gateway may be stale from a previous session)
-    try {
-        Install-GatewayPlatformDeps -HermesInstallDir $InstallDir
-    } catch {
-        Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
-    }
-    Start-HermesGateway -HermesInstallDir $InstallDir
-
-    # Verify gateway is alive after a short delay — it may crash on startup
-    # due to missing deps, corrupt .env, or port conflicts.
-    if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
-        Start-Sleep -Milliseconds 2000
-        if ($script:GatewayProcess.HasExited) {
-            $exitCode = $script:GatewayProcess.ExitCode
-            Add-LogLine ("Gateway 进程在启动后立即退出（退出码: {0}），尝试重启..." -f $exitCode)
-            Start-HermesGateway -HermesInstallDir $InstallDir
-        }
-    }
-
-    # Check if webui already running — if so, just open browser
+    # Check if webui already running — if so, just open browser (fast path, no blocking)
     $health = Test-HermesWebUiHealth
     if ($health.Healthy) {
-        # Must start .env watcher so webui config changes trigger gateway restart
+        # Start .env watcher so webui config changes trigger gateway restart
         Start-GatewayEnvWatcher
+
+        # Install missing platform deps (quick Python import checks).
+        # Only restart gateway if we actually installed something new.
+        $depsInstalled = $false
+        try {
+            $depsInstalled = Install-GatewayPlatformDeps -HermesInstallDir $InstallDir
+        } catch {
+            Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
+        }
+        if ($depsInstalled) {
+            Add-LogLine "检测到新安装的渠道依赖，正在重启 Gateway..."
+            Restart-HermesGateway
+        }
+
         Open-BrowserUrlSafe -Url $health.Url
         Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $health.Url) -Next '在浏览器中完成模型配置和对话'
         $controls.PrimaryActionButton.IsEnabled = $true
