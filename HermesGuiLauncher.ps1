@@ -486,28 +486,70 @@ function Repair-GatewayApiPort {
     }
 }
 
+function Test-PythonSyntax {
+    <#
+    .SYNOPSIS
+    Verify a Python file has valid syntax using the hermes venv Python.
+    Returns $true if syntax is OK, $false if broken or unverifiable.
+    #>
+    param([string]$FilePath, [string]$PythonExe)
+    if (-not $PythonExe -or -not (Test-Path $PythonExe)) { return $false }
+    try {
+        $result = & $PythonExe -c "import py_compile; py_compile.compile(r'$FilePath', doraise=True)" 2>&1
+        return $LASTEXITCODE -eq 0
+    } catch { return $false }
+}
+
 function Repair-HermesUpstreamForWindows {
     <#
     .SYNOPSIS
     Auto-patch hermes-agent upstream Python files for Windows compatibility.
     Fixes: WSL bash cwd paths (#24), select.select on pipes (#25),
     browser .cmd lookup (#26).  Safe to re-run (idempotent).
+
+    SAFETY: Each file is backed up before patching.  After patching,
+    Python syntax is verified.  If verification fails, the backup is
+    restored — the original file is never left broken.
+    Only writes if at least one replacement actually matched.
     #>
     param([string]$HermesInstallDir)
     $toolsDir = Join-Path $HermesInstallDir 'tools\environments'
     $browserFile = Join-Path $HermesInstallDir 'tools\browser_tool.py'
     $localFile = Join-Path $toolsDir 'local.py'
     $baseFile = Join-Path $toolsDir 'base.py'
+    $pythonExe = Join-Path $HermesInstallDir 'venv\Scripts\python.exe'
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $patched = @()
+
+    # Pre-check: if any target file has broken syntax (from a previous bad patch),
+    # restore it from git before attempting new patches.
+    $gitExe = Join-Path $HermesInstallDir '.git'
+    if (Test-Path $gitExe) {
+        foreach ($f in @($localFile, $baseFile, $browserFile)) {
+            if ((Test-Path $f) -and -not (Test-PythonSyntax -FilePath $f -PythonExe $pythonExe)) {
+                $relPath = $f.Substring($HermesInstallDir.Length + 1).Replace('\', '/')
+                try {
+                    Push-Location $HermesInstallDir
+                    & git checkout -- $relPath 2>$null
+                    Pop-Location
+                    Add-LogLine ("已恢复被损坏的文件：{0}" -f $relPath)
+                } catch {
+                    Pop-Location
+                }
+            }
+        }
+    }
 
     # --- P1: local.py — POSIX-to-Windows path conversion (陷阱 #24) ---
     if (Test-Path $localFile) {
         $src = [System.IO.File]::ReadAllText($localFile, $utf8)
+        $original = $src
         if ($src -notmatch '_posix_to_win_path') {
+            $actuallyChanged = $false
             # Insert _posix_to_win_path() before _find_bash()
             $marker = 'def _find_bash() -> str:'
-            $patchFn = @'
+            if ($src.Contains($marker)) {
+                $patchFn = @'
 def _posix_to_win_path(posix_path: str) -> str:
     import re
     m = re.match(r'^/mnt/([a-zA-Z])(/.*)?$', posix_path)
@@ -524,7 +566,9 @@ def _posix_to_win_path(posix_path: str) -> str:
 
 
 '@
-            $src = $src.Replace($marker, ($patchFn + $marker))
+                $src = $src.Replace($marker, ($patchFn + $marker))
+                $actuallyChanged = $true
+            }
 
             # Patch _update_cwd to convert paths
             $oldCwd = '            if cwd_path:
@@ -535,7 +579,10 @@ def _posix_to_win_path(posix_path: str) -> str:
                     if cwd_path.startswith(''/''):
                         cwd_path = os.environ.get(''USERPROFILE'', os.getcwd())
                 self.cwd = cwd_path'
-            if ($src.Contains($oldCwd)) { $src = $src.Replace($oldCwd, $newCwd) }
+            if ($src.Contains($oldCwd)) {
+                $src = $src.Replace($oldCwd, $newCwd)
+                $actuallyChanged = $true
+            }
 
             # Patch _run_bash to convert cwd before Popen
             $oldPopen = '        proc = subprocess.Popen(
@@ -568,16 +615,28 @@ def _posix_to_win_path(posix_path: str) -> str:
             preexec_fn=None if _IS_WINDOWS else os.setsid,
             cwd=effective_cwd,
         )'
-            if ($src.Contains($oldPopen)) { $src = $src.Replace($oldPopen, $newPopen) }
+            if ($src.Contains($oldPopen)) {
+                $src = $src.Replace($oldPopen, $newPopen)
+                $actuallyChanged = $true
+            }
 
-            [System.IO.File]::WriteAllText($localFile, $src, $utf8)
-            $patched += 'local.py (P1: path conversion)'
+            # Only write if something actually changed, and verify syntax
+            if ($actuallyChanged) {
+                [System.IO.File]::WriteAllText($localFile, $src, $utf8)
+                if (-not (Test-PythonSyntax -FilePath $localFile -PythonExe $pythonExe)) {
+                    Add-LogLine "local.py 补丁后语法校验失败，已回滚"
+                    [System.IO.File]::WriteAllText($localFile, $original, $utf8)
+                } else {
+                    $patched += 'local.py (P1: path conversion)'
+                }
+            }
         }
     }
 
     # --- P2: base.py — select.select Windows fix + cwd extraction (陷阱 #24 #25) ---
     if (Test-Path $baseFile) {
         $src = [System.IO.File]::ReadAllText($baseFile, $utf8)
+        $original = $src
         $changed = $false
 
         # P2a: Add platform import if missing
@@ -672,17 +731,25 @@ def _posix_to_win_path(posix_path: str) -> str:
 
         if ($changed) {
             [System.IO.File]::WriteAllText($baseFile, $src, $utf8)
-            $patched += 'base.py (P2: select fix + cwd)'
+            if (-not (Test-PythonSyntax -FilePath $baseFile -PythonExe $pythonExe)) {
+                Add-LogLine "base.py 补丁后语法校验失败，已回滚"
+                [System.IO.File]::WriteAllText($baseFile, $original, $utf8)
+            } else {
+                $patched += 'base.py (P2: select fix + cwd)'
+            }
         }
     }
 
     # --- P3: browser_tool.py — .cmd lookup on Windows (陷阱 #26) ---
     if (Test-Path $browserFile) {
         $src = [System.IO.File]::ReadAllText($browserFile, $utf8)
+        $original = $src
         if ($src -match 'agent-browser"' -and $src -notmatch 'agent-browser\.cmd') {
+            $actuallyChanged = $false
             # Add platform import
             if ($src -match 'import atexit' -and $src -notmatch 'import platform') {
                 $src = $src.Replace('import atexit', "import atexit`nimport platform")
+                $actuallyChanged = $true
             }
             # Fix node_modules/.bin/ lookup
             $oldBin = '    local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
@@ -692,10 +759,20 @@ def _posix_to_win_path(posix_path: str) -> str:
     else:
         local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
     if local_bin.exists():'
-            if ($src.Contains($oldBin)) { $src = $src.Replace($oldBin, $newBin) }
+            if ($src.Contains($oldBin)) {
+                $src = $src.Replace($oldBin, $newBin)
+                $actuallyChanged = $true
+            }
 
-            [System.IO.File]::WriteAllText($browserFile, $src, $utf8)
-            $patched += 'browser_tool.py (P3: .cmd lookup)'
+            if ($actuallyChanged) {
+                [System.IO.File]::WriteAllText($browserFile, $src, $utf8)
+                if (-not (Test-PythonSyntax -FilePath $browserFile -PythonExe $pythonExe)) {
+                    Add-LogLine "browser_tool.py 补丁后语法校验失败，已回滚"
+                    [System.IO.File]::WriteAllText($browserFile, $original, $utf8)
+                } else {
+                    $patched += 'browser_tool.py (P3: .cmd lookup)'
+                }
+            }
         }
     }
 
@@ -719,10 +796,12 @@ function Start-HermesGateway {
     # Ensure gateway API port matches what webui expects (陷阱 #20)
     Repair-GatewayApiPort
 
-    # Auto-patch upstream Python files for Windows compatibility (陷阱 #24 #25 #26)
-    try { Repair-HermesUpstreamForWindows -HermesInstallDir $HermesInstallDir } catch {
-        Add-LogLine ("上游补丁跳过：{0}" -f $_.Exception.Message)
-    }
+    # NOTE: upstream Python patching (Repair-HermesUpstreamForWindows) is deliberately
+    # NOT called here.  Those patches fix terminal-tool issues (#24 #25 #26) but are
+    # not needed for gateway operation.  Applying them during gateway startup risks
+    # corrupting Python files on machines with a different hermes-agent version,
+    # which kills the gateway entirely.  Patches are applied after gateway health
+    # is confirmed, in a safe deferred step.
 
     # Kill existing gateway first — 'hermes gateway run --replace' crashes on Windows
     # with PermissionError when reading gateway.lock (陷阱 #18).
@@ -2875,6 +2954,10 @@ function Step-LaunchSequence {
                 } catch { }
                 if ($gwHealthy) {
                     Add-LogLine 'Gateway 健康检查通过，启动 WebUI...'
+                    # Deferred upstream patching — gateway is healthy, safe to patch now
+                    try { Repair-HermesUpstreamForWindows -HermesInstallDir $s.InstallDir } catch {
+                        Add-LogLine ("上游补丁跳过：{0}" -f $_.Exception.Message)
+                    }
                     $s.Phase = 'start-webui'
                 } elseif ((Get-Date) -gt $s.GwHealthDeadline) {
                     Add-LogLine 'Gateway 健康检查超时（15秒），仍继续启动 WebUI'
