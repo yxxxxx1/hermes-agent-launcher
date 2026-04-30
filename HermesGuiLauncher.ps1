@@ -507,23 +507,23 @@ function Repair-HermesUpstreamForWindows {
         if ($src -notmatch '_posix_to_win_path') {
             # Insert _posix_to_win_path() before _find_bash()
             $marker = 'def _find_bash() -> str:'
-            $patchFn = @"
+            $patchFn = @'
 def _posix_to_win_path(posix_path: str) -> str:
     import re
-    m = re.match(r'^/mnt/([a-zA-Z])(/.*)?`$', posix_path)
+    m = re.match(r'^/mnt/([a-zA-Z])(/.*)?$', posix_path)
     if m:
         drive = m.group(1).upper()
-        rest = (m.group(2) or '').replace('/', '\\\\')
+        rest = (m.group(2) or '').replace('/', '\\')
         return f"{drive}:{rest or chr(92)}"
-    m = re.match(r'^/([a-zA-Z])(/.*)?`$', posix_path)
+    m = re.match(r'^/([a-zA-Z])(/.*)?$', posix_path)
     if m:
         drive = m.group(1).upper()
-        rest = (m.group(2) or '').replace('/', '\\\\')
+        rest = (m.group(2) or '').replace('/', '\\')
         return f"{drive}:{rest or chr(92)}"
     return posix_path
 
 
-"@
+'@
             $src = $src.Replace($marker, ($patchFn + $marker))
 
             # Patch _update_cwd to convert paths
@@ -603,7 +603,16 @@ def _posix_to_win_path(posix_path: str) -> str:
                         except (ValueError, OSError):
                             break
                         if not chunk:
-                            break  # true EOF'
+                            break  # true EOF — all writers closed
+                        output_chunks.append(decoder.decode(chunk))
+                        idle_after_exit = 0
+                    elif proc.poll() is not None:
+                        # bash is gone and the pipe was idle for ~100ms.  Give
+                        # it two more cycles to catch any buffered tail, then
+                        # stop — otherwise we wait forever on a grandchild pipe.
+                        idle_after_exit += 1
+                        if idle_after_exit >= 3:
+                            break'
             $newDrain = '        def _drain():
             fd = proc.stdout.fileno()
             idle_after_exit = 0
@@ -630,7 +639,13 @@ def _posix_to_win_path(posix_path: str) -> str:
                             except (ValueError, OSError):
                                 break
                             if not chunk:
-                                break  # true EOF'
+                                break  # true EOF — all writers closed
+                            output_chunks.append(decoder.decode(chunk))
+                            idle_after_exit = 0
+                        elif proc.poll() is not None:
+                            idle_after_exit += 1
+                            if idle_after_exit >= 3:
+                                break'
             if ($src.Contains($oldDrain)) {
                 $src = $src.Replace($oldDrain, $newDrain)
                 $changed = $true
