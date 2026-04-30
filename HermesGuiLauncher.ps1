@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.01.3'
+$script:LauncherVersion = 'Windows v2026.05.01.4'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -560,6 +560,21 @@ function Repair-HermesUpstreamForWindows {
     # Pre-check is now handled by Restore-CorruptedUpstreamFiles (called
     # before gateway start).  No need to duplicate here.
 
+    # Helper: normalize line endings to match the target file.
+    # PowerShell here-strings use CRLF on Windows, but git may checkout
+    # Python files with LF only.  Mismatched line endings cause .Contains()
+    # to fail silently — the patch never applies.
+    function NormalizePatternToFile([string]$FileContent, [string]$Pattern) {
+        $fileHasCRLF = $FileContent.Contains("`r`n")
+        $patternHasCRLF = $Pattern.Contains("`r`n")
+        if ($fileHasCRLF -and -not $patternHasCRLF) {
+            return $Pattern.Replace("`n", "`r`n")
+        } elseif (-not $fileHasCRLF -and $patternHasCRLF) {
+            return $Pattern.Replace("`r`n", "`n")
+        }
+        return $Pattern
+    }
+
     # --- P1: local.py — POSIX-to-Windows path conversion (陷阱 #24) ---
     if (Test-Path $localFile) {
         $src = [System.IO.File]::ReadAllText($localFile, $utf8)
@@ -567,9 +582,9 @@ function Repair-HermesUpstreamForWindows {
         if ($src -notmatch '_posix_to_win_path') {
             $actuallyChanged = $false
             # Insert _posix_to_win_path() before _find_bash()
-            $marker = 'def _find_bash() -> str:'
+            $marker = NormalizePatternToFile $src 'def _find_bash() -> str:'
             if ($src.Contains($marker)) {
-                $patchFn = @'
+                $patchFn = NormalizePatternToFile $src @'
 def _posix_to_win_path(posix_path: str) -> str:
     import re
     m = re.match(r'^/mnt/([a-zA-Z])(/.*)?$', posix_path)
@@ -591,9 +606,9 @@ def _posix_to_win_path(posix_path: str) -> str:
             }
 
             # Patch _update_cwd to convert paths
-            $oldCwd = '            if cwd_path:
+            $oldCwd = NormalizePatternToFile $src '            if cwd_path:
                 self.cwd = cwd_path'
-            $newCwd = '            if cwd_path:
+            $newCwd = NormalizePatternToFile $src '            if cwd_path:
                 if _IS_WINDOWS:
                     cwd_path = _posix_to_win_path(cwd_path)
                     if cwd_path.startswith(''/''):
@@ -605,7 +620,7 @@ def _posix_to_win_path(posix_path: str) -> str:
             }
 
             # Patch _run_bash to convert cwd before Popen
-            $oldPopen = '        proc = subprocess.Popen(
+            $oldPopen = NormalizePatternToFile $src '        proc = subprocess.Popen(
             args,
             text=True,
             env=run_env,
@@ -617,7 +632,7 @@ def _posix_to_win_path(posix_path: str) -> str:
             preexec_fn=None if _IS_WINDOWS else os.setsid,
             cwd=self.cwd,
         )'
-            $newPopen = '        effective_cwd = self.cwd
+            $newPopen = NormalizePatternToFile $src '        effective_cwd = self.cwd
         if _IS_WINDOWS and effective_cwd.startswith(''/''):
             effective_cwd = _posix_to_win_path(effective_cwd)
             if effective_cwd.startswith(''/''):
@@ -661,13 +676,15 @@ def _posix_to_win_path(posix_path: str) -> str:
 
         # P2a: Add platform import if missing
         if ($src -match 'import select' -and $src -notmatch 'import platform') {
-            $src = $src.Replace('import select', "import platform`nimport select")
+            $importSelect = NormalizePatternToFile $src 'import select'
+            $importBoth = NormalizePatternToFile $src "import platform`nimport select"
+            $src = $src.Replace($importSelect, $importBoth)
             $changed = $true
         }
 
         # P2b: Fix _drain() to use os.read on Windows instead of select.select
         if ($src -notmatch '_is_windows = platform') {
-            $oldDrain = '        def _drain():
+            $oldDrain = NormalizePatternToFile $src '        def _drain():
             fd = proc.stdout.fileno()
             idle_after_exit = 0
             try:
@@ -692,7 +709,7 @@ def _posix_to_win_path(posix_path: str) -> str:
                         idle_after_exit += 1
                         if idle_after_exit >= 3:
                             break'
-            $newDrain = '        def _drain():
+            $newDrain = NormalizePatternToFile $src '        def _drain():
             fd = proc.stdout.fileno()
             idle_after_exit = 0
             _is_windows = platform.system() == "Windows"
@@ -732,9 +749,9 @@ def _posix_to_win_path(posix_path: str) -> str:
         }
 
         # P2c: Fix _extract_cwd_from_output to convert POSIX paths
-        $oldExtract = '        if cwd_path:
+        $oldExtract = NormalizePatternToFile $src '        if cwd_path:
             self.cwd = cwd_path'
-        $newExtract = '        if cwd_path:
+        $newExtract = NormalizePatternToFile $src '        if cwd_path:
             if platform.system() == "Windows" and cwd_path.startswith("/"):
                 try:
                     from tools.environments.local import _posix_to_win_path
@@ -768,13 +785,15 @@ def _posix_to_win_path(posix_path: str) -> str:
             $actuallyChanged = $false
             # Add platform import
             if ($src -match 'import atexit' -and $src -notmatch 'import platform') {
-                $src = $src.Replace('import atexit', "import atexit`nimport platform")
+                $importAtexit = NormalizePatternToFile $src 'import atexit'
+                $importBoth = NormalizePatternToFile $src "import atexit`nimport platform"
+                $src = $src.Replace($importAtexit, $importBoth)
                 $actuallyChanged = $true
             }
             # Fix node_modules/.bin/ lookup
-            $oldBin = '    local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
+            $oldBin = NormalizePatternToFile $src '    local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
     if local_bin.exists():'
-            $newBin = '    if platform.system() == "Windows":
+            $newBin = NormalizePatternToFile $src '    if platform.system() == "Windows":
         local_bin = repo_root / "node_modules" / ".bin" / "agent-browser.cmd"
     else:
         local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
