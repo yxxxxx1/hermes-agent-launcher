@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.2'
+$script:LauncherVersion = 'Windows v2026.04.30.3'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -345,6 +345,21 @@ function Install-GatewayPlatformDeps {
     $envLines = Get-Content $envFile -ErrorAction SilentlyContinue |
         Where-Object { $_ -match '^\s*[A-Z]' }
 
+    # Ensure GATEWAY_ALLOW_ALL_USERS=true is in .env — personal launcher needs
+    # open access so Telegram/WeChat/etc. messages are not silently rejected.
+    $hasAllowAll = $envLines | Where-Object { $_ -match '^\s*GATEWAY_ALLOW_ALL_USERS\s*=\s*true' }
+    if (-not $hasAllowAll) {
+        $anyPlatform = $envLines | Where-Object { $_ -match '^\s*(TELEGRAM_BOT_TOKEN|WEIXIN_ACCOUNT_ID|FEISHU_APP_ID|SLACK_BOT_TOKEN|DINGTALK_CLIENT_ID|DISCORD_BOT_TOKEN)\s*=\s*.+' }
+        if ($anyPlatform) {
+            try {
+                Add-Content -Path $envFile -Value "`nGATEWAY_ALLOW_ALL_USERS=true" -Encoding UTF8
+                Add-LogLine "已在 .env 中启用 GATEWAY_ALLOW_ALL_USERS=true"
+            } catch {
+                Add-LogLine ("写入 GATEWAY_ALLOW_ALL_USERS 失败：{0}" -f $_.Exception.Message)
+            }
+        }
+    }
+
     foreach ($dep in $platformDeps) {
         # Check if this platform is configured in .env (uncommented, with a value)
         $configured = $envLines | Where-Object { $_ -match "^\s*$($dep.EnvKey)\s*=\s*.+" }
@@ -417,8 +432,12 @@ function Restart-HermesGateway {
     Called by the .env file watcher when channel config changes.
     Must install platform deps before starting, same as Start-HermesGateway.
     #>
+    Add-LogLine "检测到 .env 文件变化，准备重启 Gateway..."
     $hermesExe = $script:GatewayHermesExe
-    if (-not $hermesExe -or -not (Test-Path $hermesExe)) { return }
+    if (-not $hermesExe -or -not (Test-Path $hermesExe)) {
+        Add-LogLine "Gateway 可执行文件未找到，跳过重启"
+        return
+    }
 
     # Install platform deps for newly configured channels (e.g. python-telegram-bot)
     # hermes.exe is at hermes-agent\venv\Scripts\hermes.exe → need 3 levels up
@@ -429,7 +448,9 @@ function Restart-HermesGateway {
 
     try {
         if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
-            Stop-Process -Id $script:GatewayProcess.Id -Force -ErrorAction SilentlyContinue
+            $oldPid = $script:GatewayProcess.Id
+            Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+            Add-LogLine ("已停止旧 Gateway 进程（PID: {0}）" -f $oldPid)
         }
         # Ensure env vars are set (same as Start-HermesGateway)
         $env:HERMES_HOME = Join-Path $env:USERPROFILE '.hermes'
@@ -438,6 +459,14 @@ function Restart-HermesGateway {
         $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run', '--replace') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         Add-LogLine ("Gateway 已自动重启以加载新渠道配置（PID: {0}）" -f $proc.Id)
+
+        # Verify gateway stays alive after a short delay
+        Start-Sleep -Milliseconds 3000
+        if ($proc.HasExited) {
+            Add-LogLine ("Gateway 进程启动后立即退出（退出码: {0}），渠道可能无法使用" -f $proc.ExitCode)
+        } else {
+            Add-LogLine "Gateway 进程运行正常"
+        }
     } catch {
         Add-LogLine ("Gateway 自动重启失败：{0}" -f $_.Exception.Message)
     }
@@ -473,14 +502,18 @@ function Start-GatewayEnvWatcher {
         Restart-HermesGateway
     })
 
-    $watcher.Add_Changed({
+    # Handler for both Changed and Created events — on fresh installs, .env may
+    # not exist yet and webui creates it when user saves platform config.
+    $onEnvModified = {
         # FileSystemWatcher fires on a thread-pool thread — must marshal to UI thread
         # to safely operate on DispatcherTimer (陷阱 #15)
         $window.Dispatcher.BeginInvoke([Action]{
             $script:EnvWatcherTimer.Stop()
             $script:EnvWatcherTimer.Start()
         })
-    })
+    }
+    $watcher.Add_Changed($onEnvModified)
+    $watcher.Add_Created($onEnvModified)
 
     $watcher.EnableRaisingEvents = $true
     $script:EnvWatcher = $watcher
@@ -2201,9 +2234,22 @@ function Start-LaunchAsync {
     }
     Start-HermesGateway -HermesInstallDir $InstallDir
 
+    # Verify gateway is alive after a short delay — it may crash on startup
+    # due to missing deps, corrupt .env, or port conflicts.
+    if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
+        Start-Sleep -Milliseconds 2000
+        if ($script:GatewayProcess.HasExited) {
+            $exitCode = $script:GatewayProcess.ExitCode
+            Add-LogLine ("Gateway 进程在启动后立即退出（退出码: {0}），尝试重启..." -f $exitCode)
+            Start-HermesGateway -HermesInstallDir $InstallDir
+        }
+    }
+
     # Check if webui already running — if so, just open browser
     $health = Test-HermesWebUiHealth
     if ($health.Healthy) {
+        # Must start .env watcher so webui config changes trigger gateway restart
+        Start-GatewayEnvWatcher
         Open-BrowserUrlSafe -Url $health.Url
         Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $health.Url) -Next '在浏览器中完成模型配置和对话'
         $controls.PrimaryActionButton.IsEnabled = $true
