@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.29.3'
+$script:LauncherVersion = 'Windows v2026.04.29.4'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -414,7 +414,8 @@ function Restart-HermesGateway {
     if (-not $hermesExe -or -not (Test-Path $hermesExe)) { return }
 
     # Install platform deps for newly configured channels (e.g. python-telegram-bot)
-    $hermesInstallDir = Split-Path (Split-Path $hermesExe -Parent) -Parent
+    # hermes.exe is at hermes-agent\venv\Scripts\hermes.exe → need 3 levels up
+    $hermesInstallDir = Split-Path (Split-Path (Split-Path $hermesExe -Parent) -Parent) -Parent
     try { Install-GatewayPlatformDeps -HermesInstallDir $hermesInstallDir } catch {
         Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
     }
