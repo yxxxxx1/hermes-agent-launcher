@@ -514,6 +514,22 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #23 Gateway 未就绪时启动 WebUI → GatewayManager 抢管 → 30秒杀死
+
+**触发条件**：启动器启动 gateway 后立即启动 webui，gateway 还在初始化（加载平台需 5-10 秒）
+
+**坑的表现**：WebUI 的 GatewayManager.detectStatus() 做 health check 发现 gateway 未响应 → 认为没在运行 → 调用 startAll() → 30 秒超时杀掉自己启动的和原来的 gateway。用户看到"未连接"。本机快的电脑不复现，慢的电脑必现。
+
+**预防动作**：
+- 启动 gateway 后必须轮询 `http://127.0.0.1:8642/health` 直到通过（最多 15 秒）
+- 健康检查通过后再启动 webui
+- 两条代码路径（Start-HermesWebUiRuntime 和状态机 start-gateway → start-webui）都必须加此等待
+- 超时后仍继续启动 webui（降级，不阻塞用户）
+
+**踩过日期**：2026-04-30
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。

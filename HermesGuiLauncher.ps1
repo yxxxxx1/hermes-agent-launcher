@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.9'
+$script:LauncherVersion = 'Windows v2026.04.30.10'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -651,6 +651,24 @@ function Start-HermesWebUiRuntime {
     # Our solution: start the gateway ourselves and write gateway.pid so
     # GatewayManager.detectStatus() finds it running and skips startAll().
     Start-HermesGateway -HermesInstallDir $HermesInstallDir
+
+    # Wait for gateway to become healthy before starting webui.
+    # Without this, webui's GatewayManager.detectStatus() may find the
+    # gateway not ready → startAll() → 30s timeout kill (陷阱 #22).
+    $gwDeadline = (Get-Date).AddSeconds(15)
+    $gwReady = $false
+    while ((Get-Date) -lt $gwDeadline) {
+        Start-Sleep -Milliseconds 1000
+        try {
+            $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 2 -ErrorAction Stop
+            Add-LogLine 'Gateway 健康检查通过，启动 WebUI...'
+            $gwReady = $true
+            break
+        } catch { }
+    }
+    if (-not $gwReady) {
+        Add-LogLine 'Gateway 健康检查超时（15秒），仍继续启动 WebUI'
+    }
 
     # Build PATH: include Node.js, npm-global, and hermes venv\Scripts
     $pathParts = @($webUi.NodeDir, $webUi.NpmPrefix)
@@ -2557,7 +2575,27 @@ function Step-LaunchSequence {
                 Set-Footer '正在启动 Hermes Gateway...'
                 Add-LogLine '正在启动 Gateway...'
                 Start-HermesGateway -HermesInstallDir $s.InstallDir
-                $s.Phase = 'start-webui'
+                $s.GwHealthDeadline = (Get-Date).AddSeconds(15)
+                $s.Phase = 'wait-gateway-healthy'
+            }
+
+            # ── Phase 4b: Wait for gateway health before starting webui ──
+            'wait-gateway-healthy' {
+                $gwHealthy = $false
+                try {
+                    $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 2 -ErrorAction Stop
+                    $gwHealthy = $true
+                } catch { }
+                if ($gwHealthy) {
+                    Add-LogLine 'Gateway 健康检查通过，启动 WebUI...'
+                    $s.Phase = 'start-webui'
+                } elseif ((Get-Date) -gt $s.GwHealthDeadline) {
+                    Add-LogLine 'Gateway 健康检查超时（15秒），仍继续启动 WebUI'
+                    $s.Phase = 'start-webui'
+                } else {
+                    Set-Footer '等待 Gateway 就绪...'
+                    Start-Sleep -Milliseconds 1000
+                }
             }
 
             # ── Phase 5: Start web-ui process ──
