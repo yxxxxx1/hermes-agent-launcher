@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.10'
+$script:LauncherVersion = 'Windows v2026.04.30.11'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -686,6 +686,12 @@ function Start-HermesWebUiRuntime {
     $env:NPM_CONFIG_PREFIX = $webUi.NpmPrefix
     # Force UTF-8 for hermes Python commands spawned by webui's GatewayManager
     $env:PYTHONIOENCODING = 'utf-8'
+    # Fix webui terminal: its shell detector uses existsSync("powershell.exe")
+    # which only checks CWD, not PATH.  Setting SHELL to the full path fixes it.
+    if (-not $env:SHELL) {
+        $env:SHELL = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+        if (-not $env:SHELL) { $env:SHELL = 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' }
+    }
 
     # Launch the start command without -Wait (it can hang with -RedirectStandardOutput)
     Start-Process -FilePath $webUi.WebUiCmd -ArgumentList @('start', $webUi.Port) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-webui-start.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-webui-start-err.log')
@@ -2616,6 +2622,11 @@ function Step-LaunchSequence {
                 $env:PORT = [string]$webUi.Port
                 $env:NPM_CONFIG_PREFIX = $webUi.NpmPrefix
                 $env:PYTHONIOENCODING = 'utf-8'
+                # Fix webui terminal shell detection on Windows
+                if (-not $env:SHELL) {
+                    $env:SHELL = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+                    if (-not $env:SHELL) { $env:SHELL = 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' }
+                }
 
                 Add-ActionLog -Action '开始使用' -Result '正在启动 hermes-web-ui...' -Next '等待服务就绪'
                 Set-Footer '正在启动 hermes-web-ui...'
