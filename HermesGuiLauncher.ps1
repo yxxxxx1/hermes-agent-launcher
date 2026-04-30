@@ -408,14 +408,25 @@ function Restart-HermesGateway {
     .SYNOPSIS
     Kill the current gateway process and start a fresh one.
     Called by the .env file watcher when channel config changes.
+    Must install platform deps before starting, same as Start-HermesGateway.
     #>
     $hermesExe = $script:GatewayHermesExe
     if (-not $hermesExe -or -not (Test-Path $hermesExe)) { return }
+
+    # Install platform deps for newly configured channels (e.g. python-telegram-bot)
+    $hermesInstallDir = Split-Path (Split-Path $hermesExe -Parent) -Parent
+    try { Install-GatewayPlatformDeps -HermesInstallDir $hermesInstallDir } catch {
+        Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
+    }
+
     try {
         if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
             Stop-Process -Id $script:GatewayProcess.Id -Force -ErrorAction SilentlyContinue
-            # 不在 UI 线程上 Start-Sleep（陷阱 #16），--replace 会自行替换旧进程
         }
+        # Ensure env vars are set (same as Start-HermesGateway)
+        $env:HERMES_HOME = Join-Path $env:USERPROFILE '.hermes'
+        $env:PYTHONIOENCODING = 'utf-8'
+        $env:GATEWAY_ALLOW_ALL_USERS = 'true'
         $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run', '--replace') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         Add-LogLine ("Gateway 已自动重启以加载新渠道配置（PID: {0}）" -f $proc.Id)
