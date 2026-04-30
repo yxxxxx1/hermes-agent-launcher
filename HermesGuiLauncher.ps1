@@ -486,6 +486,209 @@ function Repair-GatewayApiPort {
     }
 }
 
+function Repair-HermesUpstreamForWindows {
+    <#
+    .SYNOPSIS
+    Auto-patch hermes-agent upstream Python files for Windows compatibility.
+    Fixes: WSL bash cwd paths (#24), select.select on pipes (#25),
+    browser .cmd lookup (#26).  Safe to re-run (idempotent).
+    #>
+    param([string]$HermesInstallDir)
+    $toolsDir = Join-Path $HermesInstallDir 'tools\environments'
+    $browserFile = Join-Path $HermesInstallDir 'tools\browser_tool.py'
+    $localFile = Join-Path $toolsDir 'local.py'
+    $baseFile = Join-Path $toolsDir 'base.py'
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $patched = @()
+
+    # --- P1: local.py — POSIX-to-Windows path conversion (陷阱 #24) ---
+    if (Test-Path $localFile) {
+        $src = [System.IO.File]::ReadAllText($localFile, $utf8)
+        if ($src -notmatch '_posix_to_win_path') {
+            # Insert _posix_to_win_path() before _find_bash()
+            $marker = 'def _find_bash() -> str:'
+            $patchFn = @"
+def _posix_to_win_path(posix_path: str) -> str:
+    import re
+    m = re.match(r'^/mnt/([a-zA-Z])(/.*)?`$', posix_path)
+    if m:
+        drive = m.group(1).upper()
+        rest = (m.group(2) or '').replace('/', '\\\\')
+        return f"{drive}:{rest or chr(92)}"
+    m = re.match(r'^/([a-zA-Z])(/.*)?`$', posix_path)
+    if m:
+        drive = m.group(1).upper()
+        rest = (m.group(2) or '').replace('/', '\\\\')
+        return f"{drive}:{rest or chr(92)}"
+    return posix_path
+
+
+"@
+            $src = $src.Replace($marker, ($patchFn + $marker))
+
+            # Patch _update_cwd to convert paths
+            $oldCwd = '            if cwd_path:
+                self.cwd = cwd_path'
+            $newCwd = '            if cwd_path:
+                if _IS_WINDOWS:
+                    cwd_path = _posix_to_win_path(cwd_path)
+                    if cwd_path.startswith(''/''):
+                        cwd_path = os.environ.get(''USERPROFILE'', os.getcwd())
+                self.cwd = cwd_path'
+            if ($src.Contains($oldCwd)) { $src = $src.Replace($oldCwd, $newCwd) }
+
+            # Patch _run_bash to convert cwd before Popen
+            $oldPopen = '        proc = subprocess.Popen(
+            args,
+            text=True,
+            env=run_env,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            cwd=self.cwd,
+        )'
+            $newPopen = '        effective_cwd = self.cwd
+        if _IS_WINDOWS and effective_cwd.startswith(''/''):
+            effective_cwd = _posix_to_win_path(effective_cwd)
+            if effective_cwd.startswith(''/''):
+                effective_cwd = os.environ.get(''USERPROFILE'', os.getcwd())
+
+        proc = subprocess.Popen(
+            args,
+            text=True,
+            env=run_env,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            cwd=effective_cwd,
+        )'
+            if ($src.Contains($oldPopen)) { $src = $src.Replace($oldPopen, $newPopen) }
+
+            [System.IO.File]::WriteAllText($localFile, $src, $utf8)
+            $patched += 'local.py (P1: path conversion)'
+        }
+    }
+
+    # --- P2: base.py — select.select Windows fix + cwd extraction (陷阱 #24 #25) ---
+    if (Test-Path $baseFile) {
+        $src = [System.IO.File]::ReadAllText($baseFile, $utf8)
+        $changed = $false
+
+        # P2a: Add platform import if missing
+        if ($src -match 'import select' -and $src -notmatch 'import platform') {
+            $src = $src.Replace('import select', "import platform`nimport select")
+            $changed = $true
+        }
+
+        # P2b: Fix _drain() to use os.read on Windows instead of select.select
+        if ($src -notmatch '_is_windows = platform') {
+            $oldDrain = '        def _drain():
+            fd = proc.stdout.fileno()
+            idle_after_exit = 0
+            try:
+                while True:
+                    try:
+                        ready, _, _ = select.select([fd], [], [], 0.1)
+                    except (ValueError, OSError):
+                        break  # fd already closed
+                    if ready:
+                        try:
+                            chunk = os.read(fd, 4096)
+                        except (ValueError, OSError):
+                            break
+                        if not chunk:
+                            break  # true EOF'
+            $newDrain = '        def _drain():
+            fd = proc.stdout.fileno()
+            idle_after_exit = 0
+            _is_windows = platform.system() == "Windows"
+            try:
+                if _is_windows:
+                    while True:
+                        try:
+                            chunk = os.read(fd, 4096)
+                        except (ValueError, OSError):
+                            break
+                        if not chunk:
+                            break
+                        output_chunks.append(decoder.decode(chunk))
+                else:
+                    while True:
+                        try:
+                            ready, _, _ = select.select([fd], [], [], 0.1)
+                        except (ValueError, OSError):
+                            break  # fd already closed
+                        if ready:
+                            try:
+                                chunk = os.read(fd, 4096)
+                            except (ValueError, OSError):
+                                break
+                            if not chunk:
+                                break  # true EOF'
+            if ($src.Contains($oldDrain)) {
+                $src = $src.Replace($oldDrain, $newDrain)
+                $changed = $true
+            }
+        }
+
+        # P2c: Fix _extract_cwd_from_output to convert POSIX paths
+        $oldExtract = '        if cwd_path:
+            self.cwd = cwd_path'
+        $newExtract = '        if cwd_path:
+            if platform.system() == "Windows" and cwd_path.startswith("/"):
+                try:
+                    from tools.environments.local import _posix_to_win_path
+                    cwd_path = _posix_to_win_path(cwd_path)
+                    if cwd_path.startswith("/"):
+                        cwd_path = os.environ.get("USERPROFILE", os.getcwd())
+                except ImportError:
+                    pass
+            self.cwd = cwd_path'
+        if ($src.Contains($oldExtract)) {
+            $src = $src.Replace($oldExtract, $newExtract)
+            $changed = $true
+        }
+
+        if ($changed) {
+            [System.IO.File]::WriteAllText($baseFile, $src, $utf8)
+            $patched += 'base.py (P2: select fix + cwd)'
+        }
+    }
+
+    # --- P3: browser_tool.py — .cmd lookup on Windows (陷阱 #26) ---
+    if (Test-Path $browserFile) {
+        $src = [System.IO.File]::ReadAllText($browserFile, $utf8)
+        if ($src -match 'agent-browser"' -and $src -notmatch 'agent-browser\.cmd') {
+            # Add platform import
+            if ($src -match 'import atexit' -and $src -notmatch 'import platform') {
+                $src = $src.Replace('import atexit', "import atexit`nimport platform")
+            }
+            # Fix node_modules/.bin/ lookup
+            $oldBin = '    local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
+    if local_bin.exists():'
+            $newBin = '    if platform.system() == "Windows":
+        local_bin = repo_root / "node_modules" / ".bin" / "agent-browser.cmd"
+    else:
+        local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
+    if local_bin.exists():'
+            if ($src.Contains($oldBin)) { $src = $src.Replace($oldBin, $newBin) }
+
+            [System.IO.File]::WriteAllText($browserFile, $src, $utf8)
+            $patched += 'browser_tool.py (P3: .cmd lookup)'
+        }
+    }
+
+    if ($patched.Count -gt 0) {
+        Add-LogLine ("已自动修补上游兼容性问题：{0}" -f ($patched -join ', '))
+    }
+}
+
 function Start-HermesGateway {
     param(
         [string]$HermesInstallDir
@@ -500,6 +703,11 @@ function Start-HermesGateway {
 
     # Ensure gateway API port matches what webui expects (陷阱 #20)
     Repair-GatewayApiPort
+
+    # Auto-patch upstream Python files for Windows compatibility (陷阱 #24 #25 #26)
+    try { Repair-HermesUpstreamForWindows -HermesInstallDir $HermesInstallDir } catch {
+        Add-LogLine ("上游补丁跳过：{0}" -f $_.Exception.Message)
+    }
 
     # Kill existing gateway first — 'hermes gateway run --replace' crashes on Windows
     # with PermissionError when reading gateway.lock (陷阱 #18).
