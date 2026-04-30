@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.1'
+$script:LauncherVersion = 'Windows v2026.04.30.2'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -2192,7 +2192,16 @@ function Start-LaunchAsync {
 
     $controls.PrimaryActionButton.IsEnabled = $false
 
-    # Check if already running
+    # Always restart gateway to pick up new platform deps and env config,
+    # even if webui is already running (gateway may be stale from a previous session)
+    try {
+        Install-GatewayPlatformDeps -HermesInstallDir $InstallDir
+    } catch {
+        Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
+    }
+    Start-HermesGateway -HermesInstallDir $InstallDir
+
+    # Check if webui already running — if so, just open browser
     $health = Test-HermesWebUiHealth
     if ($health.Healthy) {
         Open-BrowserUrlSafe -Url $health.Url
