@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.11'
+$script:LauncherVersion = 'Windows v2026.05.01.1'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -514,7 +514,12 @@ function Start-HermesGateway {
         # Also set env var as belt-and-suspenders (config.yaml takes priority in
         # gateway code, but env var covers cases where config has no port key)
         $env:API_SERVER_PORT = '8642'
-        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
+        # Force Git Bash for terminal tool — System32\bash.exe is WSL bash whose
+        # pwd returns /mnt/c/... paths that Python cannot use as cwd (WinError 267)
+        $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+        if (Test-Path $gitBash) { $env:HERMES_GIT_BASH_PATH = $gitBash }
+        $hermesHome = Join-Path $env:USERPROFILE '.hermes'
+        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru -WorkingDirectory $hermesHome
         $script:GatewayProcess = $proc
         $script:GatewayHermesExe = $hermesExe
         Add-LogLine ("Hermes Gateway 已启动（PID: {0}）" -f $proc.Id)
@@ -563,7 +568,10 @@ function Restart-HermesGateway {
         $env:PYTHONIOENCODING = 'utf-8'
         $env:GATEWAY_ALLOW_ALL_USERS = 'true'
         $env:API_SERVER_PORT = '8642'
-        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
+        $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+        if (Test-Path $gitBash) { $env:HERMES_GIT_BASH_PATH = $gitBash }
+        $hermesHome = Join-Path $env:USERPROFILE '.hermes'
+        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru -WorkingDirectory $hermesHome
         $script:GatewayProcess = $proc
         Add-LogLine ("Gateway 已自动重启以加载新渠道配置（PID: {0}）" -f $proc.Id)
 

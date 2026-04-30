@@ -530,6 +530,74 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #24 System32\bash.exe 是 WSL bash → 工具链全崩
+
+**触发条件**：Windows 系统装了 WSL，`C:\Windows\System32\bash.exe` 在 PATH 里排在 Git Bash 前面
+
+**坑的表现**：hermes-agent 的 `_find_bash()` 通过 `shutil.which("bash")` 找到 WSL bash。WSL bash 的 `pwd -P` 返回 `/mnt/c/Users/...`（POSIX 路径），Python 的 `subprocess.Popen(cwd="/mnt/c/...")` 抛 `NotADirectoryError: [WinError 267]`。所有前台 terminal 命令失败（exit 126 或空输出），工具链完全不可用。后台 terminal 因执行路径不同可能不受影响，造成"前台坏、后台好"的迷惑现象。
+
+**预防动作**：
+- 启动器必须设 `$env:HERMES_GIT_BASH_PATH` 指向 `C:\Program Files\Git\bin\bash.exe`（如果存在）
+- 上游 `local.py` 需要 `_posix_to_win_path()` 函数，在 `_update_cwd()` 和 `_run_bash()` 中把 `/mnt/c/...` 和 `/c/...` 转成 `C:\...`
+- 纯 WSL 路径（`/home/...`）无法转换，fallback 到 `%USERPROFILE%`
+- 上游 `base.py` 的 `_extract_cwd_from_output()` 也需要同样的转换
+- 这些是上游本地补丁，hermes-agent 更新后需要重新打
+
+**踩过日期**：2026-05-01
+
+---
+
+### #25 select.select() 在 Windows 管道上不工作 → 命令输出全丢
+
+**触发条件**：hermes-agent 在 Windows 上执行任何 terminal 命令
+
+**坑的表现**：`base.py:_wait_for_process()._drain()` 用 `select.select([fd], [], [], 0.1)` 读子进程 stdout，但 Windows 的 `select.select()` 只支持 socket 不支持 pipe fd，立即抛 `WinError 10093`。异常被 `except (ValueError, OSError): break` 吞掉，drain 线程立即退出，所有命令输出为空。命令实际可能执行成功（exit 0），但用户看到空输出。
+
+**预防动作**：
+- 上游 `base.py` 的 `_drain()` 需要平台判断：Windows 上用阻塞 `os.read()` 替代 `select.select()`
+- Windows 没有 `fork()`，不存在孙进程继承 pipe 的问题，阻塞读是安全的
+- 这是上游本地补丁，hermes-agent 更新后需要重新打
+
+**踩过日期**：2026-05-01
+
+---
+
+### #26 node_modules/.bin/ 的 POSIX shell stub 在 Windows 上不可执行
+
+**触发条件**：hermes-agent 的 browser_tool 查找 `agent-browser` 可执行文件
+
+**坑的表现**：`node_modules/.bin/agent-browser` 是 POSIX shell 脚本（`#!/bin/sh`），Windows 上 `subprocess.Popen` 尝试执行它 → `WinError 193: %1 不是有效的 Win32 应用程序`。同目录下有 `agent-browser.cmd`（Windows 可执行），但代码没查找 `.cmd` 后缀。
+
+**预防动作**：
+- 上游 `browser_tool.py` 的 `_find_agent_browser()` 在 Windows 上需查找 `agent-browser.cmd` 而非 `agent-browser`
+- 这是上游本地补丁，hermes-agent 更新后需要重新打
+
+**踩过日期**：2026-05-01
+
+---
+
+## 上游本地补丁清单（Upstream Local Patches）
+
+> hermes-agent 更新后这些补丁会被覆盖，需要重新应用。
+> 每次 `hermes update` 后必须检查以下文件是否还包含补丁。
+
+| # | 文件路径（相对于 hermes-agent 安装目录） | 补丁内容 | 对应陷阱 |
+|---|------------------------------------------|----------|----------|
+| P1 | `tools/environments/local.py` | `_posix_to_win_path()` 函数 + `_update_cwd()` 路径转换 + `_run_bash()` cwd 兜底 | #24 |
+| P2 | `tools/environments/base.py` | `_drain()` Windows 平台用 `os.read()` + `_extract_cwd_from_output()` 路径转换 | #24 #25 |
+| P3 | `tools/browser_tool.py` | `_find_agent_browser()` Windows 上查找 `.cmd` | #26 |
+
+**检查方法**：
+```powershell
+# 快速检查补丁是否存在
+$hermesDir = "$env:LOCALAPPDATA\hermes\hermes-agent"
+Select-String -Path "$hermesDir\tools\environments\local.py" -Pattern '_posix_to_win_path' -Quiet
+Select-String -Path "$hermesDir\tools\environments\base.py" -Pattern '_is_windows' -Quiet
+Select-String -Path "$hermesDir\tools\browser_tool.py" -Pattern 'agent-browser.cmd' -Quiet
+```
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。
