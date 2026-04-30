@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.6'
+$script:LauncherVersion = 'Windows v2026.04.30.7'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -428,16 +428,15 @@ function Stop-ExistingGateway {
             $killed = $true
         }
     } catch { }
-    # Remove stale gateway.lock so the new process starts cleanly
-    if ($killed) {
-        $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
-        if (Test-Path $lockFile) {
-            Start-Sleep -Milliseconds 300
-            try {
-                Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
-                Add-LogLine "已清理 gateway.lock"
-            } catch { }
-        }
+    # Always remove gateway.lock — it may be stale from a crashed gateway.
+    # Without cleanup, 'hermes gateway run' may fail reading the orphaned lock.
+    $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
+    if (Test-Path $lockFile) {
+        if ($killed) { Start-Sleep -Milliseconds 300 }
+        try {
+            Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+            Add-LogLine "已清理 gateway.lock"
+        } catch { }
     }
 }
 
