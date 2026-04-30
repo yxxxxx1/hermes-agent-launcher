@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.8'
+$script:LauncherVersion = 'Windows v2026.04.30.9'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -518,6 +518,16 @@ function Start-HermesGateway {
         $script:GatewayProcess = $proc
         $script:GatewayHermesExe = $hermesExe
         Add-LogLine ("Hermes Gateway 已启动（PID: {0}）" -f $proc.Id)
+
+        # Write gateway.pid so hermes-web-ui's GatewayManager recognises this
+        # gateway as "already running" and does NOT attempt its own start
+        # (which would block and be killed after 30s — 陷阱 #22).
+        $pidFile = Join-Path $env:USERPROFILE '.hermes\gateway.pid'
+        try {
+            $pidJson = '{{"pid": {0}, "kind": "hermes-gateway"}}' -f $proc.Id
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($pidFile, $pidJson, $utf8NoBom)
+        } catch { }
     } catch {
         Add-LogLine ("Hermes Gateway 启动失败：{0}" -f $_.Exception.Message)
     }
@@ -556,6 +566,14 @@ function Restart-HermesGateway {
         $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         Add-LogLine ("Gateway 已自动重启以加载新渠道配置（PID: {0}）" -f $proc.Id)
+
+        # Write gateway.pid so webui's GatewayManager doesn't try to restart (陷阱 #22)
+        $pidFile = Join-Path $env:USERPROFILE '.hermes\gateway.pid'
+        try {
+            $pidJson = '{{"pid": {0}, "kind": "hermes-gateway"}}' -f $proc.Id
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($pidFile, $pidJson, $utf8NoBom)
+        } catch { }
 
         # Verify gateway stays alive after a short delay
         Start-Sleep -Milliseconds 3000
@@ -626,7 +644,12 @@ function Start-HermesWebUiRuntime {
         throw "未找到 hermes-web-ui 命令：$($webUi.WebUiCmd)"
     }
 
-    # Start hermes gateway first (Windows needs 'gateway run', not 'gateway start')
+    # Start gateway BEFORE webui — on Windows, the webui's GatewayManager
+    # calls 'hermes gateway restart' via execFileAsync with a 30-second
+    # timeout.  Since 'gateway restart' calls run_gateway() which blocks
+    # forever, the gateway is killed after 30s (陷阱 #22).
+    # Our solution: start the gateway ourselves and write gateway.pid so
+    # GatewayManager.detectStatus() finds it running and skips startAll().
     Start-HermesGateway -HermesInstallDir $HermesInstallDir
 
     # Build PATH: include Node.js, npm-global, and hermes venv\Scripts
@@ -2328,14 +2351,15 @@ function Start-LaunchAsync {
         # Start .env watcher so webui config changes trigger gateway restart
         Start-GatewayEnvWatcher
 
-        # Ensure gateway is running — it may be dead from a previous session or kill.
+        # Ensure config port is correct, gateway is alive, and deps installed.
+        Repair-GatewayApiPort
+
+        # Check if any gateway is running
         $gatewayAlive = $script:GatewayProcess -and -not $script:GatewayProcess.HasExited
         if (-not $gatewayAlive) {
-            # Check if any hermes gateway is running (from a previous launcher session)
             $gatewayAlive = [bool](Get-Process -Name 'hermes' -ErrorAction SilentlyContinue)
         }
 
-        # Install missing platform deps (quick Python import checks).
         $depsInstalled = $false
         try {
             $depsInstalled = Install-GatewayPlatformDeps -HermesInstallDir $InstallDir
@@ -2344,11 +2368,9 @@ function Start-LaunchAsync {
         }
 
         if (-not $gatewayAlive) {
-            # Gateway not running — start it (deps already installed above)
             Add-LogLine "Gateway 未在运行，正在启动..."
             Start-HermesGateway -HermesInstallDir $InstallDir
         } elseif ($depsInstalled) {
-            # Gateway running but new deps installed — restart to load them
             Add-LogLine "检测到新安装的渠道依赖，正在重启 Gateway..."
             Restart-HermesGateway
         }

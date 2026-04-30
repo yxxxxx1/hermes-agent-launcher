@@ -498,6 +498,22 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #22 WebUI GatewayManager 30 秒超时杀掉 gateway
+
+**触发条件**：hermes-web-ui 的 GatewayManager 在 Windows 上尝试启动 gateway
+
+**坑的表现**：GatewayManager 调用 `hermes gateway start`（不支持 Windows）→ 回退到 `hermes gateway restart` → `run_gateway()` 阻塞 → `execFileAsync` 的 30 秒 timeout 杀掉进程。Gateway 启动、连接平台、然后 30 秒后被 Node.js 杀死。无任何错误日志。
+
+**预防动作**：
+- 启动器必须在 WebUI 之前启动 gateway，并写 `gateway.pid`（JSON 格式 `{"pid": N, "kind": "hermes-gateway"}`）
+- GatewayManager 的 `detectStatus()` 读 gateway.pid + 做 health check，如果都通过则跳过 startAll()
+- 配合陷阱 #20 确保 config.yaml 端口 = 8642（health check 匹配）
+- 如果不写 gateway.pid，GatewayManager 不知道 gateway 在运行 → 自己启动 → 30 秒后杀掉
+
+**踩过日期**：2026-04-30
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。
