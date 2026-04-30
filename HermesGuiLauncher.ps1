@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.7'
+$script:LauncherVersion = 'Windows v2026.04.30.8'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -428,15 +428,61 @@ function Stop-ExistingGateway {
             $killed = $true
         }
     } catch { }
+    # Kill orphan python.exe spawned by hermes gateway — hermes.exe is a thin
+    # entry-point wrapper; the real gateway runs inside python.exe from the
+    # hermes venv.  If we only kill hermes.exe, the child python.exe keeps the
+    # API port occupied, forcing the next gateway to bind a different port.
+    # The webui hardcodes its upstream to port 8642, so port drift → "未连接".
+    $hermesVenvPython = Join-Path $env:LOCALAPPDATA 'hermes\hermes-agent\venv\Scripts\python.exe'
+    try {
+        $pythonProcs = Get-Process -Name 'python' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $hermesVenvPython }
+        foreach ($pp in $pythonProcs) {
+            try {
+                Stop-Process -Id $pp.Id -Force -ErrorAction SilentlyContinue
+                Add-LogLine ("已停止 Gateway 子进程 python.exe（PID: {0}）" -f $pp.Id)
+                $killed = $true
+            } catch { }
+        }
+    } catch { }
     # Always remove gateway.lock — it may be stale from a crashed gateway.
     # Without cleanup, 'hermes gateway run' may fail reading the orphaned lock.
     $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
     if (Test-Path $lockFile) {
-        if ($killed) { Start-Sleep -Milliseconds 300 }
+        if ($killed) { Start-Sleep -Milliseconds 500 }
         try {
             Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
             Add-LogLine "已清理 gateway.lock"
         } catch { }
+    }
+}
+
+function Repair-GatewayApiPort {
+    <#
+    .SYNOPSIS
+    Ensure config.yaml has api_server port = 8642 (the default).
+    hermes-web-ui hardcodes upstream to http://127.0.0.1:8642.  If config.yaml
+    has a different port, the gateway binds elsewhere and webui shows "未连接".
+    The env var API_SERVER_PORT does NOT override config.yaml (config takes
+    priority in the gateway code), so we must fix the file directly.
+    #>
+    $configFile = Join-Path $env:USERPROFILE '.hermes\config.yaml'
+    if (-not (Test-Path $configFile)) { return }
+    try {
+        # Must read/write as UTF-8 — PowerShell 5.1 Set-Content defaults to GBK
+        # on Chinese Windows, which corrupts non-ASCII YAML and crashes the gateway.
+        $content = [System.IO.File]::ReadAllText($configFile, [System.Text.Encoding]::UTF8)
+        # Match port: <number> under platforms.api_server.extra section
+        # Only fix if it's NOT already 8642
+        if ($content -match '(?m)(^\s+port:\s+)(\d+)' -and $Matches[2] -ne '8642') {
+            $oldPort = $Matches[2]
+            $content = $content -replace '(?m)(^\s+port:\s+)\d+', '${1}8642'
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($configFile, $content, $utf8NoBom)
+            Add-LogLine ("已修复 config.yaml 端口：{0} → 8642（WebUI 要求）" -f $oldPort)
+        }
+    } catch {
+        Add-LogLine ("config.yaml 端口修复跳过：{0}" -f $_.Exception.Message)
     }
 }
 
@@ -452,6 +498,9 @@ function Start-HermesGateway {
         Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
     }
 
+    # Ensure gateway API port matches what webui expects (陷阱 #20)
+    Repair-GatewayApiPort
+
     # Kill existing gateway first — 'hermes gateway run --replace' crashes on Windows
     # with PermissionError when reading gateway.lock (陷阱 #18).
     Stop-ExistingGateway
@@ -462,6 +511,9 @@ function Start-HermesGateway {
         $env:PYTHONIOENCODING = 'utf-8'
         # Personal launcher: allow all users by default so messaging platforms work out of the box
         $env:GATEWAY_ALLOW_ALL_USERS = 'true'
+        # Also set env var as belt-and-suspenders (config.yaml takes priority in
+        # gateway code, but env var covers cases where config has no port key)
+        $env:API_SERVER_PORT = '8642'
         $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         $script:GatewayHermesExe = $hermesExe
@@ -500,6 +552,7 @@ function Restart-HermesGateway {
         $env:HERMES_HOME = Join-Path $env:USERPROFILE '.hermes'
         $env:PYTHONIOENCODING = 'utf-8'
         $env:GATEWAY_ALLOW_ALL_USERS = 'true'
+        $env:API_SERVER_PORT = '8642'
         $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         Add-LogLine ("Gateway 已自动重启以加载新渠道配置（PID: {0}）" -f $proc.Id)

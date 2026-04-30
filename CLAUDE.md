@@ -467,6 +467,37 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #20 Gateway API 端口与 WebUI 上游端口不匹配 → "未连接"
+
+**触发条件**：config.yaml 中 `platforms.api_server.extra.port` 设为非 8642 的值
+
+**坑的表现**：Gateway 在非默认端口（如 8645）上监听 API，但 hermes-web-ui 的 upstream 硬编码为 `http://127.0.0.1:8642`。WebUI 连不上 gateway → 显示"未连接"。Telegram/微信等渠道实际已连接，但用户通过 WebUI 完全无法感知。
+
+**预防动作**：
+- 启动器在启动 gateway 前检查 config.yaml 的 api_server port，自动修正为 8642
+- `Repair-GatewayApiPort` 函数负责此修正
+- 必须用 `[System.IO.File]::WriteAllText` + UTF-8 无 BOM 写入 config.yaml，绝不能用 PowerShell 的 `Set-Content`（中文 Windows 默认写 GBK，破坏 YAML 中的 emoji 字符导致语法错误）
+- `Stop-ExistingGateway` 必须同时杀 hermes.exe 和其子进程 python.exe（从 hermes venv），否则旧进程占端口，新 gateway 无法绑定 8642
+
+**踩过日期**：2026-04-30
+
+---
+
+### #21 PowerShell Set-Content 在中文 Windows 上破坏 UTF-8 文件
+
+**触发条件**：用 PowerShell 5.1 的 `Set-Content` 写 UTF-8 文件（如 config.yaml）
+
+**坑的表现**：`Set-Content` 默认用系统编码（中文 Windows = GBK/CP936），把 UTF-8 的 emoji 等多字节字符写坏。YAML 解析器报 "mapping values are not allowed here" 或 "invalid continuation byte"，整个 config 回退到空配置。
+
+**预防动作**：
+- 需要原样保留编码的文件（config.yaml、.env 等），用 `[System.IO.File]::ReadAllText` + `[System.IO.File]::WriteAllText` + `UTF8Encoding($false)`（无 BOM）
+- 永远不要用 `Set-Content`、`Out-File` 处理非 ASCII 内容的文件
+- 如果只需要简单文本替换，优先用 Python 处理
+
+**踩过日期**：2026-04-30
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。
