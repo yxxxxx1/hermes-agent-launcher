@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.5'
+$script:LauncherVersion = 'Windows v2026.04.30.6'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -2276,15 +2276,27 @@ function Start-LaunchAsync {
         # Start .env watcher so webui config changes trigger gateway restart
         Start-GatewayEnvWatcher
 
+        # Ensure gateway is running — it may be dead from a previous session or kill.
+        $gatewayAlive = $script:GatewayProcess -and -not $script:GatewayProcess.HasExited
+        if (-not $gatewayAlive) {
+            # Check if any hermes gateway is running (from a previous launcher session)
+            $gatewayAlive = [bool](Get-Process -Name 'hermes' -ErrorAction SilentlyContinue)
+        }
+
         # Install missing platform deps (quick Python import checks).
-        # Only restart gateway if we actually installed something new.
         $depsInstalled = $false
         try {
             $depsInstalled = Install-GatewayPlatformDeps -HermesInstallDir $InstallDir
         } catch {
             Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
         }
-        if ($depsInstalled) {
+
+        if (-not $gatewayAlive) {
+            # Gateway not running — start it (deps already installed above)
+            Add-LogLine "Gateway 未在运行，正在启动..."
+            Start-HermesGateway -HermesInstallDir $InstallDir
+        } elseif ($depsInstalled) {
+            # Gateway running but new deps installed — restart to load them
             Add-LogLine "检测到新安装的渠道依赖，正在重启 Gateway..."
             Restart-HermesGateway
         }
