@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.04.30.3'
+$script:LauncherVersion = 'Windows v2026.04.30.4'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -396,6 +396,47 @@ function Install-GatewayPlatformDeps {
     }
 }
 
+function Stop-ExistingGateway {
+    <#
+    .SYNOPSIS
+    Kill any existing hermes gateway process and clean up the lock file.
+    On Windows, 'hermes gateway run --replace' crashes with PermissionError
+    when reading gateway.lock held by the running process (陷阱 #18).
+    We must kill the process ourselves and remove the stale lock.
+    #>
+    # Kill process tracked by this launcher session
+    if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
+        try {
+            $oldPid = $script:GatewayProcess.Id
+            Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+            Add-LogLine ("已停止 Gateway 进程（PID: {0}）" -f $oldPid)
+        } catch { }
+    }
+    # Also kill any orphan hermes gateway processes (e.g. from a previous launcher session)
+    try {
+        $hermesProcs = Get-Process -Name 'hermes' -ErrorAction SilentlyContinue
+        foreach ($p in $hermesProcs) {
+            try {
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)" -ErrorAction SilentlyContinue).CommandLine
+                if ($cmdLine -and $cmdLine -match 'gateway') {
+                    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+                    Add-LogLine ("已停止残留 Gateway 进程（PID: {0}）" -f $p.Id)
+                }
+            } catch { }
+        }
+    } catch { }
+    # Remove stale gateway.lock so the new process starts cleanly
+    $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
+    if (Test-Path $lockFile) {
+        try {
+            Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+            Add-LogLine "已清理 gateway.lock"
+        } catch { }
+    }
+    # Brief pause for OS to release file handles
+    Start-Sleep -Milliseconds 500
+}
+
 function Start-HermesGateway {
     param(
         [string]$HermesInstallDir
@@ -408,15 +449,17 @@ function Start-HermesGateway {
         Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
     }
 
-    # Always (re)start gateway with --replace so it picks up the latest .env
-    # (e.g. messaging channels configured in hermes-web-ui after the previous launch).
+    # Kill existing gateway first — 'hermes gateway run --replace' crashes on Windows
+    # with PermissionError when reading gateway.lock (陷阱 #18).
+    Stop-ExistingGateway
+
     try {
         $env:HERMES_HOME = Join-Path $env:USERPROFILE '.hermes'
         # Force UTF-8 for Python to avoid UnicodeEncodeError on Chinese Windows (GBK)
         $env:PYTHONIOENCODING = 'utf-8'
         # Personal launcher: allow all users by default so messaging platforms work out of the box
         $env:GATEWAY_ALLOW_ALL_USERS = 'true'
-        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run', '--replace') -WindowStyle Hidden -PassThru
+        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         $script:GatewayHermesExe = $hermesExe
         Add-LogLine ("Hermes Gateway 已启动（PID: {0}）" -f $proc.Id)
@@ -447,16 +490,14 @@ function Restart-HermesGateway {
     }
 
     try {
-        if ($script:GatewayProcess -and -not $script:GatewayProcess.HasExited) {
-            $oldPid = $script:GatewayProcess.Id
-            Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
-            Add-LogLine ("已停止旧 Gateway 进程（PID: {0}）" -f $oldPid)
-        }
+        # Kill existing gateway — don't use --replace (crashes on Windows, 陷阱 #18)
+        Stop-ExistingGateway
+
         # Ensure env vars are set (same as Start-HermesGateway)
         $env:HERMES_HOME = Join-Path $env:USERPROFILE '.hermes'
         $env:PYTHONIOENCODING = 'utf-8'
         $env:GATEWAY_ALLOW_ALL_USERS = 'true'
-        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run', '--replace') -WindowStyle Hidden -PassThru
+        $proc = Start-Process -FilePath $hermesExe -ArgumentList @('gateway', 'run') -WindowStyle Hidden -PassThru
         $script:GatewayProcess = $proc
         Add-LogLine ("Gateway 已自动重启以加载新渠道配置（PID: {0}）" -f $proc.Id)
 

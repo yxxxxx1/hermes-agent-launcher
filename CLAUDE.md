@@ -437,6 +437,36 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #18 Windows 上 `hermes gateway run --replace` 必崩
+
+**触发条件**：已有一个 gateway 进程在运行，启动器用 `--replace` 启动新 gateway
+
+**坑的表现**：`--replace` 尝试读 `gateway.lock` 文件时触发 `PermissionError`（运行中的进程独占锁），新 gateway 立即崩溃。因为 `-WindowStyle Hidden`，崩溃完全不可见。旧 gateway 继续运行，启动器以为新 gateway 已启动。
+
+**预防动作**：
+- 永远不用 `--replace` 参数
+- 启动器自己负责杀进程：先 `Stop-Process` 杀已知 PID，再 `Get-Process hermes` + 命令行匹配杀残留，最后删 `gateway.lock`
+- 等 500ms 让 OS 释放文件句柄后再启动新 gateway
+- 启动后 3 秒检查进程是否还活着
+
+**踩过日期**：2026-04-30
+
+---
+
+### #19 .env 文件监控未在早期返回路径启动
+
+**触发条件**：WebUI 已在运行，用户再次点击「开始使用」
+
+**坑的表现**：`Start-LaunchAsync` 检测到 WebUI 健康后直接 return，跳过了 `Start-GatewayEnvWatcher`。之后用户在 webui 配置渠道时 .env 变化无人监听，gateway 永远不会重启。
+
+**预防动作**：
+- 所有返回路径（早期返回 + 状态机完成）都必须调用 `Start-GatewayEnvWatcher`
+- 同时监听 Created + Changed 事件（新安装时 .env 是新建不是修改）
+
+**踩过日期**：2026-04-30
+
+---
+
 ## 自检盲区清单（Honest Limits）
 
 > Claude Code / Codex 等 AI 工程师在自检时**无法覆盖**的方面。
