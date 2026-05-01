@@ -595,6 +595,110 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #28 PowerShell HttpClient PostAsync fire-and-forget 在进程退出时被中断
+
+**触发条件**：用 `HttpClient.PostAsync` 异步发请求，不 await，在主线程随后退出进程
+
+**坑的表现**：进程退出时正在飞的 HTTP 请求会被取消，服务端收不到。临死前的事件（如 `launcher_closed`）最容易丢。
+
+**预防动作**：
+- "临死前"事件后 `Start-Sleep 600ms` 给 PostAsync 跑完（500-800ms 是经验平衡点）
+- 不能太长，否则用户感觉关窗口卡顿
+- 真正可靠的"临死遥测"需要换 `HttpClient.PostAsync(...).Wait(timeout)`（同步等），但会阻塞 600ms-2s 的关窗体验
+
+**踩过日期**：2026-05-01
+
+---
+
+### #29 任务文档的事件清单可能与实际代码 hook 点不匹配
+
+**触发条件**：PM 在任务文档列出"想要的事件清单"，但工程师没逐条对照代码确认 hook 是否真存在
+
+**坑的表现**：上报代码写完跑通，看板上某些事件**永远 0**——因为代码路径根本不会走到那里（比如 WSL 事件，但 launcher 不管 WSL）
+
+**预防动作**：
+- 工程师 Agent 接到事件清单后，**逐条 grep 代码确认 hook 存在性**，再决定埋 / 不埋 / 用别的事件代替
+- 在工程师产出报告里**明确"主动剪掉的事件 + 原因"**段落
+- 任务文档的"默认事件清单"是 PM 视角的"想要看到什么"，不一定能 1:1 落地
+
+**踩过日期**：2026-05-01
+
+---
+
+### #30 硬编码外部服务 URL → PM 部署后必须改代码重打包
+
+**触发条件**：启动器代码引用一个用户/PM 在 Cloudflare/Vercel 等部署的服务 URL，而该 URL 在不同账号下的子域名不同（如 `<account>.workers.dev`）
+
+**坑的表现**：工程师写代码时取了个占位 URL，部署后实际 URL 不同，启动器对接失败。**用户感知**：遥测无声失败（任务可接受）；**未来同类**：支付回调、推送服务、OAuth 回调失效则用户必崩。
+
+**预防动作**：
+- 部署到自有域名（Cloudflare Custom Domain），URL 由 PM/工程师控制不依赖账号子域
+- 如果必须用动态 URL，启动器应在线探测端点（放在 index.html 的 meta 里），避免硬编码
+- 工程师交付时部署清单第一步必须是"配自定义域名"，不能让 PM 跑完 `wrangler deploy` 后回头改代码
+
+**踩过日期**：2026-05-01
+
+---
+
+### #31 发版前必须先打 zip 才能 deploy
+
+**触发条件**：升版本号 + 改 index.html 的下载链接，但忘了 `Compress-Archive` 打包对应的 `.zip`
+
+**坑的表现**：用户访问网站点下载 → 直接 404。SelfTest 测不到这一类，工程师不会发现。
+
+**预防动作**：
+- deploy.sh 起手判断 `downloads/Hermes-Windows-Launcher-v$VERSION.zip` 是否存在，不存在 → 报错退出
+- 工程师交付报告里"部署清单"第一步必须是打包指令
+- 发版前 `git status` 检查 downloads/ 目录是否包含新 zip（未追踪也算，因为 zip 不需要进 git）
+
+**关系**：本陷阱是陷阱 #13"依赖未就绪的外部资源上线"在"打包流程"上的具象化。#13 是抽象原则（不依赖未就绪资源），#31 是落地动作（deploy.sh 必须自检 zip 存在）。两条并列保留，新工程师从动作侧（#31）和原则侧（#13）都能查到。
+
+**踩过日期**：2026-05-01
+
+---
+
+### #32 Cloudflare Worker `custom_domain` 不接受 wildcard 或路径
+
+**触发条件**：`worker/wrangler.toml` 的 `[[routes]]` 用 `custom_domain = true`，但 `pattern` 写成 `domain.com/*` 或 `domain.com/api/*`
+
+**坑的表现**：`wrangler deploy` 直接 abort：
+```
+[ERROR] Invalid Routes:
+  telemetry.aisuper.win/*:
+  Wildcard operators (*) are not allowed in Custom Domains
+  Paths are not allowed in Custom Domains
+```
+首次部署的工程师容易栽在这个语法差异上 —— Pages 的路由习惯带 `/*`，Workers Custom Domain 不行。
+
+**预防动作**：
+- `custom_domain = true` 时，pattern 必须是裸域名：`pattern = "telemetry.aisuper.win"`
+- 如需路径分流，改用普通 routes（省略 `custom_domain` 或设为 `false`）：`pattern = "telemetry.aisuper.win/api/*"`，但这种模式需要 zone 已配 DNS 指向 Workers，PM 需手动操作
+- Custom Domain 模式自动管 DNS + SSL，是 zone 已托管在同账号时的最简方案，强烈推荐——但 pattern 写法是 gotcha
+
+**踩过日期**：2026-05-01
+
+---
+
+### #33 `cat tempfile | wrangler secret put` 在 Git Bash 上可能上去带尾换行
+
+**触发条件**：用 `cat $tempfile | npx wrangler secret put <KEY>` 上传 Cloudflare Worker secret，且：
+- tempfile 是用 PowerShell `Out-File` / `Set-Content`（默认会加 `\n`）写的，或
+- Git Bash 在管道中做了 LF→CRLF 翻译，或
+- wrangler 4.x 不再 strip 尾部空白
+
+**坑的表现**：Worker 端存的 secret 末尾带 `\n`（或 `\r\n`），HTTP 客户端发的 Bearer header 没带换行。Bearer 鉴权字符串严格相等比较，对不上 → **401 Unauthorized**。前端日志只看到 401，看不到 secret 已被多塞 1-2 字节，定位很慢。本任务 PM 真机访问看板报"鉴权失败"才发现。
+
+**预防动作**：
+- 写 temp 文件用 `[System.IO.File]::WriteAllText($path, $value, $utf8NoBom)`
+- **断言** `(Get-Item $path).Length` 等于 `$value.Length`（防 BOM、防尾换行）
+- 上传**不走 shell pipe**，改用文件描述符重定向：`npx wrangler secret put KEY < tempfile`（`<` 是 byte-faithful，bash 不动文件字节）
+- 或用 .NET `Process.StandardInput.BaseStream.Write([byte[]])` 写精确字节后 `Close()`
+- 上传后**立刻**用 `Invoke-RestMethod` + `Authorization: Bearer <value>` 跑一次实际鉴权端点，HTTP 200 才算生效
+
+**踩过日期**：2026-05-01
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.01.5'
+$script:LauncherVersion = 'Windows v2026.05.01.6'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -36,6 +36,19 @@ $script:EnvWatcher = $null
 $script:EnvWatcherTimer = $null
 $script:LaunchTimer = $null
 $script:LaunchState = $null
+
+# === 匿名遥测（任务 011） ===
+# Worker 自定义域名（任务 011 返工 F3）。绑定方式见 worker/wrangler.toml [[routes]]。
+# 不再使用 *.workers.dev 子域，PM 部署后无需回头改代码重打包。
+$script:TelemetryEndpoint        = 'https://telemetry.aisuper.win/api/telemetry'
+$script:TelemetryHttpClient      = $null
+$script:TelemetryHttpClientInited = $false
+$script:AnonymousId              = $null
+$script:CachedTelemetrySettings  = $null
+$script:LauncherStartTimeUtc     = [DateTime]::UtcNow
+$script:TelemetryFiredFlags      = @{}
+
+try { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop } catch { }
 
 Add-Type @"
 using System;
@@ -84,6 +97,307 @@ function Get-HermesDefaults {
         OfficialDocsUrl    = 'https://hermes-agent.nousresearch.com/docs'
     }
 }
+
+# ====================================================================
+# 匿名遥测（任务 011）
+# 所有函数全程 try-catch 吞异常，绝不影响主 UI（陷阱 #1）。
+# 隐私：上报前所有字符串走 Sanitize-TelemetryString 脱敏。
+# ====================================================================
+
+function Get-TelemetryStorageInfo {
+    $dir = Join-Path $env:APPDATA 'HermesLauncher'
+    return @{
+        Dir        = $dir
+        IdFile     = (Join-Path $dir 'anonymous_id')
+        SettingsFile = (Join-Path $dir 'settings.json')
+    }
+}
+
+function Get-OrCreateAnonymousId {
+    if ($script:AnonymousId) { return $script:AnonymousId }
+    try {
+        $info = Get-TelemetryStorageInfo
+        if (Test-Path $info.IdFile) {
+            $existing = ([System.IO.File]::ReadAllText($info.IdFile)).Trim()
+            if ($existing -match '^[A-Za-z0-9-]{8,64}$') {
+                $script:AnonymousId = $existing
+                return $existing
+            }
+        }
+        if (-not (Test-Path $info.Dir)) {
+            New-Item -ItemType Directory -Path $info.Dir -Force | Out-Null
+        }
+        $newId = [guid]::NewGuid().ToString('N')  # 32 hex chars
+        # UTF-8 无 BOM（陷阱 #21）
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($info.IdFile, $newId, $utf8)
+        $script:AnonymousId = $newId
+        return $newId
+    } catch {
+        $sessId = 'session-' + [guid]::NewGuid().ToString('N').Substring(0, 16)
+        $script:AnonymousId = $sessId
+        return $sessId
+    }
+}
+
+function Load-TelemetrySettings {
+    try {
+        $info = Get-TelemetryStorageInfo
+        if (Test-Path $info.SettingsFile) {
+            $json = [System.IO.File]::ReadAllText($info.SettingsFile)
+            $obj = $json | ConvertFrom-Json
+            $hasTelemetry = $obj.PSObject.Properties['telemetry_enabled']
+            $hasConsent = $obj.PSObject.Properties['first_run_consent_shown']
+            return [pscustomobject]@{
+                TelemetryEnabled     = if ($hasTelemetry) { [bool]$obj.telemetry_enabled } else { $true }
+                FirstRunConsentShown = if ($hasConsent) { [bool]$obj.first_run_consent_shown } else { $false }
+            }
+        }
+    } catch { }
+    return [pscustomobject]@{ TelemetryEnabled = $true; FirstRunConsentShown = $false }
+}
+
+function Save-TelemetrySettings {
+    param(
+        $TelemetryEnabled,
+        $FirstRunConsentShown
+    )
+    try {
+        $current = Load-TelemetrySettings
+        $info = Get-TelemetryStorageInfo
+        if (-not (Test-Path $info.Dir)) {
+            New-Item -ItemType Directory -Path $info.Dir -Force | Out-Null
+        }
+        $payload = [ordered]@{
+            telemetry_enabled       = if ($PSBoundParameters.ContainsKey('TelemetryEnabled')) { [bool]$TelemetryEnabled } else { [bool]$current.TelemetryEnabled }
+            first_run_consent_shown = if ($PSBoundParameters.ContainsKey('FirstRunConsentShown')) { [bool]$FirstRunConsentShown } else { [bool]$current.FirstRunConsentShown }
+        } | ConvertTo-Json -Compress
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($info.SettingsFile, $payload, $utf8)
+        $script:CachedTelemetrySettings = $null
+    } catch { }
+}
+
+function Get-TelemetryEnabled {
+    if ($null -eq $script:CachedTelemetrySettings) {
+        $script:CachedTelemetrySettings = Load-TelemetrySettings
+    }
+    return [bool]$script:CachedTelemetrySettings.TelemetryEnabled
+}
+
+function Set-TelemetryEnabled {
+    param([bool]$Enabled)
+    Save-TelemetrySettings -TelemetryEnabled $Enabled
+}
+
+function Get-FirstRunConsentShown {
+    if ($null -eq $script:CachedTelemetrySettings) {
+        $script:CachedTelemetrySettings = Load-TelemetrySettings
+    }
+    return [bool]$script:CachedTelemetrySettings.FirstRunConsentShown
+}
+
+function Mark-FirstRunConsentShown {
+    Save-TelemetrySettings -FirstRunConsentShown $true
+}
+
+function Get-WindowsVersionCategory {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $caption = [string]$os.Caption
+        if ($caption -match 'Server') { return 'Windows-Server' }
+        # Windows 11 detection: BuildNumber >= 22000
+        $build = 0
+        [int]::TryParse([string]$os.BuildNumber, [ref]$build) | Out-Null
+        if ($build -ge 22000) { return 'Windows-11' }
+        if ($caption -match 'Windows 10' -or ($build -ge 10000 -and $build -lt 22000)) { return 'Windows-10' }
+        if ($caption -match 'Windows 8') { return 'Windows-8' }
+        if ($caption -match 'Windows 7') { return 'Windows-7' }
+        return 'Windows-Other'
+    } catch {
+        return 'unknown'
+    }
+}
+
+function Get-MemoryCategory {
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $totalGb = [math]::Round([double]$cs.TotalPhysicalMemory / 1GB, 0)
+        if ($totalGb -lt 8) { return 'lt-8gb' }
+        if ($totalGb -le 16) { return '8-16gb' }
+        return 'gt-16gb'
+    } catch {
+        return 'unknown'
+    }
+}
+
+function Sanitize-TelemetryString {
+    param([object]$Text)
+    if ($null -eq $Text) { return '' }
+    $s = [string]$Text
+    if (-not $s) { return '' }
+    # 0. URL 编码先解码再让后面的路径/用户名规则接得住（任务 011 返工 F1）
+    #    必须放在 §3 路径规则之前，否则 %5CUsers%5C74431 这类 escape 字符串绕过路径正则
+    $s = $s -replace '%5C','\' -replace '%5c','\' -replace '%2F','/' -replace '%2f','/' -replace '%3A',':' -replace '%3a',':'
+    # 1. 已知敏感字段：sk-xxx / api_key=xxx / token=xxx / password=xxx / Bearer xxx
+    $s = [regex]::Replace($s, '(sk-|sk_)[A-Za-z0-9_\-]+',                      '${1}<REDACTED>')
+    # GitHub PAT 全家（ghp_/gho_/ghu_/ghs_/ghr_，任务 011 返工 F1）
+    $s = [regex]::Replace($s, '\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}',      '${1}_<REDACTED>')
+    # Google API key（AIza... + 30+ 字符，任务 011 返工 F1）
+    $s = [regex]::Replace($s, '\bAIza[0-9A-Za-z_\-]{30,}',                     '<REDACTED>')
+    $s = [regex]::Replace($s, '(api[_-]?key\s*[=:]\s*)\S+',                    '${1}<REDACTED>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '(token\s*[=:]\s*)\S+',                          '${1}<REDACTED>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '(password\s*[=:]\s*)\S+',                       '${1}<REDACTED>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '(secret\s*[=:]\s*)\S+',                         '${1}<REDACTED>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '(Bearer\s+)\S+',                                '${1}<REDACTED>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '(Authorization\s*[=:]\s*)\S+',                  '${1}<REDACTED>', 'IgnoreCase')
+    # JSON 风格 password / token / secret / api_key（任务 011 返工 F1）
+    $s = [regex]::Replace($s, '"(password|token|secret|api[_-]?key)"\s*:\s*"[^"]*"', '"$1":"<REDACTED>"', 'IgnoreCase')
+    # 2. 用户名（来自 $env:USERNAME），最长优先替换
+    try {
+        $username = $env:USERNAME
+        if ($username -and $username.Length -ge 2) {
+            $s = [regex]::Replace($s, [regex]::Escape($username), '<USER>', 'IgnoreCase')
+        }
+    } catch { }
+    # 3. 用户路径段：C:\Users\xxx\... 和 POSIX /home/xxx/, /Users/xxx/, 以及 C:/Users/xxx/（正斜杠）
+    $s = [regex]::Replace($s, '([A-Za-z]:\\Users\\)[^\\\s/]+',  '${1}<USER>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '([A-Za-z]:/Users/)[^/\\\s]+',    '${1}<USER>', 'IgnoreCase')
+    $s = [regex]::Replace($s, '(/(?:Users|home)/)[^/\s]+',      '${1}<USER>', 'IgnoreCase')
+    # 4. 邮箱
+    $s = [regex]::Replace($s, '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}', '<EMAIL>')
+    # 5. IPv4 + IPv6（任务 011 返工 F1：补 IPv6 粗匹配）
+    $s = [regex]::Replace($s, '\b(?:\d{1,3}\.){3}\d{1,3}\b', '<IP>')
+    $s = [regex]::Replace($s, '(?<![A-Za-z0-9])(?:[0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F:]+', '<IP>')
+    # 6. 截断
+    if ($s.Length -gt 500) { $s = $s.Substring(0, 500) + '...' }
+    return $s
+}
+
+function Sanitize-TelemetryProperties {
+    param([hashtable]$Properties)
+    $out = @{}
+    if (-not $Properties) { return $out }
+    foreach ($key in @($Properties.Keys)) {
+        $value = $Properties[$key]
+        if ($null -eq $value) { continue }
+        if ($value -is [bool] -or $value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]) {
+            $out[[string]$key] = $value
+        } elseif ($value -is [array] -or $value -is [System.Collections.IList]) {
+            $list = @()
+            foreach ($item in $value) {
+                if ($item -is [string]) { $list += (Sanitize-TelemetryString $item) }
+                elseif ($item -is [bool] -or $item -is [int] -or $item -is [long] -or $item -is [double]) { $list += $item }
+                else { $list += (Sanitize-TelemetryString ([string]$item)) }
+            }
+            $out[[string]$key] = $list
+        } else {
+            $out[[string]$key] = Sanitize-TelemetryString ([string]$value)
+        }
+    }
+    return $out
+}
+
+function Initialize-TelemetryHttpClient {
+    if ($script:TelemetryHttpClientInited) { return }
+    $script:TelemetryHttpClientInited = $true
+    try {
+        if ([System.Net.Http.HttpClient]) {
+            $handler = New-Object System.Net.Http.HttpClientHandler
+            try { $handler.AllowAutoRedirect = $true } catch { }
+            $client = New-Object System.Net.Http.HttpClient($handler)
+            $client.Timeout = [TimeSpan]::FromSeconds(8)
+            $script:TelemetryHttpClient = $client
+        }
+    } catch {
+        $script:TelemetryHttpClient = $null
+    }
+}
+
+function Send-Telemetry {
+    <#
+    .SYNOPSIS
+    异步上报一个匿名事件。失败完全静默。
+    .PARAMETER EventName
+    事件名（必须匹配 Worker 端 VALID_EVENTS 白名单）
+    .PARAMETER Properties
+    任意 hashtable，上报前会脱敏所有字符串
+    .PARAMETER FailureReason
+    失败事件的 reason，自动放入 properties.reason 并脱敏
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$EventName,
+        [hashtable]$Properties,
+        [string]$FailureReason
+    )
+    try {
+        if (-not (Get-TelemetryEnabled)) { return }
+        if (-not $script:TelemetryEndpoint) { return }
+
+        $props = Sanitize-TelemetryProperties -Properties $Properties
+        if ($PSBoundParameters.ContainsKey('FailureReason') -and $FailureReason) {
+            $props['reason'] = Sanitize-TelemetryString $FailureReason
+        }
+
+        $payload = [ordered]@{
+            event_name       = $EventName
+            anonymous_id     = Get-OrCreateAnonymousId
+            version          = $script:LauncherVersion
+            os_version       = Get-WindowsVersionCategory
+            memory_category  = Get-MemoryCategory
+            client_timestamp = [int][double](([DateTimeOffset](Get-Date)).ToUnixTimeSeconds())
+            properties       = $props
+        }
+        $json = $payload | ConvertTo-Json -Depth 5 -Compress
+
+        Initialize-TelemetryHttpClient
+        if (-not $script:TelemetryHttpClient) { return }
+
+        $content = New-Object System.Net.Http.StringContent($json, [System.Text.UTF8Encoding]::new($false), 'application/json')
+        $task = $script:TelemetryHttpClient.PostAsync($script:TelemetryEndpoint, $content)
+        # Fire-and-forget continuation — dispose content + 吞所有异常
+        $task.ContinueWith({
+            param($t)
+            try { $content.Dispose() } catch { }
+            if ($t.IsFaulted) {
+                try { $t.Exception.Handle({ param($e) $true }) } catch { }
+            }
+        }) | Out-Null
+    } catch {
+        # 绝不能让上报失败抛到 UI 线程（陷阱 #1）
+    }
+}
+
+function Send-TelemetryOnce {
+    <#
+    .SYNOPSIS
+    单次会话内只触发一次同名事件，避免重复上报（如 webui_started 在多次健康检查时只发 1 次）
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$EventName,
+        [hashtable]$Properties,
+        [string]$FailureReason
+    )
+    try {
+        if ($script:TelemetryFiredFlags.ContainsKey($EventName) -and $script:TelemetryFiredFlags[$EventName]) {
+            return
+        }
+        $script:TelemetryFiredFlags[$EventName] = $true
+        $params = @{ EventName = $EventName }
+        if ($PSBoundParameters.ContainsKey('Properties')) { $params.Properties = $Properties }
+        if ($PSBoundParameters.ContainsKey('FailureReason')) { $params.FailureReason = $FailureReason }
+        Send-Telemetry @params
+    } catch { }
+}
+
+function Get-LauncherUptimeSeconds {
+    try {
+        return [int]([DateTime]::UtcNow - $script:LauncherStartTimeUtc).TotalSeconds
+    } catch { return 0 }
+}
+
+# === 匿名遥测结束 ===
+
 
 function Test-HermesInstalled {
     param(
@@ -923,6 +1237,7 @@ function Start-HermesGateway {
         $script:GatewayProcess = $proc
         $script:GatewayHermesExe = $hermesExe
         Add-LogLine ("Hermes Gateway 已启动（PID: {0}）" -f $proc.Id)
+        try { Send-TelemetryOnce -EventName 'gateway_started' } catch { }
 
         # Write gateway.pid so hermes-web-ui's GatewayManager recognises this
         # gateway as "already running" and does NOT attempt its own start
@@ -935,6 +1250,7 @@ function Start-HermesGateway {
         } catch { }
     } catch {
         Add-LogLine ("Hermes Gateway 启动失败：{0}" -f $_.Exception.Message)
+        try { Send-Telemetry -EventName 'gateway_failed' -FailureReason $_.Exception.Message } catch { }
     }
 }
 
@@ -2433,9 +2749,21 @@ $defaults = Get-HermesDefaults
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Padding="20,16" CornerRadius="20" Background="#111C33" BorderBrush="#24324F" BorderThickness="1">
-            <TextBlock FontSize="28" FontWeight="Bold" Text="Hermes Agent"/>
-        </Border>
+        <StackPanel Grid.Row="0">
+            <Border Padding="20,16" CornerRadius="20" Background="#111C33" BorderBrush="#24324F" BorderThickness="1">
+                <DockPanel LastChildFill="True">
+                    <Button x:Name="AboutButton" DockPanel.Dock="Right" Padding="12,4" Background="Transparent" BorderBrush="#475569" BorderThickness="1" Foreground="#E2E8F0" Content="关于"/>
+                    <TextBlock FontSize="28" FontWeight="Bold" Foreground="#E2E8F0" Text="Hermes Agent" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+            <Border x:Name="TelemetryConsentBanner" Margin="0,10,0,0" Padding="14,10" CornerRadius="12" Background="#1E2C45" BorderBrush="#2D3F5F" BorderThickness="1" Visibility="Collapsed">
+                <DockPanel LastChildFill="True">
+                    <Button x:Name="TelemetryConsentDismissButton" DockPanel.Dock="Right" Padding="10,4" Background="Transparent" Foreground="#CBD5E1" BorderBrush="#475569" BorderThickness="1" Content="✓ 知道了"/>
+                    <TextBlock VerticalAlignment="Center" Foreground="#CBD5E1" FontSize="12" TextWrapping="Wrap"
+                               Text="我们会上报匿名安装数据帮助改进产品，可在「关于」里关闭。"/>
+                </DockPanel>
+            </Border>
+        </StackPanel>
 
         <Grid Grid.Row="1" Margin="0,18,0,0">
             <Grid.RowDefinitions>
@@ -2589,7 +2917,8 @@ foreach ($name in @(
     'InstallProgressText','InstallFailureSummaryText','StatusHeadlineText','StatusBodyText','RecommendationText','RecommendationHintText',
     'RefreshButton','PrimaryActionButton','SecondaryActionButton','StageModelButton','StageAdvancedButton',
     'HermesHomeTextBox','InstallDirTextBox','BranchTextBox','NoVenvCheckBox','SkipSetupCheckBox',
-    'LogSectionBorder','CopyFeedbackButton','ClearLogButton','LogTextBox','FooterBorder','FooterText'
+    'LogSectionBorder','CopyFeedbackButton','ClearLogButton','LogTextBox','FooterBorder','FooterText',
+    'AboutButton','TelemetryConsentBanner','TelemetryConsentDismissButton'
 )) {
     $controls[$name] = $window.FindName($name)
 }
@@ -2617,11 +2946,19 @@ $window.Add_SourceInitialized({
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.add_UnhandledException({
         param($sender, $eventArgs)
         Write-CrashLog ("DispatcherUnhandledException: " + $eventArgs.Exception.ToString())
+        try {
+            Send-Telemetry -EventName 'unexpected_error' -FailureReason ('dispatcher: ' + $eventArgs.Exception.GetType().FullName + ': ' + $eventArgs.Exception.Message) -Properties @{ source = 'dispatcher' }
+        } catch { }
         $eventArgs.Handled = $true  # 防止未捕获异常导致进程崩溃（陷阱 #1）
     })
     [AppDomain]::CurrentDomain.add_UnhandledException({
         param($sender, $eventArgs)
         Write-CrashLog ("UnhandledException: " + $eventArgs.ExceptionObject.ToString())
+        try {
+            $exType = if ($eventArgs.ExceptionObject) { $eventArgs.ExceptionObject.GetType().FullName } else { 'unknown' }
+            $exMsg = if ($eventArgs.ExceptionObject -and $eventArgs.ExceptionObject.Message) { [string]$eventArgs.ExceptionObject.Message } else { 'unknown' }
+            Send-Telemetry -EventName 'unexpected_error' -FailureReason ('appdomain: ' + $exType + ': ' + $exMsg) -Properties @{ source = 'appdomain' }
+        } catch { }
     })
 })
 
@@ -2780,6 +3117,19 @@ function Start-LaunchAsync {
 
     $controls.PrimaryActionButton.IsEnabled = $false
 
+    # 任务 011：检测此次启动时模型是否已配置，未配置 → 用户即将进 webui 配置
+    try {
+        $hermesHomeForCheck = Join-Path $env:USERPROFILE '.hermes'
+        $modelStatus = Test-HermesModelConfigured -HermesHome $hermesHomeForCheck
+        if (-not $modelStatus.HasApiKey) {
+            Send-TelemetryOnce -EventName 'model_config_started'
+        } else {
+            Send-TelemetryOnce -EventName 'model_config_validated'
+        }
+    } catch {
+        try { Send-Telemetry -EventName 'model_config_failed' -FailureReason $_.Exception.Message } catch { }
+    }
+
     # Check if webui already running — if so, just open browser (fast path, no blocking)
     $health = Test-HermesWebUiHealth
     if ($health.Healthy) {
@@ -2859,6 +3209,7 @@ function Start-LaunchAsync {
 
         Open-BrowserUrlSafe -Url $health.Url
         Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $health.Url) -Next '在浏览器中完成模型配置和对话'
+        try { Send-TelemetryOnce -EventName 'webui_started' -Properties @{ path = 'fast' } } catch { }
         $controls.PrimaryActionButton.IsEnabled = $true
         return
     }
@@ -2894,6 +3245,7 @@ function Stop-LaunchAsync {
     Set-Footer ''
     if ($ErrorMessage) {
         Add-ActionLog -Action '开始使用' -Result ('失败：' + $ErrorMessage) -Next '可改用命令行对话'
+        try { Send-Telemetry -EventName 'webui_failed' -FailureReason $ErrorMessage } catch { }
         $message = @(
             'hermes-web-ui 启动失败。'
             ''
@@ -3117,6 +3469,7 @@ function Step-LaunchSequence {
 
                     Open-BrowserUrlSafe -Url $url
                     Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $url) -Next '在浏览器中完成模型配置和对话'
+                    try { Send-TelemetryOnce -EventName 'webui_started' -Properties @{ path = 'slow' } } catch { }
                     Set-Footer ''
 
                     $hermesHome = Join-Path $env:USERPROFILE '.hermes'
@@ -3191,8 +3544,10 @@ function Start-ExternalInstallMonitor {
 
             if ($exitCode -eq 0) {
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '安装终端已自动关闭，安装过程结束' -Next '启动器已自动刷新状态，请按推荐步骤继续'
+                try { Send-Telemetry -EventName 'hermes_install_completed' -Properties @{ exit_code = 0 } } catch { }
             } else {
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result ("安装终端已结束，退出码：{0}" -f $exitCode) -Next '安装失败时终端通常会保留；如已关闭，请重新打开安装并查看终端报错'
+                try { Send-Telemetry -EventName 'hermes_install_failed' -FailureReason ('exit_code=' + $exitCode) -Properties @{ stage = 'external_terminal'; exit_code = [int]$exitCode } } catch { }
                 $recentLog = @()
                 if ($controls.LogTextBox.Text) {
                     $lines = $controls.LogTextBox.Text -split "`r?`n"
@@ -3885,6 +4240,7 @@ function Test-InstallPreflight {
             }
             if ($staleRemoved) {
                 $warnings.Add(("已自动清理上次安装失败残留的目录：{0}" -f $InstallDir)) | Out-Null
+                try { Send-Telemetry -EventName 'install_residue_cleaned' -Properties @{ method = 'auto' } } catch { }
             } else {
                 # 自动清理失败 → 弹窗帮用户打开目录所在的文件夹
                 $parentDir = Split-Path -Parent $InstallDir
@@ -3938,7 +4294,7 @@ function Test-InstallPreflight {
         }
     }
 
-    [pscustomobject]@{
+    $result = [pscustomobject]@{
         Passed   = @($passed.ToArray())
         Warnings = @($warnings.ToArray())
         Blocking = @($blocking.ToArray())
@@ -3948,6 +4304,22 @@ function Test-InstallPreflight {
         NetworkEnv = $networkEnvResult
         CanInstall = ($blocking.Count -eq 0)
     }
+
+    # 任务 011 埋点：环境检测结果（脱敏，仅传聚合属性，不传完整路径）
+    try {
+        Send-Telemetry -EventName 'preflight_check' -Properties @{
+            can_install   = [bool]$result.CanInstall
+            has_git       = [bool]$result.HasGit
+            has_winget    = [bool]$result.HasWinget
+            network_ok    = [bool]$result.NetworkOk
+            network_env   = [string]$result.NetworkEnv
+            blocking_count = $result.Blocking.Count
+            warning_count  = $result.Warnings.Count
+            passed_count   = $result.Passed.Count
+        }
+    } catch { }
+
+    return $result
 }
 
 function Set-InstallActionButtons {
@@ -3997,6 +4369,138 @@ function Test-OpenClawPending {
         -not $state.LauncherState.OpenClawImported -and
         -not $state.LauncherState.OpenClawSkipped
     )
+}
+
+function Show-TelemetryConsentBanner {
+    <#
+    .SYNOPSIS
+    首次启动时在主界面顶部显示一行提示，告知用户匿名遥测已启用。
+    非弹窗、非阻塞，符合陷阱 #4（信息位置错误）的预防要求。
+    #>
+    try {
+        if ($null -eq $controls.TelemetryConsentBanner) { return }
+        $controls.TelemetryConsentBanner.Visibility = 'Visible'
+    } catch { }
+}
+
+function Hide-TelemetryConsentBanner {
+    try {
+        if ($null -eq $controls.TelemetryConsentBanner) { return }
+        $controls.TelemetryConsentBanner.Visibility = 'Collapsed'
+        Mark-FirstRunConsentShown
+    } catch { }
+}
+
+function Show-AboutDialog {
+    <#
+    .SYNOPSIS
+    显示「关于」对话框：版本号 + 隐私说明 + 匿名遥测开关。
+    #>
+    try {
+        $aboutXamlText = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="关于 Hermes 启动器"
+        Width="560"
+        Height="560"
+        MinWidth="520"
+        MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1220"
+        Foreground="#E2E8F0"
+        ResizeMode="NoResize">
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock x:Name="AboutTitle" FontSize="22" FontWeight="SemiBold" Text="Hermes 启动器"/>
+            <TextBlock x:Name="AboutVersionText" Margin="0,6,0,0" Foreground="#94A3B8"/>
+            <TextBlock Margin="0,4,0,0" Foreground="#94A3B8" TextWrapping="Wrap"
+                       Text="第三方 GUI 启动器，非官方项目。让更多中文用户用上 Hermes Agent。"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Margin="0,18,0,0" Padding="16" CornerRadius="14" Background="#101A2C" BorderBrush="#22314D" BorderThickness="1">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock FontSize="15" FontWeight="SemiBold" Foreground="#F8FAFC" Text="匿名数据上报"/>
+                    <TextBlock Margin="0,8,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"
+                               Text="为了改进产品，我们会上报启动器使用过程的匿名遥测数据。所有数据都不包含可识别个人身份的信息。"/>
+
+                    <TextBlock Margin="0,14,0,4" FontWeight="SemiBold" Foreground="#86EFAC" Text="✓ 我们收集"/>
+                    <TextBlock Foreground="#CBD5E1" TextWrapping="Wrap" Margin="12,0,0,0"
+                               Text="• 启动器版本号、Windows 大类（Win10/Win11）、内存档位（&lt;8/8-16/&gt;16 GB）&#x0a;• 安装关键步骤的事件名（开始/完成/失败）&#x0a;• 失败事件的脱敏后错误类型&#x0a;• 一次性匿名设备 ID（与你的账户、邮箱、机器名、IP 完全无关）"/>
+
+                    <TextBlock Margin="0,14,0,4" FontWeight="SemiBold" Foreground="#FCA5A5" Text="✗ 我们不收集"/>
+                    <TextBlock Foreground="#CBD5E1" TextWrapping="Wrap" Margin="12,0,0,0"
+                               Text="• 用户名、机器名、邮箱、IP 地址&#x0a;• 任何 API Key、Token、密码、密钥&#x0a;• 本地路径中的用户名段（自动替换为 &lt;USER&gt;）&#x0a;• 对话内容、模型回复、聊天记录（启动器看不到这些）"/>
+
+                    <TextBlock Margin="0,14,0,0" Foreground="#94A3B8" TextWrapping="Wrap"
+                               Text="所有错误信息上报前会经过自动脱敏处理；数据存储在 Cloudflare D1，仅作为产品迭代依据，不分享给第三方。"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <StackPanel Grid.Row="2" Margin="0,18,0,0">
+            <CheckBox x:Name="AboutTelemetryToggle" Foreground="#E2E8F0"
+                      Content="启用匿名数据上报（推荐保持开启，帮助我们改进产品）"/>
+            <!-- 任务 011 返工 F5：toggle 切换后立刻给视觉反馈，不让用户去日志区找确认 -->
+            <TextBlock x:Name="AboutTelemetryStatus" Margin="24,4,0,0" FontSize="11" Foreground="#94A3B8" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <DockPanel Grid.Row="3" Margin="0,18,0,0" LastChildFill="False">
+            <Button x:Name="AboutCloseButton" DockPanel.Dock="Right" Padding="20,8" MinWidth="100"
+                    Background="#1E293B" Foreground="#F8FAFC" BorderBrush="#475569" Content="关闭"/>
+        </DockPanel>
+    </Grid>
+</Window>
+'@
+        [xml]$aboutXaml = $aboutXamlText
+        $aboutReader = New-Object System.Xml.XmlNodeReader $aboutXaml
+        $aboutWindow = [Windows.Markup.XamlReader]::Load($aboutReader)
+        $aboutWindow.Owner = $window
+
+        $aboutControls = @{}
+        foreach ($name in @('AboutVersionText','AboutTelemetryToggle','AboutTelemetryStatus','AboutCloseButton')) {
+            $aboutControls[$name] = $aboutWindow.FindName($name)
+        }
+        $aboutControls.AboutVersionText.Text = ("版本：{0}" -f $script:LauncherVersion)
+        $aboutControls.AboutTelemetryToggle.IsChecked = (Get-TelemetryEnabled)
+        # 任务 011 返工 F5：状态文字初始值（根据当前是否开启）
+        if ($aboutControls.AboutTelemetryToggle.IsChecked) {
+            $aboutControls.AboutTelemetryStatus.Text = '✓ 已开启 — 感谢帮助我们改进产品'
+            $aboutControls.AboutTelemetryStatus.Foreground = '#86EFAC'
+        } else {
+            $aboutControls.AboutTelemetryStatus.Text = '已关闭 — 我们不会再上报数据'
+            $aboutControls.AboutTelemetryStatus.Foreground = '#FCA5A5'
+        }
+        # 闭包按 DECISIONS.md 经验避免嵌套 + 不用 GetNewClosure。
+        # ScriptBlock 自然捕获 $aboutControls / $aboutWindow（与现有 AboutCloseButton 同一模式）。
+        $aboutControls.AboutTelemetryToggle.Add_Checked({
+            Set-TelemetryEnabled -Enabled $true
+            Add-LogLine '匿名数据上报：已开启'
+            try {
+                $aboutControls.AboutTelemetryStatus.Text = '✓ 已开启 — 感谢帮助我们改进产品'
+                $aboutControls.AboutTelemetryStatus.Foreground = '#86EFAC'
+            } catch { }
+        })
+        $aboutControls.AboutTelemetryToggle.Add_Unchecked({
+            Set-TelemetryEnabled -Enabled $false
+            Add-LogLine '匿名数据上报：已关闭'
+            try {
+                $aboutControls.AboutTelemetryStatus.Text = '已关闭 — 我们不会再上报数据'
+                $aboutControls.AboutTelemetryStatus.Foreground = '#FCA5A5'
+            } catch { }
+        })
+        $aboutControls.AboutCloseButton.Add_Click({ $aboutWindow.Close() })
+        [void]$aboutWindow.ShowDialog()
+    } catch {
+        Add-LogLine ("打开「关于」对话框失败：{0}" -f $_.Exception.Message)
+    }
 }
 
 function Get-InstallFeedbackText {
@@ -4564,8 +5068,10 @@ function Invoke-AppAction {
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。成功时终端会在 5 秒后自动关闭，失败时会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
+                try { Send-Telemetry -EventName 'hermes_install_started' -Properties @{ network_env = [string]$networkEnv; branch = [string]$state.Branch } } catch { }
             } catch {
                 Add-ActionLog -Action '改用外部终端安装' -Result ('启动安装脚本失败：' + $_.Exception.Message) -Next '检查网络连接或稍后重试；如持续失败请联系作者'
+                try { Send-Telemetry -EventName 'hermes_install_failed' -FailureReason ('start_terminal: ' + $_.Exception.Message) -Properties @{ stage = 'start_terminal' } } catch { }
             }
         }
         'openclaw-preview' {
@@ -4773,6 +5279,10 @@ $controls.StageAdvancedButton.Add_Click({ Show-AdvancedPanel })
 $controls.OpenClawImportButton.Add_Click({ Invoke-AppAction 'openclaw-migrate' })
 $controls.OpenClawSkipButton.Add_Click({ Invoke-AppAction 'openclaw-skip' })
 
+# 任务 011：「关于」按钮 + 首次同意提示「知道了」按钮
+$controls.AboutButton.Add_Click({ Show-AboutDialog })
+$controls.TelemetryConsentDismissButton.Add_Click({ Hide-TelemetryConsentBanner })
+
 $controls.HermesHomeTextBox.Add_TextChanged({
     $script:InstallPreflightConfirmed = $false
     $script:InstallLocationConfirmed = $false
@@ -4792,14 +5302,29 @@ $controls.BranchTextBox.Add_TextChanged({
 })
 
 Add-LogLine ("启动器已就绪。版本：{0}" -f $script:LauncherVersion)
+
+# 任务 011：上报会话开始 + 处理首次同意提示
+try { Send-Telemetry -EventName 'launcher_opened' } catch { }
+try {
+    if (-not (Get-FirstRunConsentShown)) {
+        Show-TelemetryConsentBanner
+    }
+} catch { }
+
 try {
     Refresh-Status
 } catch {
     Add-LogLine ("启动时状态刷新失败：{0}" -f $_.Exception.Message)
+    try { Send-Telemetry -EventName 'unexpected_error' -FailureReason ("startup_refresh: " + $_.Exception.Message) } catch { }
 }
 try {
     $window.ShowDialog() | Out-Null
 } finally {
+    try {
+        Send-Telemetry -EventName 'launcher_closed' -Properties @{ session_seconds = Get-LauncherUptimeSeconds }
+        # 给上报一点时间发出去（最多 2 秒），避免进程退出时 task 被中断
+        try { Start-Sleep -Milliseconds 600 } catch { }
+    } catch { }
     try { Stop-HermesWebUiRuntime | Out-Null } catch { }
     if ($script:LauncherMutex) {
         $script:LauncherMutex.ReleaseMutex()

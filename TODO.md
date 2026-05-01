@@ -4,6 +4,28 @@
 
 ---
 
+### 待办：遥测系统 v2（任务 011 后续）
+
+任务 011 v1 上线后的下一轮迭代，按价值优先级排：
+
+1. **Mac 版埋点**：本期只覆盖 Windows 启动器，Mac 端 `LauncherRootView.swift` 同样需要接入。
+2. **`first_conversation` 事件**：发生在 webui 内部，启动器观察不到。需要 hermes-web-ui 同样接入遥测，或启动器去读 webui 的对话历史目录做粗判（侵入性大）。
+3. **`hermes_install_step` 事件**：上游 install.ps1 在外部终端运行，启动器只能拿到最终退出码。要拿到分步事件需要要么修改上游脚本（违反"不 fork 上游"原则），要么 wrapper 脚本里加日志解析。
+4. **可视化看板升级**：现在的 `dashboard/index.html` 只画了基础表格 + 简单漏斗。后期可改用 Grafana / Metabase / 自建 React + Recharts。
+5. **数据异常自动告警**：失败率突增、独立用户数暴跌等，自动推到 PM 邮箱或 Telegram。
+6. **D1 自动按月分表**：当前所有事件都进同一张 `events` 表，量大后需要按月切分（`events_2026_05`、`events_2026_06`）防止单表过大影响查询。
+7. **崩溃事件补传**：启动器异常崩溃时本地写一份 `crash.json`，下次启动时补传 `crash` 事件。
+8. **遥测数据保留期策略**：当前没有自动清理。建议 90 天后归档，180 天后删除。
+
+整合者补充（QA 报告 P1-3/P1-4/P2-1/P2-2）：
+
+9. **[v2 - 视觉规范] 启动器内 banner / 关于对话框迁移到 LauncherPalette 暖色调**（QA 报告 P1-3）—— 整体 Windows 端 UI 暖色化是单独任务，不在遥测范围内。
+10. **[v2 - 健壮性] Sanitize-TelemetryProperties 递归处理嵌套 hashtable / PSCustomObject，默认 fail-secure**（QA 报告 P1-4）—— 当前所有埋点都是扁平结构，没有真实泄露路径；fail-secure 是好实践但属于代码健壮性而非合规性。
+11. **[v2 - 性能] launcher_closed 的 600ms sleep 改成 task.Wait(800) 带 timeout 同步等**（QA 报告 P2-2）—— 当前已可工作，是优化项。
+12. **[v2 - deploy] 移除 deploy.sh L67-71 永远不触发的 worker/ 守卫，或改成扫源码 cp 列表**（QA 报告 P2-1）—— "心安代码"无害，可下版本清理。
+
+---
+
 ### 待办：保存模型配置前增加连通性校验
 
 **用户反馈**：用户填了 API Key 和 Base URL 点保存，保存直接成功了，

@@ -9,3 +9,9 @@ skills/
 .agents/
 .kiro/
 .windsurf/
+
+# 本地一次性 smoke-test 临时脚本
+.test-*.sh
+
+# 任务 011：本地部署日志含 DASHBOARD_TOKEN 等敏感凭证，绝不入 git
+tasks/011-deployment-log.md

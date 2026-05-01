@@ -10,3 +10,5 @@ WORKFLOW.md
 RETROSPECTIVE-*.md
 .agents/
 files.zip
+worker/
+Test-*.ps1
