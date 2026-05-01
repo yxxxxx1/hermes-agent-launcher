@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Hermes 启动器 · 健康度看板</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    :root {
+      --bg: #FFF8F1;
+      --surface: #FFFFFF;
+      --surface-2: #FBF3E9;
+      --border: #F1E2CC;
+      --text: #2D2118;
+      --text-2: #7A6A5A;
+      --text-3: #A39482;
+      --accent: #E8854F;
+      --accent-soft: #FBE4D2;
+      --success: #5A9A6E;
+      --danger: #C7563D;
+      --radius: 14px;
+      --shadow: 0 1px 2px rgba(45, 33, 24, 0.04), 0 4px 16px rgba(45, 33, 24, 0.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 24px 64px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "SF Pro Rounded", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
+    .subtitle { color: var(--text-2); font-size: 13px; }
+
+    .toolbar {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      background: var(--surface); padding: 12px 14px; border-radius: var(--radius);
+      border: 1px solid var(--border); box-shadow: var(--shadow); margin-bottom: 20px;
+    }
+    .toolbar label { font-size: 13px; color: var(--text-2); }
+    select, input, button {
+      font: inherit; color: var(--text);
+      padding: 7px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    button.primary {
+      background: var(--accent); color: #FFFFFF; border-color: var(--accent); cursor: pointer;
+    }
+    button.primary:hover { filter: brightness(0.95); }
+    button.ghost { background: transparent; border-color: var(--border); cursor: pointer; }
+
+    .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 16px 18px;
+    }
+    .stat-label { font-size: 12px; color: var(--text-2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.6px; }
+    .stat-value { font-size: 28px; font-weight: 600; color: var(--text); }
+    .stat-sub { font-size: 12px; color: var(--text-3); margin-top: 4px; }
+
+    .panel {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 16px;
+    }
+    .panel h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; color: var(--text); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-2); font-weight: 500; font-size: 12px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .funnel-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
+    .funnel-label { width: 200px; font-size: 13px; color: var(--text); }
+    .funnel-bar { flex: 1; height: 14px; background: var(--surface-2); border-radius: 7px; overflow: hidden; }
+    .funnel-fill { height: 100%; background: var(--accent); border-radius: 7px; transition: width 0.3s; }
+    .funnel-count { width: 110px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; }
+
+    .trend-row { display: grid; grid-template-columns: 90px 1fr 70px 70px; gap: 10px; align-items: center; padding: 4px 0; font-size: 12px; }
+    .trend-bar { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+    .trend-fill { height: 100%; background: var(--accent); border-radius: 5px; }
+    .trend-day { color: var(--text-2); font-variant-numeric: tabular-nums; }
+
+    .empty { color: var(--text-3); font-style: italic; padding: 12px 0; font-size: 13px; }
+    .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
+    .footer { color: var(--text-3); font-size: 12px; margin-top: 32px; text-align: center; }
+    .pill { display: inline-block; background: var(--accent-soft); color: #B8521E; padding: 1px 8px; border-radius: 999px; font-size: 11px; }
+    .reason { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+
+    .config-banner {
+      background: var(--accent-soft); border: 1px solid #F4C99E; border-radius: var(--radius);
+      padding: 14px 16px; margin-bottom: 16px; color: #7A3F1A; font-size: 13px;
+    }
+    .config-banner code { background: rgba(255,255,255,0.6); padding: 1px 6px; border-radius: 4px; font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Hermes 启动器 · 健康度看板</h1>
+        <div class="subtitle">匿名遥测数据 · 仅供产品迭代参考 · <span class="pill">v1</span></div>
+      </div>
+      <div>
+        <button class="ghost" id="btnSettings">设置</button>
+        <button class="ghost" id="btnLogout">注销</button>
+      </div>
+    </header>
+
+    <div id="configBanner" class="config-banner" hidden>
+      还没有配置看板地址。点击右上角「设置」填入 Worker 地址和访问令牌(由部署者提供)。
+    </div>
+
+    <div class="toolbar">
+      <label>时间范围</label>
+      <select id="rangeSelect">
+        <option value="1">今天</option>
+        <option value="7" selected>近 7 天</option>
+        <option value="30">近 30 天</option>
+      </select>
+      <button class="primary" id="btnRefresh">刷新</button>
+      <span id="status" class="subtitle"></span>
+    </div>
+
+    <div id="errorBox" class="error" hidden></div>
+
+    <div class="grid-stats" id="statsGrid"></div>
+
+    <div class="panel">
+      <h2>转化漏斗</h2>
+      <div id="funnel"></div>
+    </div>
+
+    <div class="panel">
+      <h2>事件次数(按事件名)</h2>
+      <div id="eventsTable"></div>
+    </div>
+
+    <div class="panel">
+      <h2>失败原因 Top 10(脱敏后)</h2>
+      <div id="reasonsTable"></div>
+    </div>
+
+    <div class="panel">
+      <h2>近 7 天趋势(独立用户 / 总事件数)</h2>
+      <div id="trend"></div>
+    </div>
+
+    <div class="footer">
+      数据存储在 Cloudflare D1 · 看板访问需要 Bearer Token 鉴权 · 不公开访问
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  const STORAGE_ENDPOINT = 'hermes_dashboard_endpoint';
+  const STORAGE_TOKEN = 'hermes_dashboard_token';
+  // 任务 011 返工 F3：默认 Worker 端点（与 worker/wrangler.toml [[routes]] 同步）
+  const DEFAULT_ENDPOINT = 'https://telemetry.aisuper.win';
+  const FUNNEL_LABELS = {
+    launcher_opened: '打开启动器',
+    preflight_check: '环境检测通过',
+    hermes_install_started: '开始安装 Hermes',
+    hermes_install_completed: '安装完成',
+    webui_started: '启动 WebUI 成功',
+    first_conversation: '首次对话',
+  };
+
+  function getCfg() {
+    return {
+      endpoint: localStorage.getItem(STORAGE_ENDPOINT) || '',
+      token: localStorage.getItem(STORAGE_TOKEN) || '',
+    };
+  }
+
+  function setCfg(endpoint, token) {
+    localStorage.setItem(STORAGE_ENDPOINT, endpoint || '');
+    localStorage.setItem(STORAGE_TOKEN, token || '');
+  }
+
+  function clearCfg() {
+    localStorage.removeItem(STORAGE_ENDPOINT);
+    localStorage.removeItem(STORAGE_TOKEN);
+  }
+
+  function promptForCfg(existing) {
+    const endpoint = window.prompt(
+      'Worker 地址（默认 https://telemetry.aisuper.win，按回车即可）',
+      existing.endpoint || DEFAULT_ENDPOINT
+    );
+    if (endpoint === null) return null;
+    const token = window.prompt('访问令牌（Bearer Token）', existing.token || '');
+    if (token === null) return null;
+    return { endpoint: endpoint.trim().replace(/\/+$/, ''), token: token.trim() };
+  }
+
+  function ensureCfg() {
+    const cfg = getCfg();
+    if (!cfg.endpoint || !cfg.token) {
+      const next = promptForCfg(cfg);
+      if (next && next.endpoint && next.token) {
+        setCfg(next.endpoint, next.token);
+        document.getElementById('configBanner').hidden = true;
+        return next;
+      }
+      document.getElementById('configBanner').hidden = false;
+      return null;
+    }
+    document.getElementById('configBanner').hidden = true;
+    return cfg;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  function setStatus(text) {
+    document.getElementById('status').textContent = text || '';
+  }
+
+  function setError(msg) {
+    const box = document.getElementById('errorBox');
+    if (!msg) { box.hidden = true; box.textContent = ''; return; }
+    box.hidden = false;
+    box.textContent = msg;
+  }
+
+  function renderStats(data) {
+    const total = data.total_events || 0;
+    const users = data.unique_users || 0;
+    const ratio = total > 0 ? (total / Math.max(users, 1)).toFixed(1) : '0';
+    const html = [
+      ['独立用户', users, '范围内的去重 anonymous_id'],
+      ['总事件数', total, '所有事件求和'],
+      ['人均事件', ratio, '总事件 ÷ 独立用户'],
+      ['失败事件', (data.events_by_name || []).filter(function (e) { return /failed$|^unexpected_error$/.test(e.event_name); }).reduce(function (s, e) { return s + e.count; }, 0), '*_failed + unexpected_error'],
+    ].map(function (row) {
+      return '<div class="stat-card"><div class="stat-label">' + escapeHtml(row[0]) +
+        '</div><div class="stat-value">' + escapeHtml(row[1]) +
+        '</div><div class="stat-sub">' + escapeHtml(row[2]) + '</div></div>';
+    }).join('');
+    document.getElementById('statsGrid').innerHTML = html;
+  }
+
+  function renderFunnel(funnel) {
+    const order = ['launcher_opened', 'preflight_check', 'hermes_install_started', 'hermes_install_completed', 'webui_started', 'first_conversation'];
+    const top = Math.max.apply(null, order.map(function (k) { return funnel[k] || 0; }).concat([1]));
+    const html = order.map(function (k, i) {
+      const v = funnel[k] || 0;
+      const prev = i === 0 ? null : (funnel[order[i - 1]] || 0);
+      const ratio = prev ? Math.round((v / prev) * 100) + '%' : '—';
+      const pct = top > 0 ? Math.round((v / top) * 100) : 0;
+      return '<div class="funnel-row">' +
+        '<div class="funnel-label">' + escapeHtml(FUNNEL_LABELS[k] || k) + '</div>' +
+        '<div class="funnel-bar"><div class="funnel-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="funnel-count">' + v + ' 人 · ' + ratio + '</div>' +
+        '</div>';
+    }).join('');
+    document.getElementById('funnel').innerHTML = html;
+  }
+
+  function renderEventsTable(rows) {
+    if (!rows || rows.length === 0) {
+      document.getElementById('eventsTable').innerHTML = '<div class="empty">暂无数据</div>';
+      return;
+    }
+    const html = '<table><thead><tr><th>事件名</th><th class="num">次数</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        return '<tr><td><code>' + escapeHtml(r.event_name) + '</code></td><td class="num">' + r.count + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    document.getElementById('eventsTable').innerHTML = html;
+  }
+
+  function renderReasonsTable(rows) {
+    if (!rows || rows.length === 0) {
+      document.getElementById('reasonsTable').innerHTML = '<div class="empty">范围内没有失败事件</div>';
+      return;
+    }
+    const html = '<table><thead><tr><th>原因</th><th class="num">次数</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        return '<tr><td class="reason">' + escapeHtml(r.reason) + '</td><td class="num">' + r.count + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    document.getElementById('reasonsTable').innerHTML = html;
+  }
+
+  function renderTrend(rows) {
+    if (!rows || rows.length === 0) {
+      document.getElementById('trend').innerHTML = '<div class="empty">暂无数据</div>';
+      return;
+    }
+    const maxEvents = Math.max.apply(null, rows.map(function (r) { return r.events; }).concat([1]));
+    const html = rows.map(function (r) {
+      const pct = Math.round((r.events / maxEvents) * 100);
+      return '<div class="trend-row">' +
+        '<div class="trend-day">' + escapeHtml(r.day) + '</div>' +
+        '<div class="trend-bar"><div class="trend-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="num">' + r.users + ' 人</div>' +
+        '<div class="num">' + r.events + ' 件</div>' +
+        '</div>';
+    }).join('');
+    document.getElementById('trend').innerHTML = html;
+  }
+
+  async function loadDashboard() {
+    const cfg = ensureCfg();
+    if (!cfg) return;
+    const days = document.getElementById('rangeSelect').value;
+    setStatus('加载中…');
+    setError('');
+    try {
+      const url = cfg.endpoint + '/api/dashboard?days=' + encodeURIComponent(days);
+      const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + cfg.token } });
+      if (res.status === 401) {
+        setError('鉴权失败:Token 不正确或未配置。点击「设置」更新 Token。');
+        setStatus('');
+        return;
+      }
+      if (!res.ok) {
+        setError('请求失败:HTTP ' + res.status);
+        setStatus('');
+        return;
+      }
+      const data = await res.json();
+      renderStats(data);
+      renderFunnel(data.funnel || {});
+      renderEventsTable(data.events_by_name);
+      renderReasonsTable(data.top_failure_reasons);
+      renderTrend(data.daily_trend);
+      setStatus('已更新 · ' + new Date().toLocaleString('zh-CN'));
+    } catch (e) {
+      setError('网络异常:' + (e && e.message ? e.message : String(e)));
+      setStatus('');
+    }
+  }
+
+  document.getElementById('btnRefresh').addEventListener('click', loadDashboard);
+  document.getElementById('rangeSelect').addEventListener('change', loadDashboard);
+  document.getElementById('btnSettings').addEventListener('click', function () {
+    const next = promptForCfg(getCfg());
+    if (next) {
+      setCfg(next.endpoint, next.token);
+      loadDashboard();
+    }
+  });
+  document.getElementById('btnLogout').addEventListener('click', function () {
+    if (window.confirm('清除已保存的 Worker 地址和 Token?')) {
+      clearCfg();
+      location.reload();
+    }
+  });
+
+  if (ensureCfg()) {
+    loadDashboard();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+name = "hermes-telemetry"
+main = "telemetry-worker.js"
+compatibility_date = "2026-01-01"
+
+# D1 binding — fill database_id after `wrangler d1 create hermes-telemetry`
+[[d1_databases]]
+binding       = "DB"
+database_name = "hermes-telemetry"
+database_id   = "e16e25b1-0928-49f8-9ae5-544ac1c46380"
+
+# Secrets (set via `wrangler secret put`):
+#   DASHBOARD_TOKEN  — Bearer Token for /api/dashboard
+#   IP_HASH_SALT     — random string used when hashing client IPs
+
+[vars]
+ALLOWED_ORIGINS = "https://hermes.aisuper.win,https://hermes-dashboard.aisuper.win"
+
+# 任务 011 返工 F3：自定义域名（避免 *.workers.dev 子域不确定性）
+# 前置条件：aisuper.win zone 已在同一 Cloudflare 账号下（hermes.aisuper.win 已用 Pages）
+# wrangler deploy 时会自动在该 zone 创建 telemetry.aisuper.win 的 DNS 记录，PM 不需要手动操作
+[[routes]]
+pattern        = "telemetry.aisuper.win"
+custom_domain  = true
