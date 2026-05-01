@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.01.4'
+$script:LauncherVersion = 'Windows v2026.05.01.5'
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -748,7 +748,60 @@ def _posix_to_win_path(posix_path: str) -> str:
             }
         }
 
-        # P2c: Fix _extract_cwd_from_output to convert POSIX paths
+        # P2c: Fix CWD for WSL bash — Windows paths like C:\Users\YG must become
+        # /mnt/c/Users/YG before being passed to bash's `cd`.  Without Git Bash,
+        # hermes falls back to WSL bash which cannot handle Windows paths → exit 126.
+        # Approach: add _win_cwd_for_bash() helper, patch init_session and _wrap_command.
+        if ($src -notmatch '_win_cwd_for_bash') {
+            # Insert helper method before _quote_cwd_for_cd
+            $markerLine = NormalizePatternToFile $src '    def _quote_cwd_for_cd(cwd: str) -> str:'
+            if ($src.Contains($markerLine)) {
+                $helperCode = NormalizePatternToFile $src @'
+    def _win_cwd_for_bash(self, cwd: str) -> str:
+        """If using WSL bash on Windows, convert C:\\X to /mnt/c/X for cd."""
+        import re as _re
+        if platform.system() != "Windows" or not (len(cwd) >= 2 and cwd[1] == ":"):
+            return cwd
+        bash = os.environ.get("HERMES_GIT_BASH_PATH", "")
+        if bash and os.path.isfile(bash):
+            return cwd
+        m = _re.match(r'^([a-zA-Z]):[/\\](.*)$', cwd)
+        if m:
+            drive = m.group(1).lower()
+            rest = m.group(2).replace('\\', '/')
+            return f"/mnt/{drive}/{rest}".rstrip('/') or f"/mnt/{drive}"
+        return cwd
+
+    @staticmethod
+'@
+                # Handle both LF and CRLF for the @staticmethod + marker combination
+                $nl = if ($src.Contains("`r`n")) { "`r`n" } else { "`n" }
+                $staticMarker = "    @staticmethod" + $nl + $markerLine
+                if ($src.Contains($staticMarker)) {
+                    $src = $src.Replace($staticMarker, $helperCode + $nl + $markerLine)
+                    $changed = $true
+                }
+            }
+
+            # Patch init_session: convert CWD for WSL bash
+            $oldInit = NormalizePatternToFile $src '        _quoted_cwd = shlex.quote(self.cwd)'
+            $newInit = NormalizePatternToFile $src '        _quoted_cwd = shlex.quote(self._win_cwd_for_bash(self.cwd))'
+            if ($src.Contains($oldInit)) {
+                $src = $src.Replace($oldInit, $newInit)
+                $changed = $true
+            }
+
+            # Patch _wrap_command: convert CWD for WSL bash before quoting
+            $oldWrap = NormalizePatternToFile $src '        quoted_cwd = self._quote_cwd_for_cd(cwd)'
+            $newWrap = NormalizePatternToFile $src '        cwd = self._win_cwd_for_bash(cwd)
+        quoted_cwd = self._quote_cwd_for_cd(cwd)'
+            if ($src.Contains($oldWrap)) {
+                $src = $src.Replace($oldWrap, $newWrap)
+                $changed = $true
+            }
+        }
+
+        # P2d: Fix _extract_cwd_from_output to convert POSIX paths
         $oldExtract = NormalizePatternToFile $src '        if cwd_path:
             self.cwd = cwd_path'
         $newExtract = NormalizePatternToFile $src '        if cwd_path:
