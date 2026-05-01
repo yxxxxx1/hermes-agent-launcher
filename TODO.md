@@ -186,3 +186,74 @@ WPF 的 `ComboBox` 在 `IsEditable="True"` 模式下，内部的 `PART_EditableT
 **理想方案**：向 hermes-web-ui 上游反馈中文 Windows 兼容性问题，等修复后再升级。
 
 **优先级**：中。0.4.9 功能正常，暂不影响使用。
+
+---
+
+### 待办：HermesGuiLauncher.ps1 死代码 / 历史遗留元素清扫（v2 任务）
+
+**背景**：UI 全量地图扫描（见 `mockups/011-windows-ui/UI-MAP.md`）发现 3 处 UI 死代码和遗留元素，与功能无关、与视觉迁移可拆开做。建议下一个空档期单独立任务清掉，避免迁移视觉时把死代码也照搬一遍。
+
+**清扫清单**：
+
+1. **`InstallSettingsEditorBorder` 永远 collapsed**（`HermesGuiLauncher.ps1` L2790-2823）
+   - XAML 里写了完整的安装设置编辑器（数据目录 / 安装目录 / Git 分支 / NoVenv / SkipSetup）+ 保存/恢复按钮
+   - 全文 grep 所有 `Visibility` 设置点，**没有任何代码会把它设回 Visible**——它的入口已被 `Show-InstallLocationDialog` 替代
+   - 删除影响：纯减法，无功能影响
+2. **HomeModePanel 里 3 个 0×0 隐藏按钮**（`HermesGuiLauncher.ps1` L2867-2873）
+   - `StageModelButton`、`SecondaryActionButton`、`RefreshButton` 三个按钮 Width=0/Height=0/Visibility=Collapsed
+   - 仍然挂着 `Add_Click` 事件（L5234-5235、L5277），但 UI 上完全不可见
+   - 历史遗留：早期 Home Mode 多按钮设计的残骸
+   - 删除影响：要顺便把 L5233-5235、L5277 的事件绑定一并清掉
+3. **`Show-QuickCheckDialog` 函数没任何 UI 入口**（`HermesGuiLauncher.ps1` L4752）
+   - 函数定义存在；唯一调用点是 `Invoke-AppAction 'quick-check'`（L5110）
+   - 但全文 grep 没有任何按钮/菜单/事件会派发 `quick-check` action
+   - 函数本身也调用了 `MessageBox.Show`，与 Mac 端暖色调不兼容，迁移视觉前就该决定保留还是删除
+   - 删除影响：可整段删函数 + 删 Invoke-AppAction 的 case 分支
+
+**优先级**：低。无功能影响、无安全影响，是纯卫生项。建议在下一轮视觉迁移**之前**做，避免把死代码也按新视觉重做一遍。
+
+---
+
+### 待办：Windows 启动器视觉迁移 · 第二轮（Top-3 之外的所有项）
+
+**背景**：任务 011-windows-ui Top-3 视觉迁移只覆盖了 (1) Home Mode 已就绪页 (2) Install Mode 安装漏斗主路径 (3) 关于对话框 + 首次启动隐私 banner。其他 UI 状态、对话框、嵌入元素仍是旧版深蓝黑色风格，与 Mac 端 `LauncherPalette` 暖色调不一致。建议下一轮单独立任务统一迁移。
+
+完整地图见 `mockups/011-windows-ui/UI-MAP.md`，本条仅汇总未做的项 + 行号锚点。
+
+**主窗口残余状态**（`HermesGuiLauncher.ps1` 主 XAML 在 L2734-2906）：
+
+- **环境检测阻塞·缺 Git**（扫描时位于 L4889-4902）：失败摘要红色 + 主按钮"打开 Git 下载页"
+- **环境检测阻塞·目录不可写**（L4891）：失败摘要 + 主按钮"更改安装位置"
+- **环境检测阻塞·其他**（L4897）：失败摘要 + 主按钮"查看解决说明"
+- **环境检测阻塞·上次残留目录**（L4250 + 4251 残留提示弹窗）：自动清理失败时的弹窗 + 主面板阻塞态
+- **安装失败摘要**（L3568-3569 + L4860 主面板）：红色多行文本块（含退出码 + 最近日志）
+- **OpenClaw 迁移引导**（L4843、L2845 `OpenClawPostInstallBorder`）：独占主面板的迁移卡片 + 立即迁移 / 暂不迁移按钮
+
+**对话框残余项**：
+
+- **2.2 更多设置面板** — `Show-AdvancedPanel`（L3908）+ 通用对话框壳 `New-SubPanelWindow`（L3785）+ 分区构造器 `Add-SubPanelSection`（L3832）。780×560，6-7 个分区卡片。高级用户高频使用。
+- **2.3 更改安装位置对话框** — `Show-InstallLocationDialog`（L4539）。760×430，含 FolderBrowserDialog 调用 + Expander 高级选项。低频但表单密集。
+- **2.4 终端确认对话框** — `Confirm-TerminalAction`（L2308）。原生 `MessageBox.Show`。被 9 个操作复用，**几乎每个核心操作都会撞一次**。要换外观需自绘 WPF 对话框替代原生 MessageBox，工作量较大。
+- **2.5 卸载选择对话框** — L5212-5223 原生 `MessageBox.Show` YesNoCancel
+- **2.6 快速检测结果对话框** — `Show-QuickCheckDialog`（L4752）。原生 MessageBox。**当前无入口**，见死代码清扫条目，决定保留再迁移。
+- **2.7 WebUI 启动失败对话框** — `Stop-LaunchAsync` 内 L3258 原生 MessageBox YesNo
+- **2.8 残留目录提示对话框** — L4251 原生 MessageBox OKCancel + 配套 explorer 定位
+- **2.9 简易报错 / 校验对话框** — 共 8 处 `MessageBox.Show($message, 'Hermes 启动器')`：L14（单实例锁）、L5014/5026/5030/5034/5079/5093/5116/5128/5138（命令未找到 / 字段为空 / 顺序错）、L4986（显示安装位置）
+
+**嵌入元素残余项**：
+
+- **安装日志区** `LogSectionBorder`（L2880）：黑底 Consolas 终端风，最大高度 190。Install Mode 显示，Home Mode 隐藏。
+- **底部状态栏** `FooterBorder`（L2901）：单行状态文字。同样 Install Mode 显示、Home Mode 隐藏。
+- **进度指示**：当前没有专门的 ProgressBar 控件，进度=按钮 disable + 文本里的 ✓✓→○ 字符。视觉迁移时可考虑加专门的进度组件。
+
+**隐性 UX 问题**（顺手改建议）：
+
+- Home Mode 启动 webui 时，footer/log 都被 collapse，用户从点"开始使用"到浏览器打开（最长 1-2 分钟）只看到一个 disabled 按钮，**全程无进度反馈**。建议第二轮做 Home Mode 时增加一块"启动进度"区域。
+
+**优先级**：中。Top-3 上线后用户会感受到"主流程很 Mac，分支/对话框还是老样子"的割裂感。建议 Top-3 灰度稳定 1-2 周后立第二轮任务。
+
+---
+
+### 元任务提醒：视觉迁移整体节奏
+
+下一轮 Windows 端视觉迁移做完 Top-3 后，如果想做到全量统一，从上面"第二轮"那条扩展，按主窗口状态 → 高频对话框 → 低频对话框 → MessageBox 自绘的顺序推进；**MessageBox 自绘**（条目 2.4-2.9）成本高收益低，可一直放最后甚至不做。
