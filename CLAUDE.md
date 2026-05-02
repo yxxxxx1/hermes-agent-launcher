@@ -780,6 +780,26 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #39 venv python.exe 在 Windows 上是 stub launcher，Get-Process.Path 返回底层真 Python
+
+**触发条件**：用 PowerShell `Get-Process -Name python | Where { $_.Path -eq <venv-python-path> }` 找 venv 里跑的 python 进程
+
+**坑的表现**：永远找不到。venv 的 `python.exe` 是 stub launcher，OS 进程注册的 `ExecutablePath` 是底层真 Python（如 `Python313\python.exe`），不是 venv 的 stub 路径。`Get-Process.Path` 取的就是 OS 注册的那个，所以筛选必然失败。但 `CommandLine`（要走 WMI/CIM）里第一个 argv 仍然是 venv 路径，可以用来过滤。
+
+**实际后果**：`Stop-ExistingGateway` 漏杀 gateway worker python → worker 持有 `gateway.lock` 不释放 + 占着 8642 端口 → 下次 `hermes gateway run` 看到 "Gateway runtime lock is already held by another instance. Exiting." 自杀 → webui 显示"未连接"。三条触发链：fast path、`.env` watcher 触发的 `Restart-HermesGateway`、install 主路径都中招。
+
+**预防动作**：
+- 永远不要用 `Get-Process | Where { $_.Path -eq <venv-path> }` 过滤 venv 进程
+- 改用 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where { $_.CommandLine -like "*<venv-scripts-path>*" }`
+- ProcessId 字段是 `$_.ProcessId`（不是 `.Id`，那是 Get-Process 的字段）
+- 杀完后 `Start-Sleep 1500ms`（500ms 在慢盘上不够）让 OS 关闭 lock 文件句柄
+- `Remove-Item gateway.lock` 必须**最多 3 次重试**，最后一次失败要落 log（之前是 `-ErrorAction SilentlyContinue` 默默吞错，假装成功）
+- 与陷阱 #18 / #20 / #22 联动：lock 不释放、端口不释放、新 gateway 自杀，都是一条死路链
+
+**踩过日期**：2026-05-03
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

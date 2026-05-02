@@ -775,27 +775,47 @@ function Stop-ExistingGateway {
     # hermes venv.  If we only kill hermes.exe, the child python.exe keeps the
     # API port occupied, forcing the next gateway to bind a different port.
     # The webui hardcodes its upstream to port 8642, so port drift → "未连接".
-    $hermesVenvPython = Join-Path $env:LOCALAPPDATA 'hermes\hermes-agent\venv\Scripts\python.exe'
+    #
+    # IMPORTANT (陷阱 #39): venv python.exe on Windows is a stub launcher that
+    # re-execs the system Python. Get-Process.Path returns the resolved real
+    # interpreter (e.g. ...Programs\Python\Python313\python.exe), NOT the venv
+    # stub path.  So filtering by Path equality MISSES the actual gateway
+    # worker.  We must filter by CommandLine instead, via Win32_Process.
+    $venvScriptsPath = Join-Path $env:LOCALAPPDATA 'hermes\hermes-agent\venv\Scripts'
     try {
-        $pythonProcs = Get-Process -Name 'python' -ErrorAction SilentlyContinue |
-            Where-Object { $_.Path -eq $hermesVenvPython }
+        # CIM/WMI returns CommandLine which is stable across stub→real-python re-exec
+        $pythonProcs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -like "*$venvScriptsPath*" }
         foreach ($pp in $pythonProcs) {
             try {
-                Stop-Process -Id $pp.Id -Force -ErrorAction SilentlyContinue
-                Add-LogLine ("已停止 Gateway 子进程 python.exe（PID: {0}）" -f $pp.Id)
+                Stop-Process -Id $pp.ProcessId -Force -ErrorAction SilentlyContinue
+                Add-LogLine ("已停止 Gateway 子进程 python.exe（PID: {0}）" -f $pp.ProcessId)
                 $killed = $true
             } catch { }
         }
     } catch { }
     # Always remove gateway.lock — it may be stale from a crashed gateway.
     # Without cleanup, 'hermes gateway run' may fail reading the orphaned lock.
+    # Wait longer for OS to release lock file handle held by the killed worker.
+    # 500ms is too tight on slow disks; orphan python's file handle may still be
+    # in the kernel-side close path → Remove-Item below silently fails →
+    # next gateway start hits "lock is held" and suicides.
     $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
     if (Test-Path $lockFile) {
-        if ($killed) { Start-Sleep -Milliseconds 500 }
-        try {
-            Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
-            Add-LogLine "已清理 gateway.lock"
-        } catch { }
+        if ($killed) { Start-Sleep -Milliseconds 1500 }
+        # Retry up to 3 times in case lock is still held briefly after kill.
+        for ($i = 0; $i -lt 3; $i++) {
+            try {
+                Remove-Item $lockFile -Force -ErrorAction Stop
+                Add-LogLine "已清理 gateway.lock"
+                break
+            } catch {
+                if ($i -eq 2) {
+                    Add-LogLine ("gateway.lock 清理失败：{0}（新 gateway 可能拒绝启动）" -f $_.Exception.Message)
+                }
+                Start-Sleep -Milliseconds 500
+            }
+        }
     }
 }
 
