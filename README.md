@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.01.6.zip`: versioned Windows download linked by `index.html`
+- `Hermes-Windows-Launcher-v2026.05.02.1.zip`: versioned Windows download linked by `index.html` (任务 012：视觉系统首次向 Mac 端 LauncherPalette 对齐 — 米色暖橙浅色主题 + Quicksand 圆体英文 + Microsoft YaHei UI 中文 + 卡片式步骤指示器 + WebUI 启动 7 段进度可视化 + 失败摘要日志预览)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
@@ -129,7 +129,8 @@ Before publishing a Windows launcher update:
 3. Create both the versioned Windows ZIP and the stable fallback ZIP:
 
 ```powershell
-Compress-Archive -Path .\HermesGuiLauncher.ps1, .\Start-HermesGuiLauncher.cmd -DestinationPath .\downloads\Hermes-Windows-Launcher-vYYYY.MM.DD.N.zip -Force
+# 任务 012 起：必须把 assets\ 目录一起打包（含 Quicksand 字体），否则启动器英文字体回退到 Segoe UI，丢失暖橙圆体视觉。
+Compress-Archive -Path .\HermesGuiLauncher.ps1, .\Start-HermesGuiLauncher.cmd, .\assets -DestinationPath .\downloads\Hermes-Windows-Launcher-vYYYY.MM.DD.N.zip -Force
 Copy-Item .\downloads\Hermes-Windows-Launcher-vYYYY.MM.DD.N.zip .\downloads\Hermes-Windows-Launcher.zip -Force
 ```
 

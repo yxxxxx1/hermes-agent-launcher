@@ -699,6 +699,87 @@ Windows 端 (`HermesGuiLauncher.ps1`) 正在向这套风格迁移。
 
 ---
 
+### #34 Google Fonts 全面切换到 Variable Font，无 static 子目录可下
+
+**触发条件**：从 `https://github.com/google/fonts/tree/main/ofl/<family>` 下载 Regular/SemiBold/Bold 静态字重
+
+**坑的表现**：Google Fonts repo（2024 后）所有字体只发 Variable Font（`Family[wght].ttf`），没有 `static/` 子目录；jsDelivr 拒 50 MB 限制；ghproxy 经常超时；`@fontsource` v5+ 只发 woff/woff2（WPF 不支持）
+
+**预防动作**：工程师本地用 `fontTools.varLib.instancer` 把 VF 切静态字重 commit 进 repo：
+
+```python
+from fontTools.ttLib import TTFont
+from fontTools.varLib import instancer
+src = TTFont('Family-VF.ttf')
+for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
+    static = instancer.instantiateVariableFont(src, {'wght': w})
+    static.save(f'Family-{name}.ttf')
+```
+
+如果团队不想引入构建期 Python 依赖，可改用 IBM Plex Sans / Source Sans 3 等仍发 static 的字体。
+
+**踩过日期**：2026-05-02
+
+---
+
+### #35 WPF 直接加载 Variable Font 时默认 instance 不一定是 Regular
+
+**触发条件**：WPF 直接加载 `Family[wght].ttf` Variable Font，代码用 `FontWeight="Bold"` 等
+
+**坑的表现**：WPF GlyphTypeface 只读 default named instance，Quicksand VF 的 default 是 Light（weight=300）而非 Regular（400）。`FontWeight="Bold"` 触发 WPF synthetic bold（算法变形），实际字形比 Static-Bold 细很多
+
+**预防动作**：不直接用 VF，先切静态字重再 bundle（见 #34）。如果必须用 VF，在 PowerShell 里通过 `<Typography.Variations>` 显式指定 axis 值（WPF 4.8+ 支持但写法繁琐）
+
+**踩过日期**：2026-05-02
+
+---
+
+### #36 WPF FontFamily 多 family fallback 链字符串在 PS 启动器场景的稀有性
+
+**触发条件**：PowerShell WPF 应用 bundle 自定义字体 + 中英文混排 + `'file:///path/#FontA, FontB, FontC'` 多 family fallback 链
+
+**坑的表现**：`'file:///{base}/#FontA, FontB, FontC'` 字符串语法在 WPF 框架级理论支持，但 PS 字符串拼接 + 中文路径 percent-encode + WPF FontFamily parser 三方组合，缺乏在线案例。中间逗号在某些 WPF 版本可能被吃掉，需要 `\,` 转义
+
+**预防动作**：
+1. 第一次实现 / 中文路径用户 / Win10 vs Win11 都要单独肉眼看一遍渲染效果
+2. 真机首验通过前不假设可跨任务复用此模式
+3. 如发现 fallback 失败，退回到"FontFamily 资源 + 内容字面绑定单个 family"
+
+**踩过日期**：2026-05-02
+
+---
+
+### #37 交付报告里"对 PM 的部署提示"≠ "已经实现的自动化"（陷阱 #31 升级版）
+
+**触发条件**：工程师在交付报告里写"PM 发版时记得做 X"，但 README.md / deploy.sh / 打包脚本没改
+
+**坑的表现**：PM 健忘 / 交接 / 用旧文档 → X 没做 → 上线问题。**陷阱 #31 在 2026-05-01 沉淀，2026-05-02 立即第二次复刻**——只把规则写进 .md 文档不能阻止下次再踩
+
+**预防动作**：
+1. 任何对 PM 的"提示"必须**同时**反映为 README.md / deploy.sh / package.ps1 等可执行物的 commit 改动
+2. **不允许只写在 *.md 报告里就声称"已规避陷阱"**
+3. 工程师 5 层自检的"陷阱核对"必须明确分"动作沉淀"vs"动作未沉淀（只写在报告里）"，后者一律不算规避
+4. QA Agent 收到工程师"已规避陷阱 X"声明时，grep 对应 README/deploy.sh 验证沉淀，无证据即扣分
+
+**踩过日期**：2026-05-02（陷阱 #31 第二次复刻）
+
+---
+
+### #38 Refresh-Status debounce 与命令式 UI 切换的时序冲突
+
+**触发条件**：命令式 UI 调用（如 `Show-LaunchProgressCard`）与 `Refresh-Status` debounce 后异步执行（默认 300ms）同时发生
+
+**坑的表现**：命令式调用先生效，300ms 后 debounce 触发把命令式状态盖掉；反之命令式后调，debounce 跑完后盖掉命令式
+
+**预防动作**：
+1. 命令式 UI 切换前 stop pending `RefreshDebounceTimer`
+2. 或让命令式切换的控件状态由命令式调用方自管生命周期，不进 Refresh-Status 默认行为
+3. 概率低但属陷阱 #1（Dispatcher 异常）的姊妹场景，真机基本不触发，优先级 P1
+
+**踩过日期**：2026-05-02
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

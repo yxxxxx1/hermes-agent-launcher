@@ -32,7 +32,8 @@ EXPECTED_ZIP="downloads/Hermes-Windows-Launcher-v${LAUNCHER_VERSION}.zip"
 if [ ! -f "$EXPECTED_ZIP" ]; then
   echo "ERROR: $EXPECTED_ZIP not found." >&2
   echo "       Run this first (PowerShell):" >&2
-  echo "       Compress-Archive -Path .\\HermesGuiLauncher.ps1, .\\Start-HermesGuiLauncher.cmd -DestinationPath .\\$EXPECTED_ZIP -Force" >&2
+  # 任务 012 返工 F3：必须把 .\\assets 一起打包，否则字体丢失，启动器英文回退到 Segoe UI
+  echo "       Compress-Archive -Path .\\HermesGuiLauncher.ps1, .\\Start-HermesGuiLauncher.cmd, .\\assets -DestinationPath .\\$EXPECTED_ZIP -Force" >&2
   echo "       Copy-Item .\\$EXPECTED_ZIP .\\downloads\\Hermes-Windows-Launcher.zip -Force" >&2
   exit 1
 fi
@@ -44,6 +45,15 @@ if ! grep -q "Hermes-Windows-Launcher-v${LAUNCHER_VERSION}.zip" index.html; then
   exit 1
 fi
 echo "OK: index.html references v${LAUNCHER_VERSION}"
+
+# 任务 012 返工 F3 第四检：zip 必须含 Quicksand 字体（防字体漏打包导致 Mac 视觉对齐失败）
+if ! unzip -l "$EXPECTED_ZIP" 2>/dev/null | grep -q "Quicksand"; then
+  echo "ERROR: $EXPECTED_ZIP missing Quicksand fonts (assets/fonts/*.ttf)." >&2
+  echo "       Repack with .\\assets included:" >&2
+  echo "       Compress-Archive -Path .\\HermesGuiLauncher.ps1, .\\Start-HermesGuiLauncher.cmd, .\\assets -DestinationPath .\\$EXPECTED_ZIP -Force" >&2
+  exit 1
+fi
+echo "OK: $EXPECTED_ZIP contains Quicksand fonts"
 
 echo "=== Building deploy directory ==="
 
