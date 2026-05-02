@@ -22,7 +22,34 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.01.6'
+$script:LauncherVersion = 'Windows v2026.05.02.1'
+
+# P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
+$script:InstallSpinnerTimer  = $null
+$script:InstallSpinnerFrames = @()
+$script:InstallSpinnerIdx    = 0
+
+# === UI 字体路径（任务 012：bundle Quicksand 圆体 + 中文走 Microsoft YaHei UI） ===
+# WPF FontFamily 多 family fallback 链：英文/数字走 Quicksand，中文走 YaHei UI；字体目录缺失时退回纯系统字体。
+$script:UiFontFolder = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'assets\fonts' } else { Join-Path (Get-Location).Path 'assets\fonts' }
+$script:UiFontBundleAvailable = $false
+try {
+    if (Test-Path (Join-Path $script:UiFontFolder 'Quicksand-Regular.ttf')) {
+        $script:UiFontBundleAvailable = $true
+    }
+} catch { $script:UiFontBundleAvailable = $false }
+
+if ($script:UiFontBundleAvailable) {
+    # WPF 字体路径写法：file:///D:/.../assets/fonts/#Quicksand（最后必须有 / 再 #FamilyName）
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $folderWithSep = if ($script:UiFontFolder.EndsWith($sep)) { $script:UiFontFolder } else { $script:UiFontFolder + $sep }
+    $folderUri = ([System.Uri]::new($folderWithSep)).AbsoluteUri
+    $script:UiFontFamily = "$folderUri#Quicksand, Microsoft YaHei UI, Segoe UI Variable Display, Segoe UI"
+} else {
+    $script:UiFontFamily = 'Microsoft YaHei UI, Segoe UI Variable Display, Segoe UI'
+}
+$script:UiMonoFontFamily = 'JetBrains Mono, Cascadia Code, Consolas, Microsoft YaHei UI'
+
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
@@ -617,7 +644,8 @@ function Install-HermesWebUi {
 function Test-HermesWebUiHealth {
     try {
         $url = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)/health"
-        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        # 任务 012 P1-3：1s timeout — 本地 loopback 足够，减少 UI 线程阻塞时间
+        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
         return [pscustomobject]@{
             Healthy = $true
             Url     = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)"
@@ -2740,54 +2768,427 @@ $defaults = Get-HermesDefaults
         MinHeight="720"
         MinWidth="960"
         WindowStartupLocation="CenterScreen"
-        Background="#0B1220"
-        Foreground="#E2E8F0">
-    <Grid Margin="20">
+        Background="#F2F0E8"
+        Foreground="#262621"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
+    <Window.Resources>
+        <!-- ========== Color Tokens (Mac LauncherPalette 映射，任务 012) ========== -->
+        <SolidColorBrush x:Key="BgAppBrush" Color="#F2F0E8"/>
+        <SolidColorBrush x:Key="BgAppSecondaryBrush" Color="#EBE8E0"/>
+        <SolidColorBrush x:Key="BgGlowBrush" Color="#F4C98A"/>
+        <SolidColorBrush x:Key="SurfacePrimaryBrush" Color="#FAF8F2"/>
+        <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="#F4F0E8"/>
+        <SolidColorBrush x:Key="SurfaceTertiaryBrush" Color="#F0E8DE"/>
+        <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#F2E6D6"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#262621"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#5E594F"/>
+        <SolidColorBrush x:Key="TextTertiaryBrush" Color="#897F75"/>
+        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FCFCF7"/>
+        <SolidColorBrush x:Key="AccentPrimaryBrush" Color="#D9772B"/>
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="#F2B56B"/>
+        <SolidColorBrush x:Key="AccentDeepBrush" Color="#A85420"/>
+        <SolidColorBrush x:Key="AccentTintBrush" Color="#1AD9772B"/>
+        <SolidColorBrush x:Key="AccentBorderBrush" Color="#52A85420"/>
+        <SolidColorBrush x:Key="SuccessBrush" Color="#4F8F7A"/>
+        <SolidColorBrush x:Key="SuccessSoftBrush" Color="#DBEDE5"/>
+        <SolidColorBrush x:Key="WarningBrush" Color="#C78A3A"/>
+        <SolidColorBrush x:Key="WarningSoftBrush" Color="#F4E8D2"/>
+        <SolidColorBrush x:Key="DangerBrush" Color="#C25E52"/>
+        <SolidColorBrush x:Key="DangerSoftBrush" Color="#F7E0D8"/>
+        <SolidColorBrush x:Key="LineSoftBrush" Color="#0F000000"/>
+        <SolidColorBrush x:Key="LineSofterBrush" Color="#0A000000"/>
+        <SolidColorBrush x:Key="LogBgBrush" Color="#1F1A14"/>
+        <SolidColorBrush x:Key="LogTextBrush" Color="#EBE8E0"/>
+
+        <LinearGradientBrush x:Key="AccentGradientBrush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#E58236" Offset="0"/>
+            <GradientStop Color="#D9772B" Offset="0.6"/>
+            <GradientStop Color="#C76819" Offset="1"/>
+        </LinearGradientBrush>
+
+        <LinearGradientBrush x:Key="ProgressFillBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#A85420" Offset="0"/>
+            <GradientStop Color="#D9772B" Offset="0.6"/>
+            <GradientStop Color="#F2B56B" Offset="1"/>
+        </LinearGradientBrush>
+
+        <!-- ========== Font ========== -->
+        <FontFamily x:Key="UiFont">$($script:UiFontFamily)</FontFamily>
+        <FontFamily x:Key="MonoFont">$($script:UiMonoFontFamily)</FontFamily>
+
+        <!-- ========== Default Styles ========== -->
+        <Style TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+        </Style>
+
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="14.5"/>
+            <Setter Property="Foreground" Value="{StaticResource TextOnAccentBrush}"/>
+            <Setter Property="Background" Value="{StaticResource AccentGradientBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="22,12"/>
+            <Setter Property="MinHeight" Value="44"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}"
+                                CornerRadius="12" Padding="{TemplateBinding Padding}"
+                                BorderBrush="Transparent" BorderThickness="0">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#A85420" Opacity="0.32" BlurRadius="14" ShadowDepth="3"/>
+                            </Border.Effect>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="{StaticResource SurfaceTertiaryBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextTertiaryBrush}"/>
+                                <Setter TargetName="ButtonBorder" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect Color="#000000" Opacity="0" BlurRadius="0" ShadowDepth="0"/>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SecondaryButtonStyle" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentDeepBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="{StaticResource AccentDeepBrush}"/>
+            <Setter Property="BorderThickness" Value="1.5"/>
+            <Setter Property="Padding" Value="20,10"/>
+            <Setter Property="MinHeight" Value="42"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="11"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TextButtonStyle" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="AboutButtonStyle" TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="MinHeight" Value="34"/>
+        </Style>
+
+        <Style x:Key="LogSubButtonStyle" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="9,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#33EBE8E0"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#EBE8E0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="WarmProgressBarStyle" TargetType="ProgressBar">
+            <Setter Property="Background" Value="{StaticResource SurfaceTertiaryBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource ProgressFillBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Height" Value="7"/>
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Maximum" Value="100"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="999" ClipToBounds="True">
+                            <Grid>
+                                <Border x:Name="PART_Track"/>
+                                <Border x:Name="PART_Indicator" HorizontalAlignment="Left"
+                                        Background="{TemplateBinding Foreground}" CornerRadius="999"/>
+                            </Grid>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0">
-            <Border Padding="20,16" CornerRadius="20" Background="#111C33" BorderBrush="#24324F" BorderThickness="1">
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="34,28,34,0">
+            <DockPanel LastChildFill="True">
+                <Button x:Name="AboutButton" DockPanel.Dock="Right" VerticalAlignment="Center"
+                        Style="{StaticResource AboutButtonStyle}" Content="关于"/>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="BrandTitleText" Text="Hermes Agent" FontSize="28" FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <TextBlock x:Name="BrandSubtitleText" Margin="0,4,0,0" FontSize="12.5"
+                               Foreground="{StaticResource TextTertiaryBrush}"
+                               Text="为中文用户准备的图形启动器"/>
+                </StackPanel>
+            </DockPanel>
+
+            <Border x:Name="TelemetryConsentBanner" Margin="0,16,0,0" Padding="14,10"
+                    CornerRadius="12"
+                    Background="{StaticResource SurfaceSecondaryBrush}"
+                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                    Visibility="Collapsed">
                 <DockPanel LastChildFill="True">
-                    <Button x:Name="AboutButton" DockPanel.Dock="Right" Padding="12,4" Background="Transparent" BorderBrush="#475569" BorderThickness="1" Foreground="#E2E8F0" Content="关于"/>
-                    <TextBlock FontSize="28" FontWeight="Bold" Foreground="#E2E8F0" Text="Hermes Agent" VerticalAlignment="Center"/>
-                </DockPanel>
-            </Border>
-            <Border x:Name="TelemetryConsentBanner" Margin="0,10,0,0" Padding="14,10" CornerRadius="12" Background="#1E2C45" BorderBrush="#2D3F5F" BorderThickness="1" Visibility="Collapsed">
-                <DockPanel LastChildFill="True">
-                    <Button x:Name="TelemetryConsentDismissButton" DockPanel.Dock="Right" Padding="10,4" Background="Transparent" Foreground="#CBD5E1" BorderBrush="#475569" BorderThickness="1" Content="✓ 知道了"/>
-                    <TextBlock VerticalAlignment="Center" Foreground="#CBD5E1" FontSize="12" TextWrapping="Wrap"
-                               Text="我们会上报匿名安装数据帮助改进产品，可在「关于」里关闭。"/>
+                    <Button x:Name="TelemetryConsentDismissButton" DockPanel.Dock="Right"
+                            Style="{StaticResource TextButtonStyle}" Content="知道了"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="22" Height="22" CornerRadius="11"
+                                Background="{StaticResource AccentTintBrush}" Margin="0,0,12,0">
+                            <TextBlock Text="i" FontFamily="Times New Roman" FontStyle="Italic" FontSize="13"
+                                       FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{StaticResource AccentDeepBrush}"/>
+                        </Border>
+                        <TextBlock VerticalAlignment="Center" FontSize="12.5" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   Text="我们会上报匿名安装数据帮助改进产品，可在「关于」里关闭。"/>
+                    </StackPanel>
                 </DockPanel>
             </Border>
         </StackPanel>
 
-        <Grid Grid.Row="1" Margin="0,18,0,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <!-- Main Content -->
+        <ScrollViewer Grid.Row="1" Margin="34,18,34,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid>
+                <!-- ========== Install Mode ========== -->
+                <Border x:Name="InstallModePanel" Visibility="Visible">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.4*"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="1*"/>
+                        </Grid.ColumnDefinitions>
 
-            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <Grid>
-                    <Border x:Name="InstallModePanel" Visibility="Visible" Padding="24" CornerRadius="20" Background="#101A2C" BorderBrush="#22314D" BorderThickness="1">
-                        <StackPanel>
-                            <Border x:Name="InstallPathCardBorder" Padding="18" CornerRadius="18" Background="#111827" BorderBrush="#22314D" BorderThickness="1">
+                        <StackPanel Grid.Column="0">
+                            <Border x:Name="InstallTaskCardBorder"
+                                    Padding="28,26"
+                                    CornerRadius="16"
+                                    Background="{StaticResource SurfacePrimaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#3C2814" Opacity="0.06" BlurRadius="18" ShadowDepth="3"/>
+                                </Border.Effect>
                                 <StackPanel>
-                                    <TextBlock FontSize="18" FontWeight="SemiBold" Text="安装位置确认"/>
-                                    <TextBlock x:Name="InstallPathSummaryText" Margin="0,10,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"/>
-                                    <TextBlock x:Name="InstallLocationNoticeText" Margin="0,10,0,0" Foreground="#94A3B8" TextWrapping="Wrap" Text="安装完成后，可在“更多设置”中查看或调整。"/>
-                                    <WrapPanel Margin="0,16,0,0">
-                                        <Button x:Name="ChangeInstallLocationButton" Margin="0,0,10,10" Padding="14,10" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="更改安装位置"/>
-                                        <Button x:Name="ConfirmInstallLocationButton" Margin="0,0,10,10" Padding="14,10" Background="#1E293B" Foreground="#F8FAFC" BorderBrush="#475569" Content="确认安装位置"/>
+                                    <Border x:Name="InstallTaskStepTagBorder" HorizontalAlignment="Left"
+                                            CornerRadius="999" Padding="10,4"
+                                            Background="{StaticResource AccentTintBrush}">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Border Width="16" Height="16" CornerRadius="8"
+                                                    Background="{StaticResource AccentPrimaryBrush}" Margin="0,0,7,0">
+                                                <TextBlock x:Name="InstallTaskStepTagNum" Text="1" FontSize="10"
+                                                           FontWeight="Bold"
+                                                           Foreground="{StaticResource TextOnAccentBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <TextBlock x:Name="InstallTaskStepTagText" Text="环境检测"
+                                                       FontSize="11" FontWeight="Bold"
+                                                       Foreground="{StaticResource AccentDeepBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock x:Name="InstallTaskTitleText" Margin="0,16,0,0"
+                                               FontSize="26" FontWeight="Bold" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               Text="环境检测"/>
+                                    <TextBlock x:Name="InstallTaskBodyText" Margin="0,12,0,0"
+                                               FontSize="13.5" TextWrapping="Wrap" LineHeight="20"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Text="启动器会先自动检查环境，再执行安装；失败时会直接告诉你卡在哪一步。"/>
+
+                                    <Border x:Name="InstallCurrentStageBorder" Margin="0,16,0,0"
+                                            Padding="14,11" CornerRadius="11"
+                                            Background="{StaticResource SurfaceSecondaryBrush}"
+                                            BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                            Visibility="Collapsed">
+                                        <DockPanel LastChildFill="True">
+                                            <TextBlock x:Name="InstallCurrentStageDetail" DockPanel.Dock="Right"
+                                                       FontSize="11.5"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       VerticalAlignment="Center"/>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Ellipse Width="7" Height="7" Margin="0,0,10,0"
+                                                         Fill="{StaticResource AccentPrimaryBrush}"/>
+                                                <TextBlock x:Name="InstallCurrentStageText"
+                                                           FontSize="13" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+
+                                    <ProgressBar x:Name="InstallProgressBar" Margin="0,12,0,0"
+                                                 Style="{StaticResource WarmProgressBarStyle}"
+                                                 Value="0" Visibility="Collapsed"/>
+
+                                    <UniformGrid x:Name="InstallSubStepsPanel" Margin="0,14,0,0"
+                                                 Rows="1" Columns="4" Visibility="Collapsed">
+                                        <Border x:Name="InstallSubStep1Border" Margin="0,0,5,0" CornerRadius="9"
+                                                Background="{StaticResource SurfaceSecondaryBrush}"
+                                                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="InstallSubStep1Text" Text="环境检查"
+                                                       Margin="6,8" TextAlignment="Center"
+                                                       FontSize="11" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"/>
+                                        </Border>
+                                        <Border x:Name="InstallSubStep2Border" Margin="2.5,0,2.5,0" CornerRadius="9"
+                                                Background="{StaticResource SurfaceSecondaryBrush}"
+                                                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="InstallSubStep2Text" Text="下载依赖"
+                                                       Margin="6,8" TextAlignment="Center"
+                                                       FontSize="11" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"/>
+                                        </Border>
+                                        <Border x:Name="InstallSubStep3Border" Margin="2.5,0,2.5,0" CornerRadius="9"
+                                                Background="{StaticResource SurfaceSecondaryBrush}"
+                                                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="InstallSubStep3Text" Text="安装组件"
+                                                       Margin="6,8" TextAlignment="Center"
+                                                       FontSize="11" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"/>
+                                        </Border>
+                                        <Border x:Name="InstallSubStep4Border" Margin="5,0,0,0" CornerRadius="9"
+                                                Background="{StaticResource SurfaceSecondaryBrush}"
+                                                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="InstallSubStep4Text" Text="启动服务"
+                                                       Margin="6,8" TextAlignment="Center"
+                                                       FontSize="11" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"/>
+                                        </Border>
+                                    </UniformGrid>
+
+                                    <WrapPanel Margin="0,20,0,0">
+                                        <Button x:Name="StartInstallPageButton" Margin="0,0,10,8"
+                                                Style="{StaticResource PrimaryButtonStyle}" Content="开始安装"/>
+                                        <Button x:Name="InstallRequirementsButton" Margin="0,0,10,8"
+                                                Style="{StaticResource SecondaryButtonStyle}" Content="查看安装要求"/>
+                                        <Button x:Name="InstallRefreshButton" Margin="0,0,0,8"
+                                                Style="{StaticResource TextButtonStyle}" Content="刷新状态"/>
                                     </WrapPanel>
                                 </StackPanel>
                             </Border>
 
-                            <Border x:Name="InstallSettingsEditorBorder" Margin="0,16,0,0" Padding="18" CornerRadius="18" Background="#111827" BorderBrush="#22314D" BorderThickness="1" Visibility="Collapsed">
+                            <Border x:Name="InstallPathCardBorder" Margin="0,16,0,0"
+                                    Padding="26,22" CornerRadius="16"
+                                    Background="{StaticResource SurfacePrimaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                    Visibility="Collapsed">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#3C2814" Opacity="0.06" BlurRadius="18" ShadowDepth="3"/>
+                                </Border.Effect>
+                                <StackPanel>
+                                    <Border HorizontalAlignment="Left" CornerRadius="999" Padding="10,4"
+                                            Background="{StaticResource AccentTintBrush}">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Border Width="16" Height="16" CornerRadius="8"
+                                                    Background="{StaticResource AccentPrimaryBrush}" Margin="0,0,7,0">
+                                                <TextBlock Text="2" FontSize="10" FontWeight="Bold"
+                                                           Foreground="{StaticResource TextOnAccentBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <TextBlock Text="位置确认" FontSize="11" FontWeight="Bold"
+                                                       Foreground="{StaticResource AccentDeepBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock Margin="0,16,0,0" FontSize="22" FontWeight="Bold"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               Text="确认安装位置"/>
+                                    <TextBlock Margin="0,10,0,0" FontSize="13" TextWrapping="Wrap" LineHeight="19"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Text="Hermes 会装在下面这两个位置。多数人保持默认就好；如果 C 盘空间紧张可以改到 D 盘。"/>
+                                    <TextBlock x:Name="InstallPathSummaryText" Margin="0,16,0,0"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="12"
+                                               Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="InstallLocationNoticeText" Margin="0,12,0,0" FontSize="12"
+                                               Foreground="{StaticResource TextTertiaryBrush}" TextWrapping="Wrap"
+                                               Text="安装完成后，可在“更多设置”中查看或调整。"/>
+                                    <WrapPanel Margin="0,18,0,0">
+                                        <Button x:Name="ConfirmInstallLocationButton" Margin="0,0,10,8"
+                                                Style="{StaticResource PrimaryButtonStyle}" Content="位置已确认，继续"/>
+                                        <Button x:Name="ChangeInstallLocationButton" Margin="0,0,10,8"
+                                                Style="{StaticResource SecondaryButtonStyle}" Content="更改安装位置"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 死代码（保留 collapsed） -->
+                            <Border x:Name="InstallSettingsEditorBorder" Margin="0,16,0,0"
+                                    Padding="18" CornerRadius="14"
+                                    Background="{StaticResource SurfaceSecondaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                    Visibility="Collapsed">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="96"/>
@@ -2799,108 +3200,439 @@ $defaults = Get-HermesDefaults
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-
-                                    <TextBlock Grid.Row="0" VerticalAlignment="Center" Foreground="#CBD5E1" Text="数据目录"/>
-                                    <TextBox x:Name="HermesHomeTextBox" Grid.Row="0" Grid.Column="1" Margin="10,0,0,10" Padding="8" Background="#0F172A" Foreground="White" BorderBrush="#334155"/>
-
-                                    <TextBlock Grid.Row="1" VerticalAlignment="Center" Foreground="#CBD5E1" Text="安装目录"/>
-                                    <TextBox x:Name="InstallDirTextBox" Grid.Row="1" Grid.Column="1" Margin="10,0,0,10" Padding="8" Background="#0F172A" Foreground="White" BorderBrush="#334155"/>
-
-                                    <TextBlock Grid.Row="2" VerticalAlignment="Center" Foreground="#CBD5E1" Text="Git 分支"/>
-                                    <TextBox x:Name="BranchTextBox" Grid.Row="2" Grid.Column="1" Margin="10,0,0,10" Padding="8" Background="#0F172A" Foreground="White" BorderBrush="#334155" Text="main"/>
-
+                                    <TextBlock Grid.Row="0" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}" Text="数据目录"/>
+                                    <TextBox x:Name="HermesHomeTextBox" Grid.Row="0" Grid.Column="1"
+                                             Margin="10,0,0,8" Padding="8"
+                                             Background="{StaticResource SurfacePrimaryBrush}"
+                                             Foreground="{StaticResource TextPrimaryBrush}"
+                                             BorderBrush="{StaticResource LineSoftBrush}"/>
+                                    <TextBlock Grid.Row="1" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}" Text="安装目录"/>
+                                    <TextBox x:Name="InstallDirTextBox" Grid.Row="1" Grid.Column="1"
+                                             Margin="10,0,0,8" Padding="8"
+                                             Background="{StaticResource SurfacePrimaryBrush}"
+                                             Foreground="{StaticResource TextPrimaryBrush}"
+                                             BorderBrush="{StaticResource LineSoftBrush}"/>
+                                    <TextBlock Grid.Row="2" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}" Text="Git 分支"/>
+                                    <TextBox x:Name="BranchTextBox" Grid.Row="2" Grid.Column="1"
+                                             Margin="10,0,0,8" Padding="8"
+                                             Background="{StaticResource SurfacePrimaryBrush}"
+                                             Foreground="{StaticResource TextPrimaryBrush}"
+                                             BorderBrush="{StaticResource LineSoftBrush}" Text="main"/>
                                     <StackPanel Grid.Row="3" Grid.Column="1" Margin="10,0,0,0">
                                         <StackPanel Orientation="Horizontal">
-                                            <CheckBox x:Name="NoVenvCheckBox" Margin="0,0,14,0" VerticalAlignment="Center" Foreground="#CBD5E1" Content="NoVenv"/>
-                                            <CheckBox x:Name="SkipSetupCheckBox" VerticalAlignment="Center" Foreground="#CBD5E1" IsChecked="True" Content="安装后不进入官方 setup"/>
+                                            <CheckBox x:Name="NoVenvCheckBox" Margin="0,0,14,0" VerticalAlignment="Center" Content="NoVenv"/>
+                                            <CheckBox x:Name="SkipSetupCheckBox" VerticalAlignment="Center"
+                                                      IsChecked="True" Content="安装后不进入官方 setup"/>
                                         </StackPanel>
-                                        <WrapPanel Margin="0,14,0,0">
-                                            <Button x:Name="SaveInstallSettingsButton" Margin="0,0,10,10" Padding="14,10" Background="#1E293B" Foreground="#F8FAFC" BorderBrush="#475569" Content="保存更改"/>
-                                            <Button x:Name="ResetInstallSettingsButton" Margin="0,0,10,10" Padding="14,10" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="恢复默认"/>
+                                        <WrapPanel Margin="0,12,0,0">
+                                            <Button x:Name="SaveInstallSettingsButton" Margin="0,0,10,8"
+                                                    Style="{StaticResource SecondaryButtonStyle}" Content="保存更改"/>
+                                            <Button x:Name="ResetInstallSettingsButton" Margin="0,0,10,8"
+                                                    Style="{StaticResource TextButtonStyle}" Content="恢复默认"/>
                                         </WrapPanel>
                                     </StackPanel>
                                 </Grid>
                             </Border>
 
-                            <Border x:Name="InstallTaskCardBorder" Margin="0,16,0,0" Padding="18" CornerRadius="18" Background="#111827" BorderBrush="#22314D" BorderThickness="1">
+                            <Border x:Name="InstallProgressCardBorder" Margin="0,16,0,0"
+                                    Padding="22,20" CornerRadius="16"
+                                    Background="{StaticResource SurfaceSecondaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
                                 <StackPanel>
-                                    <TextBlock x:Name="InstallTaskTitleText" FontSize="24" FontWeight="SemiBold" Text="安装 Hermes"/>
-                                    <TextBlock x:Name="InstallTaskBodyText" Margin="0,10,0,0" Foreground="#CBD5E1" TextWrapping="Wrap" Text="启动器会先自动检查环境，再执行安装；失败时会直接告诉你卡在哪一步。"/>
-                                    <WrapPanel Margin="0,18,0,0">
-                                        <Button x:Name="StartInstallPageButton" Margin="0,0,10,10" Padding="18,10" FontWeight="SemiBold" Background="#22C55E" Foreground="#04110A" BorderBrush="#22C55E" Content="开始安装"/>
-                                        <Button x:Name="InstallRequirementsButton" Margin="0,0,10,10" Padding="14,10" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="查看安装要求"/>
-                                        <Button x:Name="InstallRefreshButton" Margin="0,0,10,10" Padding="14,10" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="刷新状态"/>
-                                    </WrapPanel>
+                                    <TextBlock x:Name="InstallProgressTitleText" FontSize="14" FontWeight="Bold"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Text="检测结果"/>
+                                    <TextBlock x:Name="InstallProgressText" Margin="0,12,0,0" FontSize="13"
+                                               TextWrapping="Wrap" LineHeight="19"
+                                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    <TextBlock x:Name="InstallFailureSummaryText" Margin="0,14,0,0" FontSize="13"
+                                               TextWrapping="Wrap" LineHeight="20"
+                                               Foreground="{StaticResource DangerBrush}"
+                                               Visibility="Collapsed"/>
+                                    <Border x:Name="InstallFailureLogPreviewBorder" Margin="0,14,0,0"
+                                            Padding="14,12" CornerRadius="11"
+                                            Background="{StaticResource LogBgBrush}"
+                                            Visibility="Collapsed">
+                                        <StackPanel>
+                                            <DockPanel LastChildFill="True">
+                                                <Button x:Name="InstallFailureLogCopyButton" DockPanel.Dock="Right"
+                                                        Style="{StaticResource LogSubButtonStyle}" Content="复制错误"/>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Ellipse Width="6" Height="6" Margin="0,0,8,0"
+                                                             Fill="{StaticResource DangerBrush}"/>
+                                                    <TextBlock Text="最近日志 · 末尾 8 行"
+                                                               FontSize="11" FontWeight="Bold"
+                                                               Foreground="#EBE8E0" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </DockPanel>
+                                            <TextBox x:Name="InstallFailureLogPreviewText" Margin="0,10,0,0"
+                                                     Background="Transparent" Foreground="#EBE8E0"
+                                                     BorderThickness="0" IsReadOnly="True"
+                                                     FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                                     TextWrapping="NoWrap"
+                                                     VerticalScrollBarVisibility="Auto"
+                                                     HorizontalScrollBarVisibility="Auto"
+                                                     MaxHeight="120"/>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </Border>
 
-                            <Border x:Name="InstallProgressCardBorder" Margin="0,16,0,0" Padding="18" CornerRadius="18" Background="#111827" BorderBrush="#22314D" BorderThickness="1">
+                            <Border x:Name="OpenClawPostInstallBorder" Margin="0,16,0,0"
+                                    Padding="22,20" CornerRadius="16"
+                                    Background="{StaticResource SurfacePrimaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                    Visibility="Collapsed">
                                 <StackPanel>
-                                    <TextBlock x:Name="InstallProgressTitleText" FontSize="18" FontWeight="SemiBold" Text="安装进度"/>
-                                    <TextBlock x:Name="InstallProgressText" Margin="0,12,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"/>
-                                    <TextBlock x:Name="InstallFailureSummaryText" Margin="0,16,0,0" Foreground="#FCA5A5" TextWrapping="Wrap" Visibility="Collapsed"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border x:Name="OpenClawPostInstallBorder" Margin="0,16,0,0" Padding="18" CornerRadius="18" Background="#111827" BorderBrush="#22314D" BorderThickness="1" Visibility="Collapsed">
-                                <StackPanel>
-                                    <TextBlock FontSize="24" FontWeight="SemiBold" Text="检测到旧版 OpenClaw 配置"/>
-                                    <TextBlock x:Name="OpenClawPostInstallText" Margin="0,10,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"
+                                    <TextBlock FontSize="22" FontWeight="Bold"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               Text="检测到旧版 OpenClaw 配置"/>
+                                    <TextBlock x:Name="OpenClawPostInstallText" Margin="0,10,0,0" FontSize="13"
+                                               TextWrapping="Wrap" LineHeight="19"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
                                                Text="Hermes 支持导入旧版 OpenClaw 配置。你可以现在迁移，也可以先跳过，之后再从“更多设置”里手动迁移。"/>
                                     <WrapPanel Margin="0,18,0,0">
-                                        <Button x:Name="OpenClawImportButton" Margin="0,0,10,10" Padding="18,10" FontWeight="SemiBold" Background="#22C55E" Foreground="#04110A" BorderBrush="#22C55E" Content="立即迁移"/>
-                                        <Button x:Name="OpenClawSkipButton" Margin="0,0,10,10" Padding="14,10" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="暂不迁移"/>
+                                        <Button x:Name="OpenClawImportButton" Margin="0,0,10,8"
+                                                Style="{StaticResource PrimaryButtonStyle}" Content="立即迁移"/>
+                                        <Button x:Name="OpenClawSkipButton" Margin="0,0,10,8"
+                                                Style="{StaticResource SecondaryButtonStyle}" Content="暂不迁移"/>
                                     </WrapPanel>
                                 </StackPanel>
                             </Border>
-
                         </StackPanel>
-                    </Border>
 
-                    <Grid x:Name="HomeModePanel" Visibility="Collapsed">
-                        <Border Padding="30" CornerRadius="20" Background="#101A2C" BorderBrush="#22314D" BorderThickness="1">
-                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <TextBlock x:Name="StatusHeadlineText" FontSize="30" FontWeight="SemiBold" Text="已就绪" TextAlignment="Center" HorizontalAlignment="Center"/>
-                                <TextBlock x:Name="StatusBodyText" Margin="0,12,0,0" Foreground="#AFC3E3" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center"/>
-                                <WrapPanel Margin="0,24,0,0" HorizontalAlignment="Center">
-                                    <Button x:Name="PrimaryActionButton" Margin="0,0,12,12" Padding="20,12" MinWidth="140" FontWeight="SemiBold" Background="#22C55E" Foreground="#04110A" BorderBrush="#22C55E" Content="开始使用"/>
-                                    <Button x:Name="StageModelButton" Visibility="Collapsed" Width="0" Height="0" Padding="0" Margin="0" BorderThickness="0"/>
-                                    <Button x:Name="StageAdvancedButton" Margin="0,0,0,12" Padding="16,12" Background="#0F172A" Foreground="#E2E8F0" BorderBrush="#334155" Content="更多设置"/>
-                                </WrapPanel>
-                                <TextBlock x:Name="RecommendationText" Margin="0,18,0,0" Foreground="#94A3B8" TextAlignment="Center" HorizontalAlignment="Center"/>
-                                <TextBlock x:Name="RecommendationHintText" Visibility="Collapsed"/>
-                                <Button x:Name="SecondaryActionButton" Visibility="Collapsed" Width="0" Height="0" Padding="0" Margin="0" BorderThickness="0"/>
-                                <Button x:Name="RefreshButton" Visibility="Collapsed" Width="0" Height="0" Padding="0" Margin="0" BorderThickness="0"/>
+                        <!-- 右侧栏 3 大步骤指示器 -->
+                        <Border x:Name="InstallStepIndicatorCard" Grid.Column="2" VerticalAlignment="Top"
+                                Padding="22,20" CornerRadius="16"
+                                Background="{StaticResource SurfaceSecondaryBrush}"
+                                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock x:Name="InstallStepProgressTitle"
+                                           FontSize="11" FontWeight="Bold"
+                                           Foreground="{StaticResource TextTertiaryBrush}"
+                                           Text="总进度 · 0 / 3"/>
+
+                                <Border x:Name="InstallStep1Border" Margin="0,12,0,0"
+                                        Padding="14,12" CornerRadius="11"
+                                        Background="{StaticResource SurfacePrimaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <DockPanel LastChildFill="True">
+                                        <Border DockPanel.Dock="Left" Width="26" Height="26" CornerRadius="13"
+                                                Margin="0,0,12,0" VerticalAlignment="Center"
+                                                x:Name="InstallStep1NumBg"
+                                                Background="{StaticResource SurfaceTertiaryBrush}">
+                                            <TextBlock x:Name="InstallStep1Num" Text="1" FontSize="12" FontWeight="Bold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <StackPanel>
+                                            <TextBlock x:Name="InstallStep1Title" Text="环境检测"
+                                                       FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="InstallStep1Desc" Margin="0,3,0,0" FontSize="11.5"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Text="检查 Git、写入权限、网络通达性"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+
+                                <Border x:Name="InstallStep2Border" Margin="0,8,0,0"
+                                        Padding="14,12" CornerRadius="11"
+                                        Background="{StaticResource SurfacePrimaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <DockPanel LastChildFill="True">
+                                        <Border DockPanel.Dock="Left" Width="26" Height="26" CornerRadius="13"
+                                                Margin="0,0,12,0" VerticalAlignment="Center"
+                                                x:Name="InstallStep2NumBg"
+                                                Background="{StaticResource SurfaceTertiaryBrush}">
+                                            <TextBlock x:Name="InstallStep2Num" Text="2" FontSize="12" FontWeight="Bold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <StackPanel>
+                                            <TextBlock x:Name="InstallStep2Title" Text="位置确认"
+                                                       FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="InstallStep2Desc" Margin="0,3,0,0" FontSize="11.5"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Text="确认数据目录和安装目录"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+
+                                <Border x:Name="InstallStep3Border" Margin="0,8,0,0"
+                                        Padding="14,12" CornerRadius="11"
+                                        Background="{StaticResource SurfacePrimaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <DockPanel LastChildFill="True">
+                                        <Border DockPanel.Dock="Left" Width="26" Height="26" CornerRadius="13"
+                                                Margin="0,0,12,0" VerticalAlignment="Center"
+                                                x:Name="InstallStep3NumBg"
+                                                Background="{StaticResource SurfaceTertiaryBrush}">
+                                            <TextBlock x:Name="InstallStep3Num" Text="3" FontSize="12" FontWeight="Bold"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <StackPanel>
+                                            <TextBlock x:Name="InstallStep3Title" Text="开始安装"
+                                                       FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="InstallStep3Desc" Margin="0,3,0,0" FontSize="11.5"
+                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Text="下载并安装 Hermes Agent"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+
+                                <Border x:Name="InstallStepTipBorder" Margin="0,12,0,0"
+                                        Padding="12,11" CornerRadius="10"
+                                        Background="{StaticResource WarningSoftBrush}"
+                                        Visibility="Collapsed">
+                                    <TextBlock x:Name="InstallStepTipText"
+                                               FontSize="11.5" TextWrapping="Wrap" LineHeight="17"
+                                               Foreground="#6E5224"
+                                               Text="另一个黑色窗口是官方安装终端，在那里下载和安装 Hermes。最小化它没问题，但请不要关闭。"/>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </Grid>
-                </Grid>
-            </ScrollViewer>
+                </Border>
 
-            <Border x:Name="LogSectionBorder" Grid.Row="1" Margin="0,14,0,0" Padding="14" CornerRadius="18" Background="#020617" BorderBrush="#22314D" BorderThickness="1" MaxHeight="190">
+                <!-- ========== Home Mode ========== -->
+                <Grid x:Name="HomeModePanel" Visibility="Collapsed">
+                    <Border x:Name="HomeReadyContainer">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,12,0,0">
+                            <Border x:Name="HomeStatusBadgeBorder" Width="76" Height="76" CornerRadius="38"
+                                    HorizontalAlignment="Center">
+                                <Border.Background>
+                                    <RadialGradientBrush GradientOrigin="0.38,0.35" Center="0.5,0.5" RadiusX="0.55" RadiusY="0.55">
+                                        <GradientStop Color="#FFE7C4" Offset="0"/>
+                                        <GradientStop Color="#F5C285" Offset="0.55"/>
+                                        <GradientStop Color="#E59B4E" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Border.Background>
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#A85420" Opacity="0.28" BlurRadius="22" ShadowDepth="6"/>
+                                </Border.Effect>
+                                <TextBlock Text="✓" FontFamily="{StaticResource UiFont}" FontSize="38" FontWeight="Bold"
+                                           Foreground="{StaticResource TextOnAccentBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock x:Name="StatusHeadlineText" Margin="0,18,0,0"
+                                       FontSize="34" FontWeight="Bold"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       TextAlignment="Center" HorizontalAlignment="Center"
+                                       Text="已就绪"/>
+                            <TextBlock x:Name="StatusBodyText" Margin="0,12,0,0" MaxWidth="540"
+                                       FontSize="14" LineHeight="22" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       TextAlignment="Center" HorizontalAlignment="Center"/>
+                            <WrapPanel Margin="0,22,0,0" HorizontalAlignment="Center">
+                                <Button x:Name="PrimaryActionButton" Margin="0,0,12,10" MinWidth="160"
+                                        Style="{StaticResource PrimaryButtonStyle}" Content="开始使用"/>
+                                <Button x:Name="StageModelButton" Visibility="Collapsed" Width="0" Height="0" Padding="0" Margin="0" BorderThickness="0"/>
+                                <Button x:Name="StageAdvancedButton" Margin="0,0,0,10"
+                                        Style="{StaticResource SecondaryButtonStyle}" Content="更多设置"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="RecommendationText" Margin="0,16,0,0" FontSize="12.5"
+                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                       TextAlignment="Center" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="RecommendationHintText" Visibility="Collapsed"/>
+                            <Button x:Name="SecondaryActionButton" Visibility="Collapsed" Width="0" Height="0" Padding="0" Margin="0" BorderThickness="0"/>
+                            <Button x:Name="RefreshButton" Visibility="Collapsed" Width="0" Height="0" Padding="0" Margin="0" BorderThickness="0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="LaunchProgressCard" Margin="0,8,0,0"
+                            Padding="28,24" CornerRadius="16"
+                            Background="{StaticResource SurfacePrimaryBrush}"
+                            BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                            Visibility="Collapsed">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#3C2814" Opacity="0.06" BlurRadius="18" ShadowDepth="3"/>
+                        </Border.Effect>
+                        <StackPanel>
+                            <DockPanel LastChildFill="True">
+                                <Border DockPanel.Dock="Left" Width="56" Height="56" CornerRadius="28"
+                                        Margin="0,0,18,0">
+                                    <Border.Background>
+                                        <RadialGradientBrush GradientOrigin="0.38,0.35" Center="0.5,0.5" RadiusX="0.55" RadiusY="0.55">
+                                            <GradientStop Color="#FFE7C4" Offset="0"/>
+                                            <GradientStop Color="#F5C285" Offset="0.55"/>
+                                            <GradientStop Color="#E59B4E" Offset="1"/>
+                                        </RadialGradientBrush>
+                                    </Border.Background>
+                                    <Border.Effect>
+                                        <DropShadowEffect Color="#A85420" Opacity="0.22" BlurRadius="16" ShadowDepth="4"/>
+                                    </Border.Effect>
+                                    <TextBlock x:Name="LaunchSpinnerGlyph" Text="⟳" FontFamily="{StaticResource UiFont}"
+                                               FontSize="30" FontWeight="Bold"
+                                               Foreground="{StaticResource TextOnAccentBrush}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               RenderTransformOrigin="0.5,0.5">
+                                        <TextBlock.RenderTransform>
+                                            <RotateTransform x:Name="LaunchSpinnerRotate" Angle="0"/>
+                                        </TextBlock.RenderTransform>
+                                    </TextBlock>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="LaunchProgressEyebrow" Text="正在启动 WebUI"
+                                               FontSize="11" FontWeight="Bold"
+                                               Foreground="{StaticResource AccentDeepBrush}"/>
+                                    <TextBlock x:Name="LaunchProgressHeadline" Margin="0,4,0,0"
+                                               FontSize="22" FontWeight="Bold" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               Text="第一次启动需要装一些组件"/>
+                                    <TextBlock x:Name="LaunchProgressSubline" Margin="0,4,0,0"
+                                               FontSize="12.5" TextWrapping="Wrap" LineHeight="18"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Text="完成后会自动在浏览器中打开 hermes-web-ui · 中途请勿关闭窗口"/>
+                                </StackPanel>
+                            </DockPanel>
+
+                            <Border Margin="0,16,0,0"
+                                    Padding="14,11" CornerRadius="11"
+                                    Background="{StaticResource SurfaceSecondaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock x:Name="LaunchCurrentStageDetail" DockPanel.Dock="Right"
+                                               FontSize="11"
+                                               Foreground="{StaticResource TextTertiaryBrush}"
+                                               VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="7" Height="7" Margin="0,0,10,0"
+                                                 Fill="{StaticResource AccentPrimaryBrush}"/>
+                                        <TextBlock x:Name="LaunchCurrentStageText"
+                                                   FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                                   Text="正在检查环境"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+
+                            <ProgressBar x:Name="LaunchProgressBar" Margin="0,12,0,0"
+                                         Style="{StaticResource WarmProgressBarStyle}" Value="0"/>
+
+                            <UniformGrid x:Name="LaunchProgressMiniSteps" Margin="0,12,0,0" Rows="1" Columns="7">
+                                <Border x:Name="LaunchMiniStep1Border" Margin="0,0,3,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep1Text" Text="环境" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                                <Border x:Name="LaunchMiniStep2Border" Margin="1.5,0,1.5,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep2Text" Text="下载 Node" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                                <Border x:Name="LaunchMiniStep3Border" Margin="1.5,0,1.5,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep3Text" Text="解压" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                                <Border x:Name="LaunchMiniStep4Border" Margin="1.5,0,1.5,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep4Text" Text="装 WebUI" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                                <Border x:Name="LaunchMiniStep5Border" Margin="1.5,0,1.5,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep5Text" Text="启 Gateway" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                                <Border x:Name="LaunchMiniStep6Border" Margin="1.5,0,1.5,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep6Text" Text="等待就绪" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                                <Border x:Name="LaunchMiniStep7Border" Margin="3,0,0,0" CornerRadius="8"
+                                        Background="{StaticResource SurfaceSecondaryBrush}"
+                                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                    <TextBlock x:Name="LaunchMiniStep7Text" Text="启 WebUI" Margin="3,7"
+                                               TextAlignment="Center" FontSize="10.5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextTertiaryBrush}"/>
+                                </Border>
+                            </UniformGrid>
+
+                            <DockPanel Margin="0,16,0,0" LastChildFill="True">
+                                <TextBlock x:Name="LaunchProgressEstTime" DockPanel.Dock="Right"
+                                           FontSize="11.5"
+                                           Foreground="{StaticResource TextTertiaryBrush}"
+                                           VerticalAlignment="Center"/>
+                                <Button x:Name="LaunchProgressCancelButton"
+                                        HorizontalAlignment="Left"
+                                        Style="{StaticResource SecondaryButtonStyle}" Content="取消并返回"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+        </ScrollViewer>
+
+        <!-- Log + Footer (Install Mode 显示) -->
+        <StackPanel Grid.Row="2" Margin="34,14,34,16">
+            <Border x:Name="LogSectionBorder"
+                    Padding="14,12" CornerRadius="12"
+                    Background="{StaticResource LogBgBrush}"
+                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                    MaxHeight="180">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <DockPanel Grid.Row="0" LastChildFill="False">
-                        <TextBlock DockPanel.Dock="Left" FontSize="15" FontWeight="SemiBold" Foreground="#F8FAFC" Text="安装日志"/>
+                        <TextBlock DockPanel.Dock="Left" FontSize="13" FontWeight="Bold"
+                                   Foreground="#EBE8E0" Text="安装日志"/>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button x:Name="CopyFeedbackButton" Margin="0,0,10,0" Padding="10,6" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="复制反馈信息"/>
-                            <Button x:Name="ClearLogButton" Padding="10,6" Background="#0F172A" Foreground="#CBD5E1" BorderBrush="#334155" Content="清空"/>
+                            <Button x:Name="CopyFeedbackButton" Margin="0,0,8,0"
+                                    Style="{StaticResource LogSubButtonStyle}" Content="复制反馈信息"/>
+                            <Button x:Name="ClearLogButton"
+                                    Style="{StaticResource LogSubButtonStyle}" Content="清空"/>
                         </StackPanel>
                     </DockPanel>
-                    <TextBox x:Name="LogTextBox" Grid.Row="1" Margin="0,10,0,0" MinHeight="72" MaxHeight="120" Background="#020617" Foreground="#E2E8F0" BorderThickness="0"
-                             FontFamily="Consolas" FontSize="13" AcceptsReturn="True" AcceptsTab="True"
+                    <TextBox x:Name="LogTextBox" Grid.Row="1" Margin="0,8,0,0" MinHeight="60" MaxHeight="110"
+                             Background="Transparent" Foreground="#EBE8E0" BorderThickness="0"
+                             FontFamily="{StaticResource MonoFont}" FontSize="12"
+                             AcceptsReturn="True" AcceptsTab="True"
                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                              IsReadOnly="True" TextWrapping="NoWrap"/>
                 </Grid>
             </Border>
-        </Grid>
 
-        <Border x:Name="FooterBorder" Grid.Row="2" Margin="0,18,0,0" Padding="12,10" CornerRadius="12" Background="#101A2C" BorderBrush="#22314D" BorderThickness="1">
-            <TextBlock x:Name="FooterText" Foreground="#94A3B8" Text="就绪"/>
-        </Border>
+            <Border x:Name="FooterBorder" Margin="0,8,0,0"
+                    Padding="14,8" CornerRadius="10"
+                    Background="{StaticResource SurfaceSecondaryBrush}"
+                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                <DockPanel LastChildFill="True">
+                    <TextBlock x:Name="FooterVersionText" DockPanel.Dock="Right" FontSize="11"
+                               Foreground="{StaticResource TextTertiaryBrush}" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse Width="6" Height="6" Margin="0,0,8,0" Fill="{StaticResource AccentPrimaryBrush}"/>
+                        <TextBlock x:Name="FooterText" FontSize="11.5"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   Text="就绪"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </StackPanel>
     </Grid>
 </Window>
 "@
@@ -2911,17 +3643,48 @@ $window.Title = "Hermes Agent 桌面控制台 - $($script:LauncherVersion)"
 
 $controls = @{}
 foreach ($name in @(
+    # 模式容器 + Install Mode 主结构
     'InstallModePanel','HomeModePanel','InstallPathCardBorder','InstallTaskCardBorder','InstallProgressCardBorder','InstallProgressTitleText','OpenClawPostInstallBorder','OpenClawPostInstallText','OpenClawImportButton','OpenClawSkipButton','InstallPathSummaryText','InstallLocationNoticeText','InstallSettingsEditorBorder',
     'ChangeInstallLocationButton','ConfirmInstallLocationButton','SaveInstallSettingsButton','ResetInstallSettingsButton',
     'InstallTaskTitleText','InstallTaskBodyText','StartInstallPageButton','InstallRequirementsButton','InstallRefreshButton',
     'InstallProgressText','InstallFailureSummaryText','StatusHeadlineText','StatusBodyText','RecommendationText','RecommendationHintText',
     'RefreshButton','PrimaryActionButton','SecondaryActionButton','StageModelButton','StageAdvancedButton',
     'HermesHomeTextBox','InstallDirTextBox','BranchTextBox','NoVenvCheckBox','SkipSetupCheckBox',
-    'LogSectionBorder','CopyFeedbackButton','ClearLogButton','LogTextBox','FooterBorder','FooterText',
-    'AboutButton','TelemetryConsentBanner','TelemetryConsentDismissButton'
+    'LogSectionBorder','CopyFeedbackButton','ClearLogButton','LogTextBox','FooterBorder','FooterText','FooterVersionText',
+    'AboutButton','TelemetryConsentBanner','TelemetryConsentDismissButton',
+    # 任务 012 新增 - Header
+    'BrandTitleText','BrandSubtitleText',
+    # 任务 012 新增 - 安装任务卡（步骤 tag、当前阶段、子阶段、进度条）
+    'InstallTaskStepTagBorder','InstallTaskStepTagNum','InstallTaskStepTagText',
+    'InstallCurrentStageBorder','InstallCurrentStageText','InstallCurrentStageDetail',
+    'InstallProgressBar','InstallSubStepsPanel',
+    'InstallSubStep1Border','InstallSubStep1Text','InstallSubStep2Border','InstallSubStep2Text',
+    'InstallSubStep3Border','InstallSubStep3Text','InstallSubStep4Border','InstallSubStep4Text',
+    # 任务 012 新增 - 失败日志预览
+    'InstallFailureLogPreviewBorder','InstallFailureLogPreviewText','InstallFailureLogCopyButton',
+    # 任务 012 新增 - 右栏 3 大步骤指示器
+    'InstallStepIndicatorCard','InstallStepProgressTitle',
+    'InstallStep1Border','InstallStep1NumBg','InstallStep1Num','InstallStep1Title','InstallStep1Desc',
+    'InstallStep2Border','InstallStep2NumBg','InstallStep2Num','InstallStep2Title','InstallStep2Desc',
+    'InstallStep3Border','InstallStep3NumBg','InstallStep3Num','InstallStep3Title','InstallStep3Desc',
+    'InstallStepTipBorder','InstallStepTipText',
+    # 任务 012 新增 - Home Mode 已就绪 + 启动 WebUI 进度卡
+    'HomeReadyContainer','HomeStatusBadgeBorder',
+    'LaunchProgressCard','LaunchSpinnerGlyph','LaunchSpinnerRotate',
+    'LaunchProgressEyebrow','LaunchProgressHeadline','LaunchProgressSubline',
+    'LaunchCurrentStageText','LaunchCurrentStageDetail','LaunchProgressBar','LaunchProgressMiniSteps',
+    'LaunchMiniStep1Border','LaunchMiniStep1Text','LaunchMiniStep2Border','LaunchMiniStep2Text',
+    'LaunchMiniStep3Border','LaunchMiniStep3Text','LaunchMiniStep4Border','LaunchMiniStep4Text',
+    'LaunchMiniStep5Border','LaunchMiniStep5Text','LaunchMiniStep6Border','LaunchMiniStep6Text',
+    'LaunchMiniStep7Border','LaunchMiniStep7Text',
+    'LaunchProgressEstTime','LaunchProgressCancelButton'
 )) {
     $controls[$name] = $window.FindName($name)
 }
+
+# 任务 012：FooterVersionText 在 XAML 里没默认值（避免 XAML 字符串内 $($script:LauncherVersion) 让 [xml] 解析变脆），上来在代码里设。
+try { if ($controls.FooterVersionText) { $controls.FooterVersionText.Text = $script:LauncherVersion } } catch { }
+try { if ($controls.BrandSubtitleText) { $controls.BrandSubtitleText.Text = "为中文用户准备的图形启动器 · $($script:LauncherVersion)" } } catch { }
 
 $controls.HermesHomeTextBox.Text = $defaults.HermesHome
 $controls.InstallDirTextBox.Text = $defaults.InstallDir
@@ -3215,19 +3978,26 @@ function Start-LaunchAsync {
     }
 
     $script:LaunchState = @{
-        Phase           = 'check-install'
-        InstallDir      = $InstallDir
-        HermesCommand   = $HermesCommand
-        WebClient       = $null
-        DownloadZipPath = $null
-        DownloadDone    = $false
-        DownloadError   = $null
-        NpmProcess      = $null
-        HealthDeadline  = $null
+        Phase              = 'check-install'
+        InstallDir         = $InstallDir
+        HermesCommand      = $HermesCommand
+        WebClient          = $null
+        DownloadZipPath    = $null
+        DownloadDone       = $false
+        DownloadError      = $null
+        NpmProcess         = $null
+        HealthDeadline     = $null
+        # 任务 012 P1-3：Expand-Archive 后台 Runspace 追踪字段
+        ExtractRunspace    = $null
+        ExtractPowerShell  = $null
+        ExtractAsyncResult = $null
     }
 
     Add-ActionLog -Action '开始使用' -Result '正在检查环境...' -Next '请稍候'
     Set-Footer '正在检查环境...'
+
+    # 任务 012：显示 LaunchProgressCard 修 Home Mode 启动 webui 时无反馈盲区
+    Show-LaunchProgressCard
 
     if (-not $script:LaunchTimer) {
         $script:LaunchTimer = [System.Windows.Threading.DispatcherTimer]::new()
@@ -3240,9 +4010,25 @@ function Start-LaunchAsync {
 function Stop-LaunchAsync {
     param([string]$ErrorMessage)
     if ($script:LaunchTimer) { $script:LaunchTimer.Stop() }
+    # 任务 012 P1-3：如果解压 Runspace 还在跑，安全释放（不等完成，不抛异常）
+    if ($script:LaunchState) {
+        try {
+            if ($script:LaunchState.ExtractPowerShell) {
+                $script:LaunchState.ExtractPowerShell.Stop()
+                $script:LaunchState.ExtractPowerShell.Dispose()
+            }
+        } catch { }
+        try {
+            if ($script:LaunchState.ExtractRunspace) {
+                $script:LaunchState.ExtractRunspace.Close()
+                $script:LaunchState.ExtractRunspace.Dispose()
+            }
+        } catch { }
+    }
     $script:LaunchState = $null
     $controls.PrimaryActionButton.IsEnabled = $true
     Set-Footer ''
+    Hide-LaunchProgressCard
     if ($ErrorMessage) {
         Add-ActionLog -Action '开始使用' -Result ('失败：' + $ErrorMessage) -Next '可改用命令行对话'
         try { Send-Telemetry -EventName 'webui_failed' -FailureReason $ErrorMessage } catch { }
@@ -3262,6 +4048,229 @@ function Stop-LaunchAsync {
     }
 }
 
+# ============== 任务 012：UI 状态同步 helpers ==============
+# 这些函数集中处理"步骤指示器卡片状态切换"和"WebUI 启动进度卡同步"两块新视觉。
+# 不动业务逻辑，只是视觉 mapping。
+
+# 把 Brush 转成 SolidColorBrush（XAML token 引用）
+function Get-PaletteBrush {
+    param([string]$Key)
+    try { return $window.FindResource($Key) } catch { return $null }
+}
+
+# 设置 InstallStep1/2/3 卡片的视觉态：'pending' / 'active' / 'done' / 'failed'
+function Set-InstallStepCardState {
+    param(
+        [int]$StepIndex,    # 1/2/3
+        [string]$State      # pending / active / done / failed
+    )
+    try {
+        $border  = $controls["InstallStep$($StepIndex)Border"]
+        $numBg   = $controls["InstallStep$($StepIndex)NumBg"]
+        $numText = $controls["InstallStep$($StepIndex)Num"]
+        $title   = $controls["InstallStep$($StepIndex)Title"]
+        if (-not $border -or -not $numBg -or -not $numText -or -not $title) { return }
+
+        $surfacePrimary  = Get-PaletteBrush 'SurfacePrimaryBrush'
+        $lineSofter      = Get-PaletteBrush 'LineSofterBrush'
+        $surfaceTertiary = Get-PaletteBrush 'SurfaceTertiaryBrush'
+        $textPrimary     = Get-PaletteBrush 'TextPrimaryBrush'
+        $textTertiary    = Get-PaletteBrush 'TextTertiaryBrush'
+        $textOnAccent    = Get-PaletteBrush 'TextOnAccentBrush'
+        $accentPrimary   = Get-PaletteBrush 'AccentPrimaryBrush'
+        $accentDeep      = Get-PaletteBrush 'AccentDeepBrush'
+        $accentBorder    = Get-PaletteBrush 'AccentBorderBrush'
+        $success         = Get-PaletteBrush 'SuccessBrush'
+        $danger          = Get-PaletteBrush 'DangerBrush'
+
+        switch ($State) {
+            'pending' {
+                $border.Background = $surfacePrimary
+                $border.BorderBrush = $lineSofter
+                $numBg.Background = $surfaceTertiary
+                $numText.Foreground = $textTertiary
+                $numText.Text = "$StepIndex"
+                $title.Foreground = $textPrimary
+            }
+            'active' {
+                $border.Background = $surfacePrimary
+                $border.BorderBrush = $accentBorder
+                $numBg.Background = $accentPrimary
+                $numText.Foreground = $textOnAccent
+                $numText.Text = "$StepIndex"
+                $title.Foreground = $accentDeep
+            }
+            'done' {
+                $border.Background = $surfacePrimary
+                $border.BorderBrush = $lineSofter
+                $numBg.Background = $success
+                $numText.Foreground = $textOnAccent
+                $numText.Text = '✓'
+                $title.Foreground = $success
+            }
+            'failed' {
+                $border.Background = $surfacePrimary
+                $border.BorderBrush = $danger
+                $numBg.Background = $danger
+                $numText.Foreground = $textOnAccent
+                $numText.Text = '×'
+                $title.Foreground = $danger
+            }
+        }
+    } catch { }
+}
+
+# 设置一组 InstallSubStep1-4（4 段子阶段）的视觉态
+function Set-InstallSubStepState {
+    param(
+        [int]$SubStepIndex, # 1/2/3/4
+        [string]$State      # pending / active / done
+    )
+    try {
+        $border = $controls["InstallSubStep$($SubStepIndex)Border"]
+        $text   = $controls["InstallSubStep$($SubStepIndex)Text"]
+        if (-not $border -or -not $text) { return }
+
+        $surfaceSecondary = Get-PaletteBrush 'SurfaceSecondaryBrush'
+        $lineSofter       = Get-PaletteBrush 'LineSofterBrush'
+        $textTertiary     = Get-PaletteBrush 'TextTertiaryBrush'
+        $accentPrimary    = Get-PaletteBrush 'AccentPrimaryBrush'
+        $accentDeep       = Get-PaletteBrush 'AccentDeepBrush'
+        $accentBorder     = Get-PaletteBrush 'AccentBorderBrush'
+        $success          = Get-PaletteBrush 'SuccessBrush'
+        $successSoft      = Get-PaletteBrush 'SuccessSoftBrush'
+
+        switch ($State) {
+            'pending' {
+                $border.Background = $surfaceSecondary
+                $border.BorderBrush = $lineSofter
+                $text.Foreground = $textTertiary
+            }
+            'active' {
+                $border.Background = ([System.Windows.Media.BrushConverter]::new().ConvertFromString('#33F4C98A'))
+                $border.BorderBrush = $accentBorder
+                $text.Foreground = $accentDeep
+            }
+            'done' {
+                $border.Background = $successSoft
+                $border.BorderBrush = ([System.Windows.Media.BrushConverter]::new().ConvertFromString('#4D4F8F7A'))
+                $text.Foreground = $success
+            }
+        }
+    } catch { }
+}
+
+# 设置一组 LaunchMiniStep1-7 的视觉态
+function Set-LaunchMiniStepState {
+    param(
+        [int]$StepIndex, # 1..7
+        [string]$State   # pending / active / done
+    )
+    try {
+        $border = $controls["LaunchMiniStep$($StepIndex)Border"]
+        $text   = $controls["LaunchMiniStep$($StepIndex)Text"]
+        if (-not $border -or -not $text) { return }
+
+        $surfaceSecondary = Get-PaletteBrush 'SurfaceSecondaryBrush'
+        $lineSofter       = Get-PaletteBrush 'LineSofterBrush'
+        $textTertiary     = Get-PaletteBrush 'TextTertiaryBrush'
+        $accentDeep       = Get-PaletteBrush 'AccentDeepBrush'
+        $accentBorder     = Get-PaletteBrush 'AccentBorderBrush'
+        $success          = Get-PaletteBrush 'SuccessBrush'
+        $successSoft      = Get-PaletteBrush 'SuccessSoftBrush'
+
+        switch ($State) {
+            'pending' {
+                $border.Background = $surfaceSecondary
+                $border.BorderBrush = $lineSofter
+                $text.Foreground = $textTertiary
+            }
+            'active' {
+                $border.Background = ([System.Windows.Media.BrushConverter]::new().ConvertFromString('#33F4C98A'))
+                $border.BorderBrush = $accentBorder
+                $text.Foreground = $accentDeep
+            }
+            'done' {
+                $border.Background = $successSoft
+                $border.BorderBrush = ([System.Windows.Media.BrushConverter]::new().ConvertFromString('#4D4F8F7A'))
+                $text.Foreground = $success
+            }
+        }
+    } catch { }
+}
+
+# Phase -> mini-step 索引（1-7）映射 + 文案
+$script:LaunchPhaseMap = @{
+    'check-install'        = @{ Step = 1; Text = '正在检查环境';     Detail = '';                        ProgressMin = 5;   ProgressMax = 12  }
+    'download-node'        = @{ Step = 2; Text = '正在下载 Node.js'; Detail = '约 30 MB · 网络较差时偏慢'; ProgressMin = 12;  ProgressMax = 38  }
+    'extract-node'         = @{ Step = 3; Text = '正在解压 Node.js'; Detail = '';                        ProgressMin = 38;  ProgressMax = 45  }
+    'npm-install'          = @{ Step = 4; Text = '正在安装 hermes-web-ui'; Detail = '约 1-2 分钟';      ProgressMin = 45;  ProgressMax = 70  }
+    'start-gateway'        = @{ Step = 5; Text = '正在启动 Hermes Gateway'; Detail = '';               ProgressMin = 70;  ProgressMax = 78  }
+    'wait-gateway-healthy' = @{ Step = 6; Text = '等待 Gateway 就绪';  Detail = '';                     ProgressMin = 78;  ProgressMax = 88  }
+    'start-webui'          = @{ Step = 7; Text = '正在启动 hermes-web-ui'; Detail = '';                ProgressMin = 88;  ProgressMax = 95  }
+    'wait-healthy'         = @{ Step = 7; Text = '等待 hermes-web-ui 就绪'; Detail = '健康检查中';       ProgressMin = 95;  ProgressMax = 99  }
+}
+
+# 显示 LaunchProgressCard,隐藏 HomeReadyContainer
+function Show-LaunchProgressCard {
+    try {
+        if ($controls.LaunchProgressCard) { $controls.LaunchProgressCard.Visibility = 'Visible' }
+        if ($controls.HomeReadyContainer) { $controls.HomeReadyContainer.Visibility = 'Collapsed' }
+        # reset all mini-steps
+        for ($i = 1; $i -le 7; $i++) { Set-LaunchMiniStepState -StepIndex $i -State 'pending' }
+        if ($controls.LaunchProgressBar) { $controls.LaunchProgressBar.Value = 0 }
+        if ($controls.LaunchCurrentStageText) { $controls.LaunchCurrentStageText.Text = '正在检查环境' }
+        if ($controls.LaunchCurrentStageDetail) { $controls.LaunchCurrentStageDetail.Text = '' }
+        if ($controls.LaunchProgressEstTime) { $controls.LaunchProgressEstTime.Text = '' }
+    } catch { }
+}
+
+# 隐藏 LaunchProgressCard,恢复 HomeReadyContainer
+function Hide-LaunchProgressCard {
+    try {
+        if ($controls.LaunchProgressCard) { $controls.LaunchProgressCard.Visibility = 'Collapsed' }
+        if ($controls.HomeReadyContainer) { $controls.HomeReadyContainer.Visibility = 'Visible' }
+    } catch { }
+}
+
+# 把 phase 同步到 LaunchProgressCard 的 mini-steps + 进度条 + 当前阶段文字
+$script:LaunchPhaseLast = ''
+function Update-LaunchProgressCardPhase {
+    param([string]$Phase)
+    try {
+        if ($controls.LaunchProgressCard.Visibility -ne 'Visible') { return }
+        $info = $script:LaunchPhaseMap[$Phase]
+        if (-not $info) { return }
+
+        $currStep = [int]$info.Step
+        # 把所有 step 标 done/active/pending
+        for ($i = 1; $i -le 7; $i++) {
+            if ($i -lt $currStep) { Set-LaunchMiniStepState -StepIndex $i -State 'done' }
+            elseif ($i -eq $currStep) { Set-LaunchMiniStepState -StepIndex $i -State 'active' }
+            else { Set-LaunchMiniStepState -StepIndex $i -State 'pending' }
+        }
+        # 进度条 (在 ProgressMin..ProgressMax 之间)
+        if ($controls.LaunchProgressBar) {
+            $target = if ($script:LaunchPhaseLast -ne $Phase) { $info.ProgressMin } else { ($info.ProgressMin + $info.ProgressMax) / 2 }
+            $controls.LaunchProgressBar.Value = $target
+        }
+        # 文案
+        if ($controls.LaunchCurrentStageText) { $controls.LaunchCurrentStageText.Text = $info.Text }
+        if ($controls.LaunchCurrentStageDetail) { $controls.LaunchCurrentStageDetail.Text = [string]$info.Detail }
+        # spinner 旋转 30°
+        try {
+            if ($controls.LaunchSpinnerGlyph) {
+                $rt = $controls.LaunchSpinnerGlyph.RenderTransform
+                if ($rt -is [System.Windows.Media.RotateTransform]) {
+                    $rt.Angle = ($rt.Angle + 30) % 360
+                }
+            }
+        } catch { }
+
+        $script:LaunchPhaseLast = $Phase
+    } catch { }
+}
+
 function Step-LaunchSequence {
     <#
     .SYNOPSIS
@@ -3271,6 +4280,9 @@ function Step-LaunchSequence {
     #>
     $s = $script:LaunchState
     if (-not $s) { $script:LaunchTimer.Stop(); return }
+
+    # 任务 012：把当前 phase 同步到 LaunchProgressCard 视觉
+    Update-LaunchProgressCardPhase -Phase $s.Phase
 
     try {
         switch ($s.Phase) {
@@ -3338,12 +4350,73 @@ function Step-LaunchSequence {
                     throw '下载文件为空或不完整。'
                 }
 
+                # 下载完成，进入独立解压阶段（与 LaunchPhaseMap 中的 extract-node 对应）
                 Add-LogLine '正在解压 Node.js...'
-                Set-Footer '正在解压 Node.js...'
-                $webUi = Get-HermesWebUiDefaults
-                Expand-Archive -Path $s.DownloadZipPath -DestinationPath $webUi.NodeRoot -Force
-                Remove-Item $s.DownloadZipPath -Force -ErrorAction SilentlyContinue
+                $s.Phase = 'extract-node'
+            }
 
+            # ── Phase 2b: Extract Node.js (background Runspace, non-blocking) ──
+            # 任务 012 P1-3：Expand-Archive 同步解压在 UI 线程会阻塞数秒导致"未响应"
+            # 改为后台 Runspace + 轮询完成标志，UI 线程全程不阻塞
+            'extract-node' {
+                if (-not $s.ExtractRunspace) {
+                    Set-Footer '正在解压 Node.js...'
+                    $webUi = Get-HermesWebUiDefaults
+
+                    # 捕获需要传入 Runspace 的变量（Runspace 不共享调用者的变量作用域）
+                    $zipPathCapture  = $s.DownloadZipPath
+                    $nodeRootCapture = $webUi.NodeRoot
+
+                    # 启动后台 Runspace（陷阱 #1：Runspace 内无 WPF Dispatcher，不需要 try-catch 包裹；
+                    # 错误通过返回值传回 UI 线程）
+                    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+                    $rs.Open()
+                    $ps = [System.Management.Automation.PowerShell]::Create()
+                    $ps.Runspace = $rs
+                    [void]$ps.AddScript({
+                        param($zipPath, $nodeRoot)
+                        try {
+                            Expand-Archive -Path $zipPath -DestinationPath $nodeRoot -Force
+                            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+                            return $null   # null = success
+                        } catch {
+                            return $_.Exception.Message   # non-null = error message
+                        }
+                    }).AddArgument($zipPathCapture).AddArgument($nodeRootCapture)
+                    $s.ExtractRunspace    = $rs
+                    $s.ExtractPowerShell  = $ps
+                    $s.ExtractAsyncResult = $ps.BeginInvoke()
+                    return
+                }
+
+                # 轮询：解压尚未完成则等下一个 tick
+                if (-not $s.ExtractAsyncResult.IsCompleted) { return }
+
+                # 解压完成 — 收集结果，释放资源（陷阱 #1：所有 Dispatcher 操作在 finally 后的 throw 之前）
+                $webUi = Get-HermesWebUiDefaults
+                $extractError = $null
+                try {
+                    $results = $s.ExtractPowerShell.EndInvoke($s.ExtractAsyncResult)
+                    if ($results -and $results.Count -gt 0 -and $null -ne $results[0]) {
+                        $extractError = [string]$results[0]
+                    }
+                    if ($s.ExtractPowerShell.HadErrors -and -not $extractError) {
+                        $errRecord = $s.ExtractPowerShell.Streams.Error | Select-Object -First 1
+                        if ($errRecord) { $extractError = $errRecord.ToString() }
+                    }
+                } catch {
+                    $extractError = $_.Exception.Message
+                } finally {
+                    try { $s.ExtractPowerShell.Dispose() } catch { }
+                    try { $s.ExtractRunspace.Close(); $s.ExtractRunspace.Dispose() } catch { }
+                    $s.ExtractRunspace    = $null
+                    $s.ExtractPowerShell  = $null
+                    $s.ExtractAsyncResult = $null
+                }
+
+                if ($extractError) {
+                    throw ("Node.js 解压失败：{0}" -f $extractError)
+                }
                 if (-not (Test-Path $webUi.NodeExe)) {
                     throw "解压后未找到 node.exe：$($webUi.NodeExe)"
                 }
@@ -3399,7 +4472,8 @@ function Step-LaunchSequence {
             'wait-gateway-healthy' {
                 $gwHealthy = $false
                 try {
-                    $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 2 -ErrorAction Stop
+                    # 任务 012 P1-3：TimeoutSec 1（本地 loopback，1s 足够；2s 会让 UI 线程阻塞超过 timer 间隔）
+                    $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 1 -ErrorAction Stop
                     $gwHealthy = $true
                 } catch { }
                 if ($gwHealthy) {
@@ -3414,7 +4488,8 @@ function Step-LaunchSequence {
                     $s.Phase = 'start-webui'
                 } else {
                     Set-Footer '等待 Gateway 就绪...'
-                    Start-Sleep -Milliseconds 1000
+                    # 任务 012 P1-3：不在 UI 线程 Sleep — DispatcherTimer 本身已提供 800ms 间隔
+                    # 移除 Start-Sleep -Milliseconds 1000 防止 UI 线程阻塞
                 }
             }
 
@@ -3505,11 +4580,36 @@ function Keep-LauncherVisible {
     } catch { }
 }
 
+# P1-2-LITE: 安装中 spinner(braille 文本切换,每 200ms 更新 InstallCurrentStageDetail)
+function Stop-InstallSpinner {
+    if ($script:InstallSpinnerTimer) {
+        try { $script:InstallSpinnerTimer.Stop() } catch { }
+        $script:InstallSpinnerTimer = $null
+    }
+}
+function Start-InstallSpinner {
+    Stop-InstallSpinner
+    $script:InstallSpinnerFrames = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+    $script:InstallSpinnerIdx = 0
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(200)
+    $t.Add_Tick({
+        try {
+            $f = $script:InstallSpinnerFrames[$script:InstallSpinnerIdx % $script:InstallSpinnerFrames.Length]
+            $script:InstallSpinnerIdx++
+            if ($controls.InstallCurrentStageDetail) { $controls.InstallCurrentStageDetail.Text = "$f 正在安装,看黑色终端窗口进度" }
+        } catch { }
+    })
+    $script:InstallSpinnerTimer = $t
+    $t.Start()
+}
+
 function Stop-ExternalInstallTimer {
     if ($script:ExternalInstallTimer) {
         $script:ExternalInstallTimer.Stop()
         $script:ExternalInstallTimer = $null
     }
+    Stop-InstallSpinner
 }
 
 function Start-ExternalInstallMonitor {
@@ -3551,24 +4651,49 @@ function Start-ExternalInstallMonitor {
                 $recentLog = @()
                 if ($controls.LogTextBox.Text) {
                     $lines = $controls.LogTextBox.Text -split "`r?`n"
-                    $recentLog = @($lines | Select-Object -Last 10)
+                    # 任务 012：单独抽出尾 8 行用于 LogPreview（mockup 06 的视觉），主 FailureSummaryText 仍用 10 行做兼容
+                    $recentLog = @($lines | Where-Object { $_ -ne '' } | Select-Object -Last 10)
                 }
+                # 任务 012：失败摘要拆成两块 - 上面是原因 + 建议（FailureSummaryText），下面是 monospace 日志预览（LogPreview）
                 $failSummary = @(
-                    "安装失败（退出码 $exitCode）"
+                    "安装中断 · 退出码 $exitCode · 阶段：执行官方安装脚本"
                     ''
-                    '失败阶段：执行官方安装脚本'
-                    "可能原因：网络超时、依赖安装失败或权限不足"
-                    '建议操作：查看安装终端中的具体报错信息，修复后重试'
+                    '可能的原因：'
+                    '  • 网络断开或 GitHub 加速通道失败'
+                    '  • 磁盘空间不足（建议至少留 2 GB 可用）'
+                    '  • 杀毒软件拦截了 git clone 进程'
                     ''
-                    '最近日志：'
-                    ($recentLog -join "`n")
-                    ''
-                    '可点击下方"复制反馈信息"发送给开发者排查。'
+                    '大多数失败重新点一下下方"重新开始"就能过；还不行的话，复制日志反馈给开发者。'
                 ) -join "`n"
                 $controls.InstallFailureSummaryText.Text = $failSummary
                 $controls.InstallFailureSummaryText.Visibility = 'Visible'
+                # 任务 012：LogPreview 显示日志末尾 8 行（monospace 深色块）
+                try {
+                    $tail8 = @($recentLog | Select-Object -Last 8)
+                    if ($controls.InstallFailureLogPreviewText) {
+                        $controls.InstallFailureLogPreviewText.Text = ($tail8 -join "`n")
+                    }
+                    if ($controls.InstallFailureLogPreviewBorder) {
+                        $controls.InstallFailureLogPreviewBorder.Visibility = 'Visible'
+                    }
+                } catch { }
+                # 任务 012：右栏 step3 标 failed
+                try { Set-InstallStepCardState -StepIndex 3 -State 'failed' } catch { }
             }
             Refresh-Status
+            # 任务 012：失败时 Refresh-Status 会把 LogPreview 重新隐藏（默认行为），所以这里再设回来
+            if ($exitCode -ne 0) {
+                try {
+                    if ($controls.InstallFailureLogPreviewBorder) {
+                        $controls.InstallFailureLogPreviewBorder.Visibility = 'Visible'
+                    }
+                    Set-InstallStepCardState -StepIndex 3 -State 'failed'
+                    if ($controls.InstallTaskStepTagText) { $controls.InstallTaskStepTagText.Text = '安装中断' }
+                    if ($controls.InstallTaskTitleText) { $controls.InstallTaskTitleText.Text = '安装没能完成，我们来看看怎么解决' }
+                    if ($controls.InstallStepProgressTitle) { $controls.InstallStepProgressTitle.Text = '总进度 · 第 3 步出错' }
+                    if ($controls.InstallStep3Desc) { $controls.InstallStep3Desc.Text = '中断于安装阶段' }
+                } catch { }
+            }
         } catch {
             Add-LogLine ("安装监视器异常：{0}" -f $_.Exception.Message)
             Stop-ExternalInstallTimer
@@ -4342,13 +5467,15 @@ function Set-InstallActionButtons {
     $controls.StartInstallPageButton.Content = $PrimaryLabel
     $controls.StartInstallPageButton.IsEnabled = $PrimaryEnabled
     if ($PrimaryEnabled) {
-        $controls.StartInstallPageButton.Background = '#22C55E'
-        $controls.StartInstallPageButton.BorderBrush = '#22C55E'
-        $controls.StartInstallPageButton.Foreground = '#04110A'
+        # 任务 012 P1-1：统一使用 LauncherPalette 主色暖橙，与 State 1/6 主按钮一致
+        $controls.StartInstallPageButton.Background = '#D9772B'
+        $controls.StartInstallPageButton.BorderBrush = '#D9772B'
+        $controls.StartInstallPageButton.Foreground = '#FCFCF7'
     } else {
-        $controls.StartInstallPageButton.Background = '#1E293B'
-        $controls.StartInstallPageButton.BorderBrush = '#334155'
-        $controls.StartInstallPageButton.Foreground = '#94A3B8'
+        # 禁用态：使用浅色系暗哑色（米色系）
+        $controls.StartInstallPageButton.Background = '#D4CFC5'
+        $controls.StartInstallPageButton.BorderBrush = '#C8C3B9'
+        $controls.StartInstallPageButton.Foreground = '#897F75'
     }
 
     $controls.InstallRequirementsButton.Content = $SecondaryLabel
@@ -4397,68 +5524,240 @@ function Show-AboutDialog {
     显示「关于」对话框：版本号 + 隐私说明 + 匿名遥测开关。
     #>
     try {
-        $aboutXamlText = @'
+        $aboutXamlText = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="关于 Hermes 启动器"
-        Width="560"
-        Height="560"
-        MinWidth="520"
-        MinHeight="500"
+        Width="580"
+        Height="660"
+        MinWidth="540"
+        MinHeight="600"
         WindowStartupLocation="CenterOwner"
-        Background="#0B1220"
-        Foreground="#E2E8F0"
-        ResizeMode="NoResize">
-    <Grid Margin="22">
+        Background="#F2F0E8"
+        Foreground="#262621"
+        ResizeMode="NoResize"
+        TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <SolidColorBrush x:Key="BgAppBrush" Color="#F2F0E8"/>
+        <SolidColorBrush x:Key="BgAppSecondaryBrush" Color="#EBE8E0"/>
+        <SolidColorBrush x:Key="SurfacePrimaryBrush" Color="#FAF8F2"/>
+        <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="#F4F0E8"/>
+        <SolidColorBrush x:Key="SurfaceTertiaryBrush" Color="#F0E8DE"/>
+        <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#F2E6D6"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#262621"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#5E594F"/>
+        <SolidColorBrush x:Key="TextTertiaryBrush" Color="#897F75"/>
+        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FCFCF7"/>
+        <SolidColorBrush x:Key="AccentPrimaryBrush" Color="#D9772B"/>
+        <SolidColorBrush x:Key="AccentDeepBrush" Color="#A85420"/>
+        <SolidColorBrush x:Key="AccentTintBrush" Color="#1AD9772B"/>
+        <SolidColorBrush x:Key="SuccessBrush" Color="#4F8F7A"/>
+        <SolidColorBrush x:Key="SuccessSoftBrush" Color="#DBEDE5"/>
+        <SolidColorBrush x:Key="DangerBrush" Color="#C25E52"/>
+        <SolidColorBrush x:Key="DangerSoftBrush" Color="#F7E0D8"/>
+        <SolidColorBrush x:Key="LineSofterBrush" Color="#0A000000"/>
+
+        <FontFamily x:Key="UiFont">$($script:UiFontFamily)</FontFamily>
+
+        <Style TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+
+        <Style x:Key="AboutCloseButtonStyle" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentDeepBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="{StaticResource AccentDeepBrush}"/>
+            <Setter Property="BorderThickness" Value="1.5"/>
+            <Setter Property="Padding" Value="22,8"/>
+            <Setter Property="MinHeight" Value="38"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="10" Padding="{TemplateBinding Padding}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0">
-            <TextBlock x:Name="AboutTitle" FontSize="22" FontWeight="SemiBold" Text="Hermes 启动器"/>
-            <TextBlock x:Name="AboutVersionText" Margin="0,6,0,0" Foreground="#94A3B8"/>
-            <TextBlock Margin="0,4,0,0" Foreground="#94A3B8" TextWrapping="Wrap"
-                       Text="第三方 GUI 启动器，非官方项目。让更多中文用户用上 Hermes Agent。"/>
-        </StackPanel>
-
-        <Border Grid.Row="1" Margin="0,18,0,0" Padding="16" CornerRadius="14" Background="#101A2C" BorderBrush="#22314D" BorderThickness="1">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel>
-                    <TextBlock FontSize="15" FontWeight="SemiBold" Foreground="#F8FAFC" Text="匿名数据上报"/>
-                    <TextBlock Margin="0,8,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"
-                               Text="为了改进产品，我们会上报启动器使用过程的匿名遥测数据。所有数据都不包含可识别个人身份的信息。"/>
-
-                    <TextBlock Margin="0,14,0,4" FontWeight="SemiBold" Foreground="#86EFAC" Text="✓ 我们收集"/>
-                    <TextBlock Foreground="#CBD5E1" TextWrapping="Wrap" Margin="12,0,0,0"
-                               Text="• 启动器版本号、Windows 大类（Win10/Win11）、内存档位（&lt;8/8-16/&gt;16 GB）&#x0a;• 安装关键步骤的事件名（开始/完成/失败）&#x0a;• 失败事件的脱敏后错误类型&#x0a;• 一次性匿名设备 ID（与你的账户、邮箱、机器名、IP 完全无关）"/>
-
-                    <TextBlock Margin="0,14,0,4" FontWeight="SemiBold" Foreground="#FCA5A5" Text="✗ 我们不收集"/>
-                    <TextBlock Foreground="#CBD5E1" TextWrapping="Wrap" Margin="12,0,0,0"
-                               Text="• 用户名、机器名、邮箱、IP 地址&#x0a;• 任何 API Key、Token、密码、密钥&#x0a;• 本地路径中的用户名段（自动替换为 &lt;USER&gt;）&#x0a;• 对话内容、模型回复、聊天记录（启动器看不到这些）"/>
-
-                    <TextBlock Margin="0,14,0,0" Foreground="#94A3B8" TextWrapping="Wrap"
-                               Text="所有错误信息上报前会经过自动脱敏处理；数据存储在 Cloudflare D1，仅作为产品迭代依据，不分享给第三方。"/>
+        <!-- Hero -->
+        <StackPanel Grid.Row="0" Margin="32,30,32,18">
+            <DockPanel LastChildFill="True">
+                <Border DockPanel.Dock="Left" Width="56" Height="56" CornerRadius="14"
+                        Margin="0,0,18,0">
+                    <Border.Background>
+                        <RadialGradientBrush GradientOrigin="0.3,0.3" Center="0.5,0.5" RadiusX="0.6" RadiusY="0.6">
+                            <GradientStop Color="#F2B56B" Offset="0"/>
+                            <GradientStop Color="#D9772B" Offset="0.6"/>
+                            <GradientStop Color="#A85420" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Border.Background>
+                    <Border.Effect>
+                        <DropShadowEffect Color="#A85420" Opacity="0.28" BlurRadius="14" ShadowDepth="3"/>
+                    </Border.Effect>
+                    <Border Margin="14" CornerRadius="3" BorderBrush="#A6FFFFFF" BorderThickness="2,2,0,0"/>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="AboutTitle" FontSize="22" FontWeight="Bold" Text="Hermes 启动器"
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <TextBlock x:Name="AboutVersionText" Margin="0,4,0,0"
+                               FontSize="12" Foreground="{StaticResource TextTertiaryBrush}"/>
+                    <TextBlock Margin="0,6,0,0" FontSize="12.5" LineHeight="19" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Text="第三方 GUI 启动器，非官方项目。让更多中文用户用上 Hermes Agent。"/>
                 </StackPanel>
-            </ScrollViewer>
-        </Border>
-
-        <StackPanel Grid.Row="2" Margin="0,18,0,0">
-            <CheckBox x:Name="AboutTelemetryToggle" Foreground="#E2E8F0"
-                      Content="启用匿名数据上报（推荐保持开启，帮助我们改进产品）"/>
-            <!-- 任务 011 返工 F5：toggle 切换后立刻给视觉反馈，不让用户去日志区找确认 -->
-            <TextBlock x:Name="AboutTelemetryStatus" Margin="24,4,0,0" FontSize="11" Foreground="#94A3B8" TextWrapping="Wrap"/>
+            </DockPanel>
         </StackPanel>
 
-        <DockPanel Grid.Row="3" Margin="0,18,0,0" LastChildFill="False">
-            <Button x:Name="AboutCloseButton" DockPanel.Dock="Right" Padding="20,8" MinWidth="100"
-                    Background="#1E293B" Foreground="#F8FAFC" BorderBrush="#475569" Content="关闭"/>
-        </DockPanel>
+        <!-- 匿名数据上报卡 -->
+        <ScrollViewer Grid.Row="1" Margin="32,0,32,0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Border Padding="20,18" CornerRadius="14"
+                        Background="{StaticResource SurfacePrimaryBrush}"
+                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                    <Border.Effect>
+                        <DropShadowEffect Color="#3C2814" Opacity="0.05" BlurRadius="14" ShadowDepth="2"/>
+                    </Border.Effect>
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <Border Width="20" Height="20" CornerRadius="10"
+                                    Background="{StaticResource AccentTintBrush}" Margin="0,0,8,0">
+                                <TextBlock Text="i" FontFamily="Times New Roman" FontStyle="Italic"
+                                           FontSize="12" FontWeight="Bold"
+                                           Foreground="{StaticResource AccentDeepBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock FontSize="14.5" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       Text="匿名数据上报"/>
+                        </StackPanel>
+                        <TextBlock Margin="0,8,0,0" FontSize="12.5" TextWrapping="Wrap" LineHeight="19"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   Text="我们仅收集帮助修 bug 和改进体验的匿名数据，不收集任何与你个人相关的信息。"/>
+
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Padding="12,12" CornerRadius="9"
+                                    Background="{StaticResource SurfaceSecondaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Border Width="14" Height="14" CornerRadius="7"
+                                                Background="{StaticResource SuccessSoftBrush}" Margin="0,0,5,0">
+                                            <TextBlock Text="✓" FontSize="9" FontWeight="Bold"
+                                                       Foreground="{StaticResource SuccessBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="我们收集" FontSize="12.5" FontWeight="Bold"
+                                                   Foreground="{StaticResource SuccessBrush}"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <TextBlock FontSize="11.5" LineHeight="17" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextSecondaryBrush}">
+                                        <Run Text="• 启动 / 关闭事件"/><LineBreak/>
+                                        <Run Text="• 安装阶段进展"/><LineBreak/>
+                                        <Run Text="• 启动器 / Windows 版本号"/><LineBreak/>
+                                        <Run Text="• 失败事件的脱敏后错误类型"/><LineBreak/>
+                                        <Run Text="• 一次性匿名设备 ID"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="2" Padding="12,12" CornerRadius="9"
+                                    Background="{StaticResource SurfaceSecondaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Border Width="14" Height="14" CornerRadius="7"
+                                                Background="{StaticResource DangerSoftBrush}" Margin="0,0,5,0">
+                                            <TextBlock Text="×" FontSize="11" FontWeight="Bold"
+                                                       Foreground="{StaticResource DangerBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <TextBlock Text="我们不收集" FontSize="12.5" FontWeight="Bold"
+                                                   Foreground="{StaticResource DangerBrush}"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <TextBlock FontSize="11.5" LineHeight="17" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextSecondaryBrush}">
+                                        <Run Text="• API key / token / 密码"/><LineBreak/>
+                                        <Run Text="• 对话内容 / 聊天记录"/><LineBreak/>
+                                        <Run Text="• 用户名 / 机器名 / 路径"/><LineBreak/>
+                                        <Run Text="• IP 地址 / 邮箱"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <TextBlock Margin="0,10,0,0" FontSize="11" LineHeight="16"
+                                   Foreground="{StaticResource TextTertiaryBrush}" TextWrapping="Wrap"
+                                   Text="数据通过 HTTPS 发到我们自有的 Cloudflare Worker · 不经过第三方分析平台。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Toggle 卡 -->
+                <Border Margin="0,12,0,0" Padding="14,12" CornerRadius="14"
+                        Background="{StaticResource SurfacePrimaryBrush}"
+                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                    <CheckBox x:Name="AboutTelemetryToggle"
+                              FontFamily="{StaticResource UiFont}" FontSize="13.5" FontWeight="SemiBold"
+                              Foreground="{StaticResource TextPrimaryBrush}"
+                              Content="启用匿名数据上报（推荐保持开启，帮助我们改进产品）"/>
+                </Border>
+
+                <!-- 状态文字 -->
+                <Border Margin="0,8,0,12" Padding="14,10" CornerRadius="10"
+                        Background="{StaticResource SurfaceSecondaryBrush}">
+                    <TextBlock x:Name="AboutTelemetryStatus" FontSize="12"
+                               Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 底部 close 按钮 -->
+        <Border Grid.Row="2" Padding="32,16,32,22"
+                Background="{StaticResource BgAppSecondaryBrush}"
+                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="0,1,0,0">
+            <DockPanel LastChildFill="False">
+                <Button x:Name="AboutCloseButton" DockPanel.Dock="Right"
+                        Style="{StaticResource AboutCloseButtonStyle}" Content="关闭"/>
+            </DockPanel>
+        </Border>
     </Grid>
 </Window>
-'@
+"@
         [xml]$aboutXaml = $aboutXamlText
         $aboutReader = New-Object System.Xml.XmlNodeReader $aboutXaml
         $aboutWindow = [Windows.Markup.XamlReader]::Load($aboutReader)
@@ -4468,15 +5767,17 @@ function Show-AboutDialog {
         foreach ($name in @('AboutVersionText','AboutTelemetryToggle','AboutTelemetryStatus','AboutCloseButton')) {
             $aboutControls[$name] = $aboutWindow.FindName($name)
         }
-        $aboutControls.AboutVersionText.Text = ("版本：{0}" -f $script:LauncherVersion)
+        $aboutControls.AboutVersionText.Text = ("Windows · {0}" -f $script:LauncherVersion)
         $aboutControls.AboutTelemetryToggle.IsChecked = (Get-TelemetryEnabled)
-        # 任务 011 返工 F5：状态文字初始值（根据当前是否开启）
+        # 状态文字初始值（暖色调适配，任务 012）
+        $successBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#4F8F7A')
+        $dangerBrush  = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#C25E52')
         if ($aboutControls.AboutTelemetryToggle.IsChecked) {
-            $aboutControls.AboutTelemetryStatus.Text = '✓ 已开启 — 感谢帮助我们改进产品'
-            $aboutControls.AboutTelemetryStatus.Foreground = '#86EFAC'
+            $aboutControls.AboutTelemetryStatus.Text = '✓ 已开启 · 感谢你帮助我们改进产品'
+            $aboutControls.AboutTelemetryStatus.Foreground = $successBrush
         } else {
-            $aboutControls.AboutTelemetryStatus.Text = '已关闭 — 我们不会再上报数据'
-            $aboutControls.AboutTelemetryStatus.Foreground = '#FCA5A5'
+            $aboutControls.AboutTelemetryStatus.Text = '已关闭 · 我们不会再上报数据'
+            $aboutControls.AboutTelemetryStatus.Foreground = $dangerBrush
         }
         # 闭包按 DECISIONS.md 经验避免嵌套 + 不用 GetNewClosure。
         # ScriptBlock 自然捕获 $aboutControls / $aboutWindow（与现有 AboutCloseButton 同一模式）。
@@ -4484,16 +5785,16 @@ function Show-AboutDialog {
             Set-TelemetryEnabled -Enabled $true
             Add-LogLine '匿名数据上报：已开启'
             try {
-                $aboutControls.AboutTelemetryStatus.Text = '✓ 已开启 — 感谢帮助我们改进产品'
-                $aboutControls.AboutTelemetryStatus.Foreground = '#86EFAC'
+                $aboutControls.AboutTelemetryStatus.Text = '✓ 已开启 · 感谢你帮助我们改进产品'
+                $aboutControls.AboutTelemetryStatus.Foreground = ([System.Windows.Media.BrushConverter]::new().ConvertFromString('#4F8F7A'))
             } catch { }
         })
         $aboutControls.AboutTelemetryToggle.Add_Unchecked({
             Set-TelemetryEnabled -Enabled $false
             Add-LogLine '匿名数据上报：已关闭'
             try {
-                $aboutControls.AboutTelemetryStatus.Text = '已关闭 — 我们不会再上报数据'
-                $aboutControls.AboutTelemetryStatus.Foreground = '#FCA5A5'
+                $aboutControls.AboutTelemetryStatus.Text = '已关闭 · 我们不会再上报数据'
+                $aboutControls.AboutTelemetryStatus.Foreground = ([System.Windows.Media.BrushConverter]::new().ConvertFromString('#C25E52'))
             } catch { }
         })
         $aboutControls.AboutCloseButton.Add_Click({ $aboutWindow.Close() })
@@ -4828,6 +6129,10 @@ function Refresh-Status {
         $controls.LogSectionBorder.Visibility = 'Visible'
         $controls.FooterBorder.Visibility = 'Visible'
 
+        # 任务 012：Install Mode 时把 Home Mode 的启动卡藏掉，避免残留
+        try { if ($controls.LaunchProgressCard) { $controls.LaunchProgressCard.Visibility = 'Collapsed' } } catch { }
+        try { if ($controls.HomeReadyContainer) { $controls.HomeReadyContainer.Visibility = 'Visible' } } catch { }
+
         $preflight = Get-CachedPreflight -InstallDir $script:CurrentStatus.InstallDir -HermesHome $script:CurrentStatus.HermesHome
         $installRunning = $false
         if ($script:ExternalInstallProcess) {
@@ -4840,6 +6145,16 @@ function Refresh-Status {
         $controls.InstallPathCardBorder.Visibility = 'Collapsed'
         $controls.InstallSettingsEditorBorder.Visibility = 'Collapsed'
 
+        # 任务 012：默认隐藏新视觉的辅助元素，下面分支按需打开
+        try {
+            $controls.InstallCurrentStageBorder.Visibility = 'Collapsed'
+            $controls.InstallProgressBar.Visibility = 'Collapsed'
+            $controls.InstallSubStepsPanel.Visibility = 'Collapsed'
+            $controls.InstallStepTipBorder.Visibility = 'Collapsed'
+            # 失败 LogPreview 默认收起；状态 9 下面会再打开
+            $controls.InstallFailureLogPreviewBorder.Visibility = 'Collapsed'
+        } catch { }
+
         if ($pendingOpenClaw) {
             $controls.InstallTaskCardBorder.Visibility = 'Collapsed'
             $controls.InstallProgressCardBorder.Visibility = 'Collapsed'
@@ -4848,22 +6163,53 @@ function Refresh-Status {
             $controls.OpenClawPostInstallText.Text = '检测到旧版 OpenClaw 配置。Hermes 支持按官方方式迁移旧版模型、密钥和部分配置；如果暂时不迁移，也可以先开始使用。'
             $controls.OpenClawImportButton.IsEnabled = [bool]$script:CurrentStatus.HermesCommand
             $controls.OpenClawSkipButton.IsEnabled = $true
+            # 任务 012：步骤指示器全部 done（hermes 已装，OpenClaw 是收尾迁移）
+            Set-InstallStepCardState -StepIndex 1 -State 'done'
+            Set-InstallStepCardState -StepIndex 2 -State 'done'
+            Set-InstallStepCardState -StepIndex 3 -State 'done'
+            $controls.InstallStepProgressTitle.Text = '总进度 · 3 / 3'
         } elseif ($installRunning) {
+            # 任务 012：状态 8 - 安装中
+            $controls.InstallTaskStepTagNum.Text = '3'
+            $controls.InstallTaskStepTagText.Text = '正在安装'
             $controls.InstallProgressTitleText.Text = '执行进度'
-            $controls.InstallTaskTitleText.Text = '第 3 步：正在安装 Hermes'
-            $controls.InstallTaskBodyText.Text = '官方安装终端已经打开。成功时终端会自动关闭；如果失败，终端会保留，日志区也会记录安装摘要。'
-            $controls.InstallProgressText.Text = @(
-                '✓ 第 1 步：环境检测已通过'
-                '✓ 第 2 步：安装位置已确认'
-                '→ 第 3 步：官方安装脚本执行中'
-            ) -join [Environment]::NewLine
+            $controls.InstallTaskTitleText.Text = '正在安装 Hermes Agent'
+            $controls.InstallTaskBodyText.Text = '官方安装终端已经打开，请不要关闭它。整个过程预计 1-3 分钟，具体看网络速度。'
+            $controls.InstallProgressText.Text = ''
             $controls.InstallFailureSummaryText.Visibility = 'Collapsed'
             $controls.InstallFailureSummaryText.Text = ''
+            # 显示进度条 + 子阶段 + 当前阶段
+            $controls.InstallCurrentStageBorder.Visibility = 'Visible'
+            $controls.InstallCurrentStageText.Text = '执行官方安装脚本'
+            $controls.InstallCurrentStageDetail.Text = '终端已经打开，看终端进度即可'
+            $controls.InstallProgressBar.Visibility = 'Visible'
+            $controls.InstallProgressBar.Value = 65
+            $controls.InstallSubStepsPanel.Visibility = 'Visible'
+            Set-InstallSubStepState -SubStepIndex 1 -State 'done'
+            Set-InstallSubStepState -SubStepIndex 2 -State 'active'
+            Set-InstallSubStepState -SubStepIndex 3 -State 'pending'
+            Set-InstallSubStepState -SubStepIndex 4 -State 'pending'
+            # 步骤指示器 1=done, 2=done, 3=active
+            Set-InstallStepCardState -StepIndex 1 -State 'done'
+            Set-InstallStepCardState -StepIndex 2 -State 'done'
+            Set-InstallStepCardState -StepIndex 3 -State 'active'
+            $controls.InstallStepProgressTitle.Text = '总进度 · 2 / 3'
+            $controls.InstallStep3Desc.Text = '官方安装脚本执行中，不要关闭终端'
+            # 提示卡
+            $controls.InstallStepTipBorder.Visibility = 'Visible'
+            $controls.InstallStepTipText.Text = '另一个黑色窗口是官方安装终端，在那里下载和安装 Hermes。最小化它没问题，但请不要关闭。'
             Set-InstallActionButtons -PrimaryActionId 'refresh' -PrimaryLabel '安装进行中' -PrimaryEnabled $false -SecondaryActionId 'open-docs' -SecondaryLabel '查看官方文档' -SecondaryEnabled $true -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
         } elseif (-not $script:InstallPreflightConfirmed -or -not $preflight.CanInstall) {
+            # 任务 012：状态 1 - 环境检测
+            $controls.InstallTaskStepTagNum.Text = '1'
+            $controls.InstallTaskStepTagText.Text = '环境检测'
             $controls.InstallProgressTitleText.Text = '检测结果'
-            $controls.InstallTaskTitleText.Text = '第 1 步：环境检测'
-            $controls.InstallTaskBodyText.Text = '先确认当前机器能顺利跑通官方安装脚本。Python、uv、Node 之类缺失时，官方脚本通常会自动补齐；Git、网络和目录权限异常才是会直接卡死安装的硬阻塞。建议使用默认安装路径，遇到目录权限异常时优先恢复默认。'
+            if ($preflight.CanInstall) {
+                $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
+            } else {
+                $controls.InstallTaskTitleText.Text = '环境检测发现需要先解决的问题'
+            }
+            $controls.InstallTaskBodyText.Text = '我们已经检查了你的电脑环境。Python、uv、Node 之类缺失时官方脚本会自动补齐；Git、网络和目录权限异常会直接卡死安装。'
             $preflightLines = New-Object System.Collections.Generic.List[string]
             if ($preflight.Blocking.Count -gt 0) {
                 $preflightLines.Add('阻塞项：') | Out-Null
@@ -4881,6 +6227,11 @@ function Refresh-Status {
                 foreach ($item in $preflight.Warnings) { $preflightLines.Add("• $item") | Out-Null }
             }
             $controls.InstallProgressText.Text = ($preflightLines -join [Environment]::NewLine)
+            # 步骤指示器: 1=active, 2=pending, 3=pending
+            Set-InstallStepCardState -StepIndex 1 -State 'active'
+            Set-InstallStepCardState -StepIndex 2 -State 'pending'
+            Set-InstallStepCardState -StepIndex 3 -State 'pending'
+            $controls.InstallStepProgressTitle.Text = '总进度 · 0 / 3'
 
             if ($preflight.CanInstall) {
                 $controls.InstallFailureSummaryText.Visibility = if ($preflight.Warnings.Count -gt 0) { 'Visible' } else { 'Collapsed' }
@@ -4902,33 +6253,43 @@ function Refresh-Status {
                 Set-InstallActionButtons -PrimaryActionId $primaryAction -PrimaryLabel $primaryLabel -PrimaryEnabled $true -SecondaryActionId $secondaryAction -SecondaryLabel $secondaryLabel -SecondaryEnabled $secondaryEnabled -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
             }
         } elseif (-not $script:InstallLocationConfirmed) {
+            # 任务 012：状态 6 - 位置确认
             $controls.InstallTaskCardBorder.Visibility = 'Collapsed'
             $controls.InstallPathCardBorder.Visibility = 'Visible'
             $controls.InstallProgressTitleText.Text = '流程进度'
-            $controls.InstallProgressText.Text = @(
-                '✓ 第 1 步：环境检测已通过'
-                '→ 第 2 步：确认数据目录与安装目录'
-                '○ 第 3 步：执行官方安装'
-            ) -join [Environment]::NewLine
+            $controls.InstallProgressText.Text = ''
             $controls.InstallFailureSummaryText.Visibility = 'Collapsed'
             $controls.InstallFailureSummaryText.Text = ''
             $controls.InstallLocationNoticeText.Text = '安装完成后，这些路径会收纳到“更多设置”里查看。基础使用阶段不需要反复关注它们。'
             $controls.ChangeInstallLocationButton.IsEnabled = $true
             $controls.ConfirmInstallLocationButton.IsEnabled = $true
-            $controls.ConfirmInstallLocationButton.Content = '确认安装位置'
-            Set-InstallActionButtons -PrimaryActionId 'location-confirm' -PrimaryLabel '位置已确认，继续安装' -PrimaryEnabled $true -SecondaryActionId 'change-location' -SecondaryLabel '更改安装位置' -SecondaryEnabled $true -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
+            $controls.ConfirmInstallLocationButton.Content = '位置已确认，继续'
+            # 步骤指示器: 1=done, 2=active, 3=pending
+            Set-InstallStepCardState -StepIndex 1 -State 'done'
+            Set-InstallStepCardState -StepIndex 2 -State 'active'
+            Set-InstallStepCardState -StepIndex 3 -State 'pending'
+            $controls.InstallStepProgressTitle.Text = '总进度 · 1 / 3'
+            $controls.InstallStep1Desc.Text = '已通过 · 准备开始安装'
+            Set-InstallActionButtons -PrimaryActionId 'location-confirm' -PrimaryLabel '位置已确认，继续' -PrimaryEnabled $true -SecondaryActionId 'change-location' -SecondaryLabel '更改安装位置' -SecondaryEnabled $true -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
         } else {
+            # 任务 012：状态 7 - 准备安装
             $controls.InstallTaskCardBorder.Visibility = 'Visible'
+            $controls.InstallTaskStepTagNum.Text = '3'
+            $controls.InstallTaskStepTagText.Text = '开始安装'
             $controls.InstallProgressTitleText.Text = '安装前确认'
-            $controls.InstallTaskTitleText.Text = '第 3 步：开始安装'
-            $controls.InstallTaskBodyText.Text = '环境和路径都已确认。点击开始后，启动器会在独立 PowerShell 终端里调用官方安装脚本；成功会自动关闭，失败会保留终端，方便直接把报错反馈回来。'
-            $controls.InstallProgressText.Text = @(
-                '✓ 第 1 步：环境检测已通过'
-                '✓ 第 2 步：安装位置已确认'
-                '→ 第 3 步：等待执行官方安装'
-            ) -join [Environment]::NewLine
+            $controls.InstallTaskTitleText.Text = '环境和位置都已确认，可以开始安装了'
+            $controls.InstallTaskBodyText.Text = '点击开始后，启动器会在独立 PowerShell 终端里调用官方安装脚本；成功会自动关闭，失败会保留终端，方便直接把报错反馈回来。'
+            $controls.InstallProgressText.Text = ''
             $controls.InstallFailureSummaryText.Visibility = if ($preflight.Warnings.Count -gt 0) { 'Visible' } else { 'Collapsed' }
             $controls.InstallFailureSummaryText.Text = if ($preflight.Warnings.Count -gt 0) { "提示：`n• " + ($preflight.Warnings -join "`n• ") } else { '' }
+            # 步骤指示器: 1=done, 2=done, 3=active
+            Set-InstallStepCardState -StepIndex 1 -State 'done'
+            Set-InstallStepCardState -StepIndex 2 -State 'done'
+            Set-InstallStepCardState -StepIndex 3 -State 'active'
+            $controls.InstallStepProgressTitle.Text = '总进度 · 2 / 3'
+            $controls.InstallStep1Desc.Text = '已通过'
+            $controls.InstallStep2Desc.Text = '已确认'
+            $controls.InstallStep3Desc.Text = '点开始安装即可启动官方脚本'
             Set-InstallActionButtons -PrimaryActionId 'install-external' -PrimaryLabel '开始安装' -PrimaryEnabled $true -SecondaryActionId 'change-location' -SecondaryLabel '更改安装位置' -SecondaryEnabled $true -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
         }
     } else {
@@ -4939,12 +6300,18 @@ function Refresh-Status {
         $controls.FooterBorder.Visibility = 'Collapsed'
 
         $controls.StatusHeadlineText.Text = '已就绪'
-        $controls.StatusBodyText.Text = '点击”开始使用”打开 hermes-web-ui，在浏览器中完成模型配置和对话。'
+        $controls.StatusBodyText.Text = '点「开始使用」打开 hermes-web-ui，在浏览器中完成模型配置和对话。'
 
         Set-PrimaryAction -ActionId 'launch' -Label '开始使用' -Enabled ([bool]$script:CurrentStatus.HermesCommand)
         Set-SecondaryAction -ActionId '' -Label '' -Enabled $false -Visible $false
         $controls.RecommendationText.Text = ''
         $controls.RecommendationHintText.Text = ''
+
+        # 任务 012：Home Mode 时如不在 launching，确保 LaunchProgressCard 隐藏，HomeReady 可见
+        if (-not $script:LaunchState) {
+            try { if ($controls.LaunchProgressCard) { $controls.LaunchProgressCard.Visibility = 'Collapsed' } } catch { }
+            try { if ($controls.HomeReadyContainer) { $controls.HomeReadyContainer.Visibility = 'Visible' } } catch { }
+        }
     }
     Set-Footer ("Hermes 命令路径：{0}" -f $(if ($script:CurrentStatus.HermesCommand) { $script:CurrentStatus.HermesCommand } else { '未找到' }))
 }
@@ -5067,6 +6434,8 @@ function Invoke-AppAction {
                 $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $installArgs
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
+                try { Refresh-Status } catch { }   # P1-2-LITE: 立即切到 State 8 占位屏
+                Start-InstallSpinner               # P1-2-LITE: 启动 braille spinner
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。成功时终端会在 5 秒后自动关闭，失败时会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
                 try { Send-Telemetry -EventName 'hermes_install_started' -Properties @{ network_env = [string]$networkEnv; branch = [string]$state.Branch } } catch { }
             } catch {
@@ -5230,6 +6599,26 @@ $controls.CopyFeedbackButton.Add_Click({
     [System.Windows.Clipboard]::SetText((Get-InstallFeedbackText))
     Add-ActionLog -Action '复制反馈信息' -Result '已复制当前状态、安装检测结果和最近日志' -Next '直接发给开发者即可'
 })
+# 任务 012：失败摘要 LogPreview 的"复制错误"按钮
+if ($controls.InstallFailureLogCopyButton) {
+    $controls.InstallFailureLogCopyButton.Add_Click({
+        try {
+            $logText = if ($controls.InstallFailureLogPreviewText -and $controls.InstallFailureLogPreviewText.Text) {
+                $controls.InstallFailureLogPreviewText.Text
+            } else {
+                Get-InstallFeedbackText
+            }
+            [System.Windows.Clipboard]::SetText($logText)
+            Add-ActionLog -Action '复制错误信息' -Result '已复制最近的安装日志' -Next '可粘到 GitHub Issue 或反馈群里'
+        } catch { }
+    })
+}
+# 任务 012：启动 WebUI 进度卡的"取消并返回"按钮
+if ($controls.LaunchProgressCancelButton) {
+    $controls.LaunchProgressCancelButton.Add_Click({
+        try { Stop-LaunchAsync } catch { }
+    })
+}
 $controls.RefreshButton.Add_Click({ Invoke-AppAction 'refresh' })
 $controls.PrimaryActionButton.Add_Click({ Invoke-AppAction $script:PrimaryActionId })
 $controls.SecondaryActionButton.Add_Click({

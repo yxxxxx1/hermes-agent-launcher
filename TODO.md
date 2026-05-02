@@ -4,6 +4,28 @@
 
 ---
 
+### 待办：State 8 安装中 in-app 进度条（任务 012 P1-2，已评估，转 v2）
+
+**背景**：任务 012 真机验收时发现安装中（State 8）的进度反馈仍在独立 PowerShell 终端里，launcher 主区停留在安装前确认屏（State 7），用户无法在 launcher 内看到安装进度。
+
+**评估结论**（任务 012 P1 patch 阶段）：**转 v2**，不在本次 patch 修复。
+
+**理由**：
+1. 上游 `install.ps1` 输出格式无结构化进度标记（只有纯文本 status）——无法不 fork 上游就做可靠解析
+2. 要实现 in-app 进度需要：stdout 重定向到临时文件 + 启动器 tail 文件（另起 Runspace 轮询）+ 按关键词启发式解析阶段 → 保守估计 150+ 行新代码
+3. 解析层脆弱：hermes install.ps1 文字格式随版本变动，每次上游更新都需要重新适配
+4. 陷阱 #2 约束：不 fork 上游，因此无法修改 install.ps1 加结构化输出
+
+**建议实现方向（v2 时参考）**：
+- 在 `New-ExternalInstallWrapperScript` 包装脚本中拦截 stdout，写到临时 log 文件
+- 启动后台 Runspace 每秒 tail 该文件，按正则匹配关键词更新 launcher 内的 4 阶段子步骤
+- 4 阶段关键词参考：`Checking environment` / `Cloning` / `Installing` / `Starting`
+- 可参考 Node.js 解压 Runspace 的实现模式（`extract-node` 阶段，同文件 Step-LaunchSequence）
+
+**优先级**：中。外部终端已有进度，用户可使用，体验不佳但不阻塞功能。
+
+---
+
 ### 待办：遥测系统 v2（任务 011 后续）
 
 任务 011 v1 上线后的下一轮迭代，按价值优先级排：
