@@ -24,6 +24,11 @@ Add-Type -AssemblyName System.Windows.Forms
 
 $script:LauncherVersion = 'Windows v2026.05.02.1'
 
+# P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
+$script:InstallSpinnerTimer  = $null
+$script:InstallSpinnerFrames = @()
+$script:InstallSpinnerIdx    = 0
+
 # === UI 字体路径（任务 012：bundle Quicksand 圆体 + 中文走 Microsoft YaHei UI） ===
 # WPF FontFamily 多 family fallback 链：英文/数字走 Quicksand，中文走 YaHei UI；字体目录缺失时退回纯系统字体。
 $script:UiFontFolder = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'assets\fonts' } else { Join-Path (Get-Location).Path 'assets\fonts' }
@@ -639,7 +644,8 @@ function Install-HermesWebUi {
 function Test-HermesWebUiHealth {
     try {
         $url = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)/health"
-        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        # 任务 012 P1-3：1s timeout — 本地 loopback 足够，减少 UI 线程阻塞时间
+        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
         return [pscustomobject]@{
             Healthy = $true
             Url     = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)"
@@ -3972,15 +3978,19 @@ function Start-LaunchAsync {
     }
 
     $script:LaunchState = @{
-        Phase           = 'check-install'
-        InstallDir      = $InstallDir
-        HermesCommand   = $HermesCommand
-        WebClient       = $null
-        DownloadZipPath = $null
-        DownloadDone    = $false
-        DownloadError   = $null
-        NpmProcess      = $null
-        HealthDeadline  = $null
+        Phase              = 'check-install'
+        InstallDir         = $InstallDir
+        HermesCommand      = $HermesCommand
+        WebClient          = $null
+        DownloadZipPath    = $null
+        DownloadDone       = $false
+        DownloadError      = $null
+        NpmProcess         = $null
+        HealthDeadline     = $null
+        # 任务 012 P1-3：Expand-Archive 后台 Runspace 追踪字段
+        ExtractRunspace    = $null
+        ExtractPowerShell  = $null
+        ExtractAsyncResult = $null
     }
 
     Add-ActionLog -Action '开始使用' -Result '正在检查环境...' -Next '请稍候'
@@ -4000,6 +4010,21 @@ function Start-LaunchAsync {
 function Stop-LaunchAsync {
     param([string]$ErrorMessage)
     if ($script:LaunchTimer) { $script:LaunchTimer.Stop() }
+    # 任务 012 P1-3：如果解压 Runspace 还在跑，安全释放（不等完成，不抛异常）
+    if ($script:LaunchState) {
+        try {
+            if ($script:LaunchState.ExtractPowerShell) {
+                $script:LaunchState.ExtractPowerShell.Stop()
+                $script:LaunchState.ExtractPowerShell.Dispose()
+            }
+        } catch { }
+        try {
+            if ($script:LaunchState.ExtractRunspace) {
+                $script:LaunchState.ExtractRunspace.Close()
+                $script:LaunchState.ExtractRunspace.Dispose()
+            }
+        } catch { }
+    }
     $script:LaunchState = $null
     $controls.PrimaryActionButton.IsEnabled = $true
     Set-Footer ''
@@ -4325,12 +4350,73 @@ function Step-LaunchSequence {
                     throw '下载文件为空或不完整。'
                 }
 
+                # 下载完成，进入独立解压阶段（与 LaunchPhaseMap 中的 extract-node 对应）
                 Add-LogLine '正在解压 Node.js...'
-                Set-Footer '正在解压 Node.js...'
-                $webUi = Get-HermesWebUiDefaults
-                Expand-Archive -Path $s.DownloadZipPath -DestinationPath $webUi.NodeRoot -Force
-                Remove-Item $s.DownloadZipPath -Force -ErrorAction SilentlyContinue
+                $s.Phase = 'extract-node'
+            }
 
+            # ── Phase 2b: Extract Node.js (background Runspace, non-blocking) ──
+            # 任务 012 P1-3：Expand-Archive 同步解压在 UI 线程会阻塞数秒导致"未响应"
+            # 改为后台 Runspace + 轮询完成标志，UI 线程全程不阻塞
+            'extract-node' {
+                if (-not $s.ExtractRunspace) {
+                    Set-Footer '正在解压 Node.js...'
+                    $webUi = Get-HermesWebUiDefaults
+
+                    # 捕获需要传入 Runspace 的变量（Runspace 不共享调用者的变量作用域）
+                    $zipPathCapture  = $s.DownloadZipPath
+                    $nodeRootCapture = $webUi.NodeRoot
+
+                    # 启动后台 Runspace（陷阱 #1：Runspace 内无 WPF Dispatcher，不需要 try-catch 包裹；
+                    # 错误通过返回值传回 UI 线程）
+                    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+                    $rs.Open()
+                    $ps = [System.Management.Automation.PowerShell]::Create()
+                    $ps.Runspace = $rs
+                    [void]$ps.AddScript({
+                        param($zipPath, $nodeRoot)
+                        try {
+                            Expand-Archive -Path $zipPath -DestinationPath $nodeRoot -Force
+                            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+                            return $null   # null = success
+                        } catch {
+                            return $_.Exception.Message   # non-null = error message
+                        }
+                    }).AddArgument($zipPathCapture).AddArgument($nodeRootCapture)
+                    $s.ExtractRunspace    = $rs
+                    $s.ExtractPowerShell  = $ps
+                    $s.ExtractAsyncResult = $ps.BeginInvoke()
+                    return
+                }
+
+                # 轮询：解压尚未完成则等下一个 tick
+                if (-not $s.ExtractAsyncResult.IsCompleted) { return }
+
+                # 解压完成 — 收集结果，释放资源（陷阱 #1：所有 Dispatcher 操作在 finally 后的 throw 之前）
+                $webUi = Get-HermesWebUiDefaults
+                $extractError = $null
+                try {
+                    $results = $s.ExtractPowerShell.EndInvoke($s.ExtractAsyncResult)
+                    if ($results -and $results.Count -gt 0 -and $null -ne $results[0]) {
+                        $extractError = [string]$results[0]
+                    }
+                    if ($s.ExtractPowerShell.HadErrors -and -not $extractError) {
+                        $errRecord = $s.ExtractPowerShell.Streams.Error | Select-Object -First 1
+                        if ($errRecord) { $extractError = $errRecord.ToString() }
+                    }
+                } catch {
+                    $extractError = $_.Exception.Message
+                } finally {
+                    try { $s.ExtractPowerShell.Dispose() } catch { }
+                    try { $s.ExtractRunspace.Close(); $s.ExtractRunspace.Dispose() } catch { }
+                    $s.ExtractRunspace    = $null
+                    $s.ExtractPowerShell  = $null
+                    $s.ExtractAsyncResult = $null
+                }
+
+                if ($extractError) {
+                    throw ("Node.js 解压失败：{0}" -f $extractError)
+                }
                 if (-not (Test-Path $webUi.NodeExe)) {
                     throw "解压后未找到 node.exe：$($webUi.NodeExe)"
                 }
@@ -4386,7 +4472,8 @@ function Step-LaunchSequence {
             'wait-gateway-healthy' {
                 $gwHealthy = $false
                 try {
-                    $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 2 -ErrorAction Stop
+                    # 任务 012 P1-3：TimeoutSec 1（本地 loopback，1s 足够；2s 会让 UI 线程阻塞超过 timer 间隔）
+                    $null = Invoke-RestMethod -Uri 'http://127.0.0.1:8642/health' -TimeoutSec 1 -ErrorAction Stop
                     $gwHealthy = $true
                 } catch { }
                 if ($gwHealthy) {
@@ -4401,7 +4488,8 @@ function Step-LaunchSequence {
                     $s.Phase = 'start-webui'
                 } else {
                     Set-Footer '等待 Gateway 就绪...'
-                    Start-Sleep -Milliseconds 1000
+                    # 任务 012 P1-3：不在 UI 线程 Sleep — DispatcherTimer 本身已提供 800ms 间隔
+                    # 移除 Start-Sleep -Milliseconds 1000 防止 UI 线程阻塞
                 }
             }
 
@@ -4492,11 +4580,36 @@ function Keep-LauncherVisible {
     } catch { }
 }
 
+# P1-2-LITE: 安装中 spinner(braille 文本切换,每 200ms 更新 InstallCurrentStageDetail)
+function Stop-InstallSpinner {
+    if ($script:InstallSpinnerTimer) {
+        try { $script:InstallSpinnerTimer.Stop() } catch { }
+        $script:InstallSpinnerTimer = $null
+    }
+}
+function Start-InstallSpinner {
+    Stop-InstallSpinner
+    $script:InstallSpinnerFrames = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+    $script:InstallSpinnerIdx = 0
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(200)
+    $t.Add_Tick({
+        try {
+            $f = $script:InstallSpinnerFrames[$script:InstallSpinnerIdx % $script:InstallSpinnerFrames.Length]
+            $script:InstallSpinnerIdx++
+            if ($controls.InstallCurrentStageDetail) { $controls.InstallCurrentStageDetail.Text = "$f 正在安装,看黑色终端窗口进度" }
+        } catch { }
+    })
+    $script:InstallSpinnerTimer = $t
+    $t.Start()
+}
+
 function Stop-ExternalInstallTimer {
     if ($script:ExternalInstallTimer) {
         $script:ExternalInstallTimer.Stop()
         $script:ExternalInstallTimer = $null
     }
+    Stop-InstallSpinner
 }
 
 function Start-ExternalInstallMonitor {
@@ -5354,13 +5467,15 @@ function Set-InstallActionButtons {
     $controls.StartInstallPageButton.Content = $PrimaryLabel
     $controls.StartInstallPageButton.IsEnabled = $PrimaryEnabled
     if ($PrimaryEnabled) {
-        $controls.StartInstallPageButton.Background = '#22C55E'
-        $controls.StartInstallPageButton.BorderBrush = '#22C55E'
-        $controls.StartInstallPageButton.Foreground = '#04110A'
+        # 任务 012 P1-1：统一使用 LauncherPalette 主色暖橙，与 State 1/6 主按钮一致
+        $controls.StartInstallPageButton.Background = '#D9772B'
+        $controls.StartInstallPageButton.BorderBrush = '#D9772B'
+        $controls.StartInstallPageButton.Foreground = '#FCFCF7'
     } else {
-        $controls.StartInstallPageButton.Background = '#1E293B'
-        $controls.StartInstallPageButton.BorderBrush = '#334155'
-        $controls.StartInstallPageButton.Foreground = '#94A3B8'
+        # 禁用态：使用浅色系暗哑色（米色系）
+        $controls.StartInstallPageButton.Background = '#D4CFC5'
+        $controls.StartInstallPageButton.BorderBrush = '#C8C3B9'
+        $controls.StartInstallPageButton.Foreground = '#897F75'
     }
 
     $controls.InstallRequirementsButton.Content = $SecondaryLabel
@@ -6319,6 +6434,8 @@ function Invoke-AppAction {
                 $wrapperScript = New-ExternalInstallWrapperScript -InstallScriptPath $tempScript -Arguments $installArgs
                 $proc = Start-Process powershell.exe -PassThru -WorkingDirectory $env:TEMP -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript)
                 Start-ExternalInstallMonitor -Process $proc
+                try { Refresh-Status } catch { }   # P1-2-LITE: 立即切到 State 8 占位屏
+                Start-InstallSpinner               # P1-2-LITE: 启动 braille spinner
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '已打开独立 PowerShell 安装终端。成功时终端会在 5 秒后自动关闭，失败时会保留终端供查看报错。' -Next '安装结束后启动器会自动刷新状态'
                 try { Send-Telemetry -EventName 'hermes_install_started' -Properties @{ network_env = [string]$networkEnv; branch = [string]$state.Branch } } catch { }
             } catch {
