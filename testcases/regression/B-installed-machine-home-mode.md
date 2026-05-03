@@ -2,10 +2,10 @@
 
 **触发的 Bug**:已装 Hermes 的用户每次重开启动器仍看到 "安装/更新 Hermes" 安装流程
 **引入版本**:v2026.04.24 起(OpenClaw 迁移逻辑加进 Refresh-Status)
-**修复版本**:v2026.05.02.3(任务 014)
+**修复版本**:**待 PM 决定**(任务 014 修复 commit `effe9b7` + QA Patch round 1;PM 决定是否 bump 到 v2026.05.02.3 或后续版本)
 **关联陷阱**:CLAUDE.md #10(找得到≠信息存在)、#27、Bug B
 **优先级**:P0
-**适用版本**:v2026.05.02.3 及以上
+**适用版本**:任务 014 commit `effe9b7` 及以上(发版后追加版本号)
 
 > 根因:`Refresh-Status` 在 L6145 的判断 `((-not $isInstalled) -or $pendingOpenClaw)` 把已装 + 残留 OpenClaw 目录的机器误判为"需要 Install Mode"。本任务把条件简化成 `(-not $isInstalled)`,OpenClaw 迁移功能改为 Home Mode 内的横幅(保留迁移按钮)。
 

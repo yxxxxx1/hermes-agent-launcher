@@ -1,0 +1,16 @@
+  HomeBannerStack: True
+  HomeDepFailureBanner: True
+  HomeOpenClawBanner: True
+  HomeReadyContainer: True
+  HomeStatusBadgeBorder: True
+HomeBannerStack child count: 2
+  child: HomeDepFailureBanner
+  child: HomeOpenClawBanner
+HomeReadyContainer.Child.Children:
+  HomeStatusBadgeBorder
+  StatusHeadlineText
+  StatusBodyText
+  RecommendationText
+  RecommendationHintText
+  SecondaryActionButton
+  RefreshButton

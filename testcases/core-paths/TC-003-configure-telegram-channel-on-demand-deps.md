@@ -32,12 +32,16 @@
 - **无任何**"消息发出去 bot 没回应"的现象
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 4 截图(.env 修改前后):`testcases/core-paths/_evidence/TC-003-env-diff.png`
-- [ ] 步骤 5 启动器日志:`testcases/core-paths/_evidence/TC-003-launcher.log`(必须看到 env_changed + dep_install + gateway_restart 三段)
-- [ ] 步骤 7 Telegram 截图(bot 回复):`testcases/core-paths/_evidence/TC-003-bot-reply.png`
-- [ ] gateway 重启前后 pid 对比:旧 pid=______,新 pid=______
-- [ ] 通过 / 未通过 / 无法本地验证(如无 Telegram 账号,可声明盲区)
-- [ ] 备注:_______________
+- [ ] 步骤 4 截图(.env 修改前后):`testcases/core-paths/_evidence/TC-003-env-diff.png`(待 PM 真机验收时填)
+- [ ] 步骤 5 启动器日志:`testcases/core-paths/_evidence/TC-003-launcher.log`(待 PM 真机验收时填)
+- [ ] 步骤 7 Telegram 截图(bot 回复):`testcases/core-paths/_evidence/TC-003-bot-reply.png`(待 PM 真机验收时填)
+- [ ] gateway 重启前后 pid 对比:旧 pid=______,新 pid=______(待 PM 真机验收时填)
+- [x] Bug A.1 polling 兜底代码 review:**`Start-GatewayEnvWatcher` 末尾新增 `$polling = DispatcherTimer + 60s + Add_Tick { Get-EnvFileSignature 比较 }`**;`Stop-HermesWebUiRuntime` 同步加了 polling timer 清理
+- [x] Bug A.2 derive `GatewayHermesExe` 代码 review:**`Restart-HermesGateway` 当 `$script:GatewayHermesExe` 为 null 时,从 `controls.InstallDirTextBox.Text` + LOCALAPPDATA 推导**(陷阱 #27 升级版)
+- [x] Bug A.3 失败上报代码 review:**`Install-GatewayPlatformDeps` 失败分支写 `$script:LastDepInstallFailure` + 调用 `Send-Telemetry -EventName 'platform_dep_install_failed'`**;成功分支清除该字段
+- [x] XAML `HomeDepFailureBanner` 加载验证:`testcases/regression/_evidence/M1-xaml-banner-relocation.txt` 显示 `HomeDepFailureBanner: True`
+- **状态**:**部分通过(代码逻辑通过,真机渠道行为无法本地验证)**
+- 备注:工程师 sandbox 没法构造真实 .env watcher 行为(60 秒 polling 等待 + 真实 .env 修改触发 watcher)+ 没法跑 `uv pip install` + 没有 Telegram 账号。**60 秒 polling 路径 + 真实 install 失败的 UI 显示 + bot 实际回复需 PM 真机验证**。
 
 ## 失败处理
 - bot 不回应 + .env 没改:webui → .env 写入失败,陷阱 #21 GBK 编码可能命中

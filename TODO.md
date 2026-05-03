@@ -279,3 +279,53 @@ WPF 的 `ComboBox` 在 `IsEditable="True"` 模式下，内部的 `PART_EditableT
 ### 元任务提醒：视觉迁移整体节奏
 
 下一轮 Windows 端视觉迁移做完 Top-3 后，如果想做到全量统一，从上面"第二轮"那条扩展，按主窗口状态 → 高频对话框 → 低频对话框 → MessageBox 自绘的顺序推进；**MessageBox 自绘**（条目 2.4-2.9）成本高收益低，可一直放最后甚至不做。
+
+---
+
+## Task 014 QA 余项（QA round 1 后转 v2 / 后续任务）
+
+任务 014 在 QA 第一轮收到 83/100,本轮 patch 已修主线,以下条目记入 TODO,后续迭代或专项任务处理。
+
+### M3 — `Show-DepInstallFailureDialog` 弹窗视觉与 LauncherPalette 对齐
+
+**背景**:任务 014 Bug A.3 新增的错误详情弹窗 (`Show-DepInstallFailureDialog`,launcher line ~826) 的 XAML 用了硬编码颜色 `#FFFAF4` / `#FFF1EB` / `#3C2814`,虽然颜色调性接近 LauncherPalette,但没用 StaticResource 引用主题资源。下一轮统一时改用 `{StaticResource SurfacePrimaryBrush}` 等 token。
+
+**优先级**:低(只在依赖装失败时弹窗,正常用户看不到)
+
+### M4 — `platform_dep_install_failed` 事件 Worker 端白名单
+
+**背景**:任务 014 新增此 telemetry 事件,但禁止改 worker。如 worker 有 `VALID_EVENTS` 白名单且未含此事件,Dashboard 不会显示;启动器侧的 UI 横幅 + 详情弹窗仍正常工作。
+
+**动作**:发版前 PM 检查 worker(deploy script / wrangler.toml / VALID_EVENTS const)是否需补此事件名。
+
+**优先级**:中(影响 Dashboard 数据但不影响用户感知)
+
+### T1 — `gateway_restart_started` / `gateway_restart_succeeded` 事件埋点
+
+**背景**:`testcases/regression/A-channel-deps-on-demand.md` 期望看到这两个事件,但当前 launcher 代码无 hook 点(只有 `gateway_started` / `gateway_failed`)。任务 014 不为单条用例增量加事件(陷阱 #29),延后到任务 015+。
+
+**优先级**:低
+
+### T2 — `polling_fallback_triggered` 事件埋点
+
+**背景**:任务 014 polling 兜底触发时只走 `Add-LogLine`,没有上报遥测。Dashboard 上看不到"watcher 失效频率"这类运维指标。
+
+**动作**:下一轮可加一个低频遥测事件(每次 polling 触发时上报 `polling_fallback_triggered`),帮 PM 评估 watcher 失效在用户侧多常见。
+
+**优先级**:低(运维信号,非用户感知)
+
+### T3 — Phase 2 "可用性用例摸底" 任务
+
+**背景**:任务 014 明确不做(任务书 §5)。`testcases/core-paths/TC-001 ~ TC-010` 在本任务里已填了"sandbox 状态 + 备注",但跑不了的(TC-001 干净 VM、TC-007 中文用户名、TC-008 国内网络)需要专项任务覆盖。
+
+**动作**:任务 015 或单独 Phase 2 摸底,准备一台干净 Win 机器跑这 10 条全集。
+
+**优先级**:中(决定后续发版的真机回归质量)
+
+### T4 — 横幅与下方 ✓ 图标 + 主按钮的视觉间距
+
+**背景**:QA Patch M1 把 `HomeDepFailureBanner` / `HomeOpenClawBanner` 移到 `HomeBannerStack`(HomeModePanel 直接子,与 HomeReadyContainer 并列)。Margin 间距凭经验填 `0,0,0,8`,具体视觉效果需 PM 真机验证。
+
+**动作**:PM 真机看完后如果觉得间距不舒服,下一轮调 `HomeBannerStack.Margin` 或 `HomeReadyContainer.Margin`。
+
+**优先级**:低(视觉精修)

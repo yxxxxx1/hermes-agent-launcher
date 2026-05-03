@@ -30,11 +30,11 @@
 - 整个流程**无人工介入清理残留**
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 4 后 `%LOCALAPPDATA%\hermes\` 目录树:`testcases/core-paths/_evidence/TC-006-after-uninstall.txt`
-- [ ] 步骤 7 安装日志:`testcases/core-paths/_evidence/TC-006-reinstall.log`
-- [ ] 步骤 8 截图(Home Mode):`testcases/core-paths/_evidence/TC-006-home.png`
-- [ ] 通过 / 未通过 / 无法本地验证
-- [ ] 备注:_______________
+- [ ] 步骤 4 后 `%LOCALAPPDATA%\hermes\` 目录树:`testcases/core-paths/_evidence/TC-006-after-uninstall.txt`(待 PM 真机验收时填)
+- [ ] 步骤 7 安装日志:`testcases/core-paths/_evidence/TC-006-reinstall.log`(待 PM 真机验收时填)
+- [ ] 步骤 8 截图(Home Mode):`testcases/core-paths/_evidence/TC-006-home.png`(待 PM 真机验收时填)
+- **状态**:**无法本地验证(原因:sandbox 不能执行 uninstall 流程,会破坏当前已装环境)**
+- 备注:任务 014 不触及 `New-UninstallScript` / `Test-InstallPreflight` 残留清理路径(陷阱 #16 修复保留)。Bug B 修复后,卸载完毕 + 重装完毕的状态还原应正常进入 Install Mode → Home Mode。需 PM 真机抽查。
 
 ## 失败处理
 - 卸载失败:权限问题 / 进程占用 / venv 深路径删不掉 → 陷阱 #16 复发

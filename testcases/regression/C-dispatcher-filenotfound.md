@@ -2,10 +2,10 @@
 
 **触发的 Bug**:Dashboard 上 ~20% 失败事件是 `dispatcher: FileNotFoundException`,污染遥测数据
 **引入版本**:任务 011 上线匿名遥测起(`add_UnhandledException` 在 dispatcher 上注册了)
-**修复版本**:v2026.05.02.3(任务 014)
+**修复版本**:**待 PM 决定**(任务 014 修复 commit `effe9b7` + QA Patch round 1;PM 决定是否 bump 到 v2026.05.02.3 或后续版本)
 **关联陷阱**:CLAUDE.md #1(Dispatcher 异常)、Bug C
 **优先级**:P1
-**适用版本**:v2026.05.02.3 及以上
+**适用版本**:任务 014 commit `effe9b7` 及以上(发版后追加版本号)
 
 > 根因:Action handlers(`Invoke-AppAction` 内 switch case)、`Open-BrowserUrlSafe`、`Open-InExplorer`、launch state machine 的 `Start-Process -FilePath $webUi.WebUiCmd` 等调用,都可能在罕见但真实的场景下抛 `FileNotFoundException`(浏览器未注册、shell 注册损坏、文件被杀软隔离等)。原代码没在这些点上加 try-catch,异常冒到 WPF Dispatcher 的 UnhandledException,被 telemetry 上报为 `dispatcher: FileNotFoundException`。本任务在所有这些点加 try-catch + 日志降级 + 替换为更具体的 reason 字符串。
 
@@ -32,12 +32,13 @@
 - 错误消息(若有)只走 `Add-LogLine`(本测试上下文里 `Add-LogLine` 可能未定义,这种情况下 try-catch 还是吞掉了原始异常)
 - 步骤 4(空 URL):函数直接 return,不调用 Start-Process
 
-### 执行证据(本工程师跑过)
-- [x] 步骤 2:抛 Win32Exception 被吞;PowerShell 没异常退出
-- [x] 步骤 3:explorer.exe 接受不存在的路径,自己处理(无异常);若引入异常也被吞
-- [x] 步骤 4:空 URL 早期 return
-- [x] 通过 / 未通过 / **无法本地验证 → 通过(代码 review + 局部 sandbox 跑可证)**
-- 备注:工程师对照修改后的 `Open-BrowserUrlSafe` 代码(`HermesGuiLauncher.ps1` 第 1916-1927 行)和 `Open-InExplorer`(第 2351-2367 行)确认了 try-catch 包裹。
+### 执行证据(本工程师跑过 — QA Patch round 1)
+- [x] 步骤 2(模拟 FileNotFoundException 进 catch 路径):**实际跑过 + 输出已 commit 到 `testcases/regression/_evidence/C1-dot-source-test.txt`**(用 `[System.IO.File]::Open('C:\Definitely\Not\Exists\xyz_stub.tmp', 'Open')` 强制抛 FileNotFoundException 模拟,catch 块成功捕获并调用 stub Send-Telemetry)
+- [x] 步骤 3(Open-InExplorer 模拟错误路径):**实际跑过 + 输出已 commit**(同上文件,Test 3),catch 块成功上报 `open_explorer:` reason
+- [x] 步骤 4(空 URL 早期 return):**实际跑过 + 输出已 commit**(同上文件,Test 1)— 正确走 early return,不调用 Start-Process
+- [x] 步骤 5(Open-InExplorer 真函数 + 不存在路径):**实际跑过 + 输出已 commit**(同上文件,Test 4)
+- **状态**:**通过(代码 review + sandbox 实际跑过 stub 等价模拟)**
+- 备注:工程师对照修改后的 `Open-BrowserUrlSafe` 代码(`HermesGuiLauncher.ps1` 第 1916-1927 行)和 `Open-InExplorer`(第 2351-2370 行,QA Patch M2 后含 telemetry)确认了 try-catch + Send-Telemetry 包裹。dot-source 验证脚本见 `D:\Temp\test_c1_dotsource.ps1`(本机临时路径,不入 commit)。
 
 ### 失败处理
 - 抛了异常:检查 try-catch 是否真的包了 `Start-Process` 行

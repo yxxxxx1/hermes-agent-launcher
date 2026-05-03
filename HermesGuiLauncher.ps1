@@ -2560,6 +2560,7 @@ function Open-InExplorer {
     if (-not $Path) { return }
     # 任务 014 Bug C：explorer.exe 调用极少抛错，但 Path 含特殊字符 / 权限异常时仍可能炸。
     # 全段 try-catch 防 dispatcher 未捕获。
+    # QA Patch M2：catch 块对齐 Open-BrowserUrlSafe，上报具体 reason，便于 Dashboard 反查
     try {
         if (Test-Path $Path) {
             Start-Process explorer.exe -ArgumentList """$Path""" | Out-Null
@@ -2571,6 +2572,7 @@ function Open-InExplorer {
         }
     } catch {
         try { Add-LogLine ("打开资源管理器失败：{0}" -f $_.Exception.Message) } catch { }
+        try { Send-Telemetry -EventName 'unexpected_error' -FailureReason ('open_explorer: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) -Properties @{ source = 'open_explorer' } } catch { }
     }
 }
 
@@ -3647,44 +3649,50 @@ $defaults = Get-HermesDefaults
 
                 <!-- ========== Home Mode ========== -->
                 <Grid x:Name="HomeModePanel" Visibility="Collapsed">
+                    <!-- 任务 014 QA Patch M1：HomeDepFailureBanner / HomeOpenClawBanner 移到
+                         HomeModePanel 的直接子元素 StackPanel 里（而不是 HomeReadyContainer 内），
+                         这样 Launching 阶段（HomeReadyContainer.Visibility=Collapsed）横幅仍可见，
+                         避免陷阱 #4 复刻——用户在等待启动 WebUI 时也能看到失败提示。 -->
+                    <StackPanel x:Name="HomeBannerStack" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,0,0,0" Panel.ZIndex="10">
+                        <!-- 任务 014 Bug A：渠道依赖安装失败横幅（默认隐藏，安装失败时显示） -->
+                        <Border x:Name="HomeDepFailureBanner" Margin="0,0,0,8" Padding="16,12"
+                                CornerRadius="12" MaxWidth="640"
+                                Background="#FFF1EB" BorderBrush="#E59B4E" BorderThickness="1"
+                                Visibility="Collapsed" Cursor="Hand">
+                            <DockPanel LastChildFill="True">
+                                <Button x:Name="HomeDepFailureViewButton" DockPanel.Dock="Right"
+                                        Style="{StaticResource TextButtonStyle}" Content="查看详情"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock VerticalAlignment="Center" FontSize="20" Margin="0,0,10,0"
+                                               Foreground="#B0502A" Text="!"/>
+                                    <TextBlock x:Name="HomeDepFailureText" VerticalAlignment="Center"
+                                               FontSize="13" TextWrapping="Wrap"
+                                               Foreground="#6E3A1F"
+                                               Text="渠道依赖未就绪。点这里查看详情"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <!-- 任务 014 Bug B：旧版 OpenClaw 迁移横幅（不再强行进 Install Mode） -->
+                        <Border x:Name="HomeOpenClawBanner" Margin="0,0,0,8" Padding="16,12"
+                                CornerRadius="12" MaxWidth="640"
+                                Background="{StaticResource SurfaceSecondaryBrush}"
+                                BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                Visibility="Collapsed">
+                            <DockPanel LastChildFill="True">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button x:Name="HomeOpenClawImportButton" Margin="0,0,8,0"
+                                            Style="{StaticResource TextButtonStyle}" Content="立即迁移"/>
+                                    <Button x:Name="HomeOpenClawSkipButton"
+                                            Style="{StaticResource TextButtonStyle}" Content="稍后再说"/>
+                                </StackPanel>
+                                <TextBlock VerticalAlignment="Center" FontSize="13" TextWrapping="Wrap"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           Text="检测到旧版 OpenClaw 配置，可按需迁移；不影响继续使用。"/>
+                            </DockPanel>
+                        </Border>
+                    </StackPanel>
                     <Border x:Name="HomeReadyContainer">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,12,0,0">
-                            <!-- 任务 014 Bug A：渠道依赖安装失败横幅（默认隐藏，安装失败时显示） -->
-                            <Border x:Name="HomeDepFailureBanner" Margin="0,0,0,16" Padding="16,12"
-                                    CornerRadius="12" MaxWidth="640"
-                                    Background="#FFF1EB" BorderBrush="#E59B4E" BorderThickness="1"
-                                    Visibility="Collapsed" Cursor="Hand">
-                                <DockPanel LastChildFill="True">
-                                    <Button x:Name="HomeDepFailureViewButton" DockPanel.Dock="Right"
-                                            Style="{StaticResource TextButtonStyle}" Content="查看详情"/>
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock VerticalAlignment="Center" FontSize="20" Margin="0,0,10,0"
-                                                   Foreground="#B0502A" Text="!"/>
-                                        <TextBlock x:Name="HomeDepFailureText" VerticalAlignment="Center"
-                                                   FontSize="13" TextWrapping="Wrap"
-                                                   Foreground="#6E3A1F"
-                                                   Text="渠道依赖未就绪。点这里查看详情"/>
-                                    </StackPanel>
-                                </DockPanel>
-                            </Border>
-                            <!-- 任务 014 Bug B：旧版 OpenClaw 迁移横幅（不再强行进 Install Mode） -->
-                            <Border x:Name="HomeOpenClawBanner" Margin="0,0,0,16" Padding="16,12"
-                                    CornerRadius="12" MaxWidth="640"
-                                    Background="{StaticResource SurfaceSecondaryBrush}"
-                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
-                                    Visibility="Collapsed">
-                                <DockPanel LastChildFill="True">
-                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                        <Button x:Name="HomeOpenClawImportButton" Margin="0,0,8,0"
-                                                Style="{StaticResource TextButtonStyle}" Content="立即迁移"/>
-                                        <Button x:Name="HomeOpenClawSkipButton"
-                                                Style="{StaticResource TextButtonStyle}" Content="稍后再说"/>
-                                    </StackPanel>
-                                    <TextBlock VerticalAlignment="Center" FontSize="13" TextWrapping="Wrap"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               Text="检测到旧版 OpenClaw 配置，可按需迁移；不影响继续使用。"/>
-                                </DockPanel>
-                            </Border>
                             <Border x:Name="HomeStatusBadgeBorder" Width="76" Height="76" CornerRadius="38"
                                     HorizontalAlignment="Center">
                                 <Border.Background>
@@ -3948,6 +3956,9 @@ foreach ($name in @(
     # 任务 012 新增 - Home Mode 已就绪 + 启动 WebUI 进度卡
     'HomeReadyContainer','HomeStatusBadgeBorder',
     # 任务 014 新增 - Home Mode 内 OpenClaw 迁移横幅（Bug B）+ 渠道依赖失败横幅（Bug A）
+    # QA Patch M1：横幅移到 HomeModePanel 顶部 StackPanel（不在 HomeReadyContainer 内），
+    # 这样 Launching 阶段（HomeReadyContainer 隐藏）横幅仍可见。
+    'HomeBannerStack',
     'HomeDepFailureBanner','HomeDepFailureText','HomeDepFailureViewButton',
     'HomeOpenClawBanner','HomeOpenClawImportButton','HomeOpenClawSkipButton',
     'LaunchProgressCard','LaunchSpinnerGlyph','LaunchSpinnerRotate',

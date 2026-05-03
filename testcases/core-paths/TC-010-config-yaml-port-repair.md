@@ -34,13 +34,14 @@
   - 文件用 hex viewer 检查:**无 BOM(开头无 `EF BB BF`),无 CRLF 转 LF 错误**
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 1 备份的 config.yaml:`testcases/core-paths/_evidence/TC-010-before.yaml`
-- [ ] 步骤 6 启动器日志:`testcases/core-paths/_evidence/TC-010-repair.log`
-- [ ] 步骤 9 修复后的 config.yaml:`testcases/core-paths/_evidence/TC-010-after.yaml`
-- [ ] hex 比对开头 16 字节(确认无 BOM):`testcases/core-paths/_evidence/TC-010-hex.txt`
-- [ ] webui 已连接截图:`testcases/core-paths/_evidence/TC-010-webui.png`
-- [ ] 通过 / 未通过 / 无法本地验证
-- [ ] 备注:_______________
+- [ ] 步骤 1 备份的 config.yaml:`testcases/core-paths/_evidence/TC-010-before.yaml`(待 PM 真机验收时填)
+- [ ] 步骤 6 启动器日志:`testcases/core-paths/_evidence/TC-010-repair.log`(待 PM 真机验收时填)
+- [ ] 步骤 9 修复后的 config.yaml:`testcases/core-paths/_evidence/TC-010-after.yaml`(待 PM 真机验收时填)
+- [ ] hex 比对开头 16 字节(确认无 BOM):`testcases/core-paths/_evidence/TC-010-hex.txt`(待 PM 真机验收时填)
+- [ ] webui 已连接截图:`testcases/core-paths/_evidence/TC-010-webui.png`(待 PM 真机验收时填)
+- [x] `Repair-GatewayApiPort` 函数代码 review:**任务 014 完全未改动该函数(line 822-849)**;仍用 `[System.IO.File]::ReadAllText/WriteAllText UTF-8 NoBom`(陷阱 #21 已规避)
+- **状态**:**通过(代码未动 — 沿用任务 011 实现)/ 真机端口篡改场景无法本地验证**
+- 备注:任务 014 没碰 `Repair-GatewayApiPort` 任何代码;仍由 `Start-HermesGateway` (L1251) 与 `Restart-HermesGateway` (L1359) 在 gateway 启动 / 重启前调用。需 PM 真机篡改 config.yaml 端口验证恢复。
 
 ## 失败处理
 - port 未自动修复:`Repair-GatewayApiPort` 未触发或读取失败,可能是 YAML 解析报错

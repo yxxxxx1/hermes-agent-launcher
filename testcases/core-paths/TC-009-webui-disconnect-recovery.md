@@ -37,12 +37,13 @@
 - 整个恢复过程**< 30 秒**,**无人工介入**
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 1 异常状态截图(选用的子用例):`testcases/core-paths/_evidence/TC-009-precondition.png`
-- [ ] 步骤 5 启动器恢复日志:`testcases/core-paths/_evidence/TC-009-recovery.log`
-- [ ] 步骤 7 webui 已连接截图:`testcases/core-paths/_evidence/TC-009-connected.png`
-- [ ] 恢复总耗时:______ 秒
-- [ ] 通过 / 未通过 / 无法本地验证
-- [ ] 备注(选用了 9.A/9.B/9.C 中哪个):_______________
+- [ ] 步骤 1 异常状态截图(选用的子用例):`testcases/core-paths/_evidence/TC-009-precondition.png`(待 PM 真机验收时填)
+- [ ] 步骤 5 启动器恢复日志:`testcases/core-paths/_evidence/TC-009-recovery.log`(待 PM 真机验收时填)
+- [ ] 步骤 7 webui 已连接截图:`testcases/core-paths/_evidence/TC-009-connected.png`(待 PM 真机验收时填)
+- [ ] 恢复总耗时:______ 秒(待 PM 真机验收时填)
+- [x] 任务 014 改善了 fast path 的 derive `GatewayHermesExe` fallback,但**没**改 `Repair-GatewayApiPort` / `Stop-ExistingGateway` / health check 主链路(代码 review 确认 `Restart-HermesGateway` 仍调用 `Repair-GatewayApiPort` + `Stop-ExistingGateway`)
+- **状态**:**部分通过(代码 review)/ 真机断连场景无法本地验证**
+- 备注(选用了 9.A/9.B/9.C 中哪个):任务 014 影响最大的是 9.C(陷阱 #39)间接路径——`Stop-ExistingGateway` 没动,但 `Restart-HermesGateway` 加了 fallback 推导让 watcher / polling 都能可靠触发杀进程逻辑。9.A/9.B 子用例任务 014 没改任何代码。需 PM 真机抽查。
 
 ## 失败处理
 - gateway.lock 没被删 → 陷阱 #39 复发(权限问题或重试逻辑漏)

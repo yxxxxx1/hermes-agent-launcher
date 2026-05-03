@@ -28,12 +28,12 @@
 - 启动器主面板**不出现**"未连接"等异常状态
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 3 截图(二维码):`testcases/core-paths/_evidence/TC-004-qr.png`
-- [ ] 步骤 5 截图(已登录状态):`testcases/core-paths/_evidence/TC-004-logged-in.png`
-- [ ] 步骤 7 截图(微信对话):`testcases/core-paths/_evidence/TC-004-reply.png`
-- [ ] gateway 日志(`weixin connected` 段):`testcases/core-paths/_evidence/TC-004-gateway.log`
-- [ ] 通过 / 未通过 / 无法本地验证(如 sandbox 无微信账号,声明盲区)
-- [ ] 备注:_______________
+- [ ] 步骤 3 截图(二维码):`testcases/core-paths/_evidence/TC-004-qr.png`(待 PM 真机验收时填)
+- [ ] 步骤 5 截图(已登录状态):`testcases/core-paths/_evidence/TC-004-logged-in.png`(待 PM 真机验收时填)
+- [ ] 步骤 7 截图(微信对话):`testcases/core-paths/_evidence/TC-004-reply.png`(待 PM 真机验收时填)
+- [ ] gateway 日志(`weixin connected` 段):`testcases/core-paths/_evidence/TC-004-gateway.log`(待 PM 真机验收时填)
+- **状态**:**无法本地验证(原因:sandbox 无微信账号 + 微信不在 `Install-GatewayPlatformDeps` platformDeps 列表)**
+- 备注:微信渠道走 webui 内的 QR 登录流,**不依赖** `python-telegram-bot` 这类 pip 包(微信用 WeChaty / itchat 之类已在 hermes-agent 主依赖里)。本任务 014 修复点(Bug A.1/A.2/A.3)主要影响 Telegram / Slack / 飞书 / 钉钉 / Discord;微信不会触发新的依赖安装,但 .env watcher polling + GatewayHermesExe derive 仍会保护其重启路径。需 PM 真机验收。
 
 ## 失败处理
 - 二维码空白:webui 无法连接 gateway → 陷阱 #20 端口不匹配 / 陷阱 #22 GatewayManager 杀进程
