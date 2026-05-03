@@ -61,6 +61,12 @@ $script:GatewayProcess = $null
 $script:GatewayHermesExe = $null
 $script:EnvWatcher = $null
 $script:EnvWatcherTimer = $null
+# 任务 014 Bug A：FileSystemWatcher 在防病毒拦截 / 跨盘符 / 网络盘等场景可能失效，
+# 加 60 秒 polling 兜底，靠 LastWriteTimeUtc + Length 比较检测 .env 变化。
+$script:EnvWatcherPollingTimer = $null
+$script:EnvWatcherLastSig       = $null
+# 任务 014 Bug A：渠道依赖最近一次安装失败信息（用于 Home Mode 红色横幅 + 详情弹窗）
+$script:LastDepInstallFailure = $null
 $script:LaunchTimer = $null
 $script:LaunchState = $null
 
@@ -704,6 +710,15 @@ function Install-GatewayPlatformDeps {
         }
     }
 
+    # 任务 014 Bug A.3：渠道 EnvKey → 中文展示名（失败横幅文案用）
+    $channelLabels = @{
+        'FEISHU_APP_ID'      = '飞书'
+        'TELEGRAM_BOT_TOKEN' = 'Telegram'
+        'SLACK_BOT_TOKEN'    = 'Slack'
+        'DINGTALK_CLIENT_ID' = '钉钉'
+        'DISCORD_BOT_TOKEN'  = 'Discord'
+    }
+
     foreach ($dep in $platformDeps) {
         # Check if this platform is configured in .env (uncommented, with a value)
         $configured = $envLines | Where-Object { $_ -match "^\s*$($dep.EnvKey)\s*=\s*.+" }
@@ -711,10 +726,19 @@ function Install-GatewayPlatformDeps {
 
         # Check if the Python package is already installed
         $result = & $pythonExe -c $dep.ImportTest 2>&1
-        if ($LASTEXITCODE -eq 0) { continue }
+        if ($LASTEXITCODE -eq 0) {
+            # 任务 014 Bug A.3：该渠道依赖已就绪 → 清除以前的失败记录（如有）
+            if ($script:LastDepInstallFailure -and $script:LastDepInstallFailure.EnvKey -eq $dep.EnvKey) {
+                $script:LastDepInstallFailure = $null
+            }
+            continue
+        }
 
         # Package missing — install it
         Add-LogLine ("正在安装渠道依赖：{0}..." -f $dep.Package)
+        $installFailed = $false
+        $exitCode = -1
+        $installOutputText = ''
         try {
             $uvExe = Resolve-UvCommand
             # Also check uv inside the hermes venv Scripts dir
@@ -724,22 +748,130 @@ function Install-GatewayPlatformDeps {
             }
             if ($uvExe) {
                 $installOutput = & $uvExe pip install $dep.Package --python $pythonExe 2>&1
+                $installOutputText = ($installOutput | Out-String)
                 Add-LogLine ("uv 安装输出：{0}" -f ($installOutput | Select-Object -Last 3 | Out-String).Trim())
             } else {
                 $installOutput = & $pythonExe -m pip install $dep.Package 2>&1
+                $installOutputText = ($installOutput | Out-String)
                 Add-LogLine ("pip 安装输出：{0}" -f ($installOutput | Select-Object -Last 3 | Out-String).Trim())
             }
-            if ($LASTEXITCODE -eq 0) {
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
                 Add-LogLine ("{0} 安装成功" -f $dep.Package)
                 $anyInstalled = $true
+                # 任务 014 Bug A.3：本渠道刚装上 → 清除失败记录
+                if ($script:LastDepInstallFailure -and $script:LastDepInstallFailure.EnvKey -eq $dep.EnvKey) {
+                    $script:LastDepInstallFailure = $null
+                }
             } else {
-                Add-LogLine ("{0} 安装失败（退出码 {1}），该渠道可能无法使用" -f $dep.Package, $LASTEXITCODE)
+                $installFailed = $true
+                Add-LogLine ("{0} 安装失败（退出码 {1}），该渠道可能无法使用" -f $dep.Package, $exitCode)
             }
         } catch {
+            $installFailed = $true
+            $installOutputText = $_.Exception.ToString()
             Add-LogLine ("{0} 安装失败：{1}" -f $dep.Package, $_.Exception.Message)
+        }
+
+        # 任务 014 Bug A.3：失败时显式上报 + 写 $script:LastDepInstallFailure（让 UI 横幅显示）
+        if ($installFailed) {
+            $label = if ($channelLabels.ContainsKey($dep.EnvKey)) { $channelLabels[$dep.EnvKey] } else { $dep.Package }
+            $errTail = ''
+            try {
+                $allLines = $installOutputText -split "`r?`n" | Where-Object { $_ -ne $null -and $_ -ne '' }
+                $tailLines = @($allLines | Select-Object -Last 50)
+                $errTail = ($tailLines -join [Environment]::NewLine)
+            } catch { $errTail = [string]$installOutputText }
+
+            $script:LastDepInstallFailure = [pscustomobject]@{
+                EnvKey       = $dep.EnvKey
+                ChannelLabel = $label
+                Package      = $dep.Package
+                ExitCode     = $exitCode
+                ErrorTail    = $errTail
+                Timestamp    = (Get-Date).ToString('s')
+            }
+
+            try {
+                Send-Telemetry -EventName 'platform_dep_install_failed' -Properties @{
+                    channel    = $dep.EnvKey
+                    package    = $dep.Package
+                    exit_code  = $exitCode
+                    error_tail = $errTail
+                }
+            } catch { }
         }
     }
     return $anyInstalled
+}
+
+function Show-DepInstallFailureDialog {
+    <#
+    .SYNOPSIS
+    任务 014 Bug A.3：弹窗显示最近一次渠道依赖安装失败的详细错误尾部 + 复制按钮。
+    点击 Home Mode 红色横幅 / 「查看详情」按钮触发。
+    #>
+    try {
+        if (-not $script:LastDepInstallFailure) {
+            [System.Windows.MessageBox]::Show('当前没有需要查看的渠道依赖错误。', 'Hermes 启动器') | Out-Null
+            return
+        }
+        $info = $script:LastDepInstallFailure
+        $body = @(
+            ("渠道：{0}" -f $info.ChannelLabel)
+            ("Python 包：{0}" -f $info.Package)
+            ("退出码：{0}" -f $info.ExitCode)
+            ("时间：{0}" -f $info.Timestamp)
+            ''
+            '错误尾部（最后 50 行）：'
+            ([string]$info.ErrorTail)
+        ) -join [Environment]::NewLine
+
+        $dlgXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="渠道依赖安装失败"
+        Width="720" Height="520"
+        WindowStartupLocation="CenterOwner"
+        Background="#FFFAF4">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" FontSize="18" FontWeight="Bold" Foreground="#3C2814"
+                   Text="渠道依赖安装失败"/>
+        <TextBox Grid.Row="1" x:Name="DepErrorBox" Margin="0,12,0,0"
+                 IsReadOnly="True" TextWrapping="NoWrap"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Consolas" FontSize="12"
+                 Background="#FFF1EB" Foreground="#3C2814"
+                 BorderBrush="#E5BFA0" BorderThickness="1" Padding="10"/>
+        <WrapPanel Grid.Row="2" Margin="0,12,0,0" HorizontalAlignment="Right">
+            <Button x:Name="DepCopyButton" Margin="0,0,10,0" Padding="14,8" Content="复制错误内容"/>
+            <Button x:Name="DepCloseButton" Padding="14,8" Content="关闭"/>
+        </WrapPanel>
+    </Grid>
+</Window>
+'@
+        $reader = New-Object System.Xml.XmlNodeReader ([xml]$dlgXaml)
+        $dlg = [Windows.Markup.XamlReader]::Load($reader)
+        try { $dlg.Owner = $window } catch { }
+        $box = $dlg.FindName('DepErrorBox')
+        $copyBtn = $dlg.FindName('DepCopyButton')
+        $closeBtn = $dlg.FindName('DepCloseButton')
+        if ($box) { $box.Text = $body }
+        if ($copyBtn) {
+            $copyBtn.Add_Click({
+                try { [System.Windows.Clipboard]::SetText($body) } catch { }
+            }.GetNewClosure())
+        }
+        if ($closeBtn) { $closeBtn.Add_Click({ $dlg.Close() }.GetNewClosure()) }
+        [void]$dlg.ShowDialog()
+    } catch {
+        try { Add-LogLine ("打开渠道依赖错误对话框失败：{0}" -f $_.Exception.Message) } catch { }
+    }
 }
 
 function Stop-ExistingGateway {
@@ -1311,9 +1443,34 @@ function Restart-HermesGateway {
     #>
     Add-LogLine "检测到 .env 文件变化，准备重启 Gateway..."
     $hermesExe = $script:GatewayHermesExe
+    # 任务 014 Bug A.2（陷阱 #27 升级版）：当 $script:GatewayHermesExe 为 null（例如
+    # 上次启动器没走 fast path 初始化，或 polling 抢先于 fast path 初始化触发），
+    # 不再 silently skip。先从 InstallDir 推导，再 fallback 到默认 LOCALAPPDATA 路径。
     if (-not $hermesExe -or -not (Test-Path $hermesExe)) {
-        Add-LogLine "Gateway 可执行文件未找到，跳过重启"
-        return
+        $candidates = New-Object System.Collections.Generic.List[string]
+        try {
+            if ($controls -and $controls.InstallDirTextBox) {
+                $textInstallDir = $controls.InstallDirTextBox.Text.Trim()
+                if ($textInstallDir) {
+                    $candidates.Add((Join-Path $textInstallDir 'venv\Scripts\hermes.exe'))
+                }
+            }
+        } catch { }
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'hermes\hermes-agent\venv\Scripts\hermes.exe'))
+        $hermesExe = $null
+        foreach ($candidate in $candidates) {
+            if ($candidate -and (Test-Path $candidate)) {
+                $hermesExe = $candidate
+                break
+            }
+        }
+        if (-not $hermesExe) {
+            Add-LogLine "Gateway 可执行文件未找到（已尝试 InstallDir + 默认路径），跳过重启"
+            try { Send-Telemetry -EventName 'unexpected_error' -FailureReason 'restart_gateway_skipped: hermes.exe not found' -Properties @{ source = 'env_watcher' } } catch { }
+            return
+        }
+        $script:GatewayHermesExe = $hermesExe
+        Add-LogLine ("Gateway 可执行文件已从 InstallDir 推导：{0}" -f $hermesExe)
     }
 
     # Install platform deps for newly configured channels (e.g. python-telegram-bot)
@@ -1322,6 +1479,8 @@ function Restart-HermesGateway {
     try { Install-GatewayPlatformDeps -HermesInstallDir $hermesInstallDir } catch {
         Add-LogLine ("渠道依赖检测跳过：{0}" -f $_.Exception.Message)
     }
+    # 任务 014 Bug A.3：刷新 UI（依赖装失败时让红色横幅立即显示）
+    try { Request-StatusRefresh } catch { }
 
     # Ensure port is correct before restart (陷阱 #20)
     Repair-GatewayApiPort
@@ -1362,11 +1521,24 @@ function Restart-HermesGateway {
     }
 }
 
+function Get-EnvFileSignature {
+    # 任务 014 Bug A.1：用 LastWriteTimeUtc + Length 作为 .env 文件签名，便于 polling 比较。
+    # 不读全文 + hash，避免 60 秒 polling 频繁占用磁盘 IO；mtime + size 已足够检测变化。
+    param([string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return 'absent' }
+        $info = Get-Item -LiteralPath $Path -ErrorAction Stop
+        return ('{0}|{1}' -f $info.LastWriteTimeUtc.Ticks, $info.Length)
+    } catch { return 'error' }
+}
+
 function Start-GatewayEnvWatcher {
     <#
     .SYNOPSIS
     Watch ~/.hermes/.env for writes and auto-restart gateway to pick up new config.
     Debounces rapid writes (2-second delay after last change).
+    任务 014 Bug A.1：除 FileSystemWatcher 外，加 60 秒 polling 兜底，
+    覆盖防病毒拦截 / 跨盘符 / 网络盘等 watcher 失效的场景。
     #>
     $envFile = Join-Path $env:USERPROFILE '.hermes\.env'
     $envDir  = Split-Path $envFile -Parent
@@ -1379,6 +1551,9 @@ function Start-GatewayEnvWatcher {
     if ($script:EnvWatcherTimer) {
         try { $script:EnvWatcherTimer.Stop(); $script:EnvWatcherTimer.Dispose() } catch { }
     }
+    if ($script:EnvWatcherPollingTimer) {
+        try { $script:EnvWatcherPollingTimer.Stop(); $script:EnvWatcherPollingTimer.Dispose() } catch { }
+    }
 
     $watcher = [System.IO.FileSystemWatcher]::new($envDir, '.env')
     $watcher.NotifyFilter = [System.IO.NotifyFilters]::LastWrite
@@ -1389,6 +1564,8 @@ function Start-GatewayEnvWatcher {
     $timer.Interval = [TimeSpan]::FromSeconds(2)
     $timer.Add_Tick({
         $script:EnvWatcherTimer.Stop()
+        # 任务 014 Bug A.1：刷新 polling 基线签名，避免 watcher 触发后 polling 又重复触发一次
+        try { $script:EnvWatcherLastSig = Get-EnvFileSignature -Path (Join-Path $env:USERPROFILE '.hermes\.env') } catch { }
         Restart-HermesGateway
     })
 
@@ -1408,6 +1585,33 @@ function Start-GatewayEnvWatcher {
     $watcher.EnableRaisingEvents = $true
     $script:EnvWatcher = $watcher
     $script:EnvWatcherTimer = $timer
+
+    # 任务 014 Bug A.1：60 秒 polling 兜底（同一 dispatcher 线程，无并发问题）。
+    # 第一次启动时把当前签名写入基线，避免 polling 上来就误判为 changed。
+    $script:EnvWatcherLastSig = Get-EnvFileSignature -Path $envFile
+    $polling = [System.Windows.Threading.DispatcherTimer]::new()
+    $polling.Interval = [TimeSpan]::FromSeconds(60)
+    $polling.Add_Tick({
+        try {
+            $envFilePoll = Join-Path $env:USERPROFILE '.hermes\.env'
+            $sig = Get-EnvFileSignature -Path $envFilePoll
+            if ($sig -ne $script:EnvWatcherLastSig) {
+                Add-LogLine ".env polling 兜底检测到变化（watcher 可能未触发），准备重启 Gateway..."
+                $script:EnvWatcherLastSig = $sig
+                # 走与 watcher 相同的 debounce 流程，避免快速连续触发
+                if ($script:EnvWatcherTimer) {
+                    $script:EnvWatcherTimer.Stop()
+                    $script:EnvWatcherTimer.Start()
+                } else {
+                    Restart-HermesGateway
+                }
+            }
+        } catch {
+            try { Add-LogLine (".env polling 兜底异常：{0}" -f $_.Exception.Message) } catch { }
+        }
+    })
+    $script:EnvWatcherPollingTimer = $polling
+    $polling.Start()
 }
 
 function Start-HermesWebUiRuntime {
@@ -1515,6 +1719,11 @@ function Stop-HermesWebUiRuntime {
     if ($script:EnvWatcherTimer) {
         try { $script:EnvWatcherTimer.Stop(); $script:EnvWatcherTimer.Dispose() } catch { }
         $script:EnvWatcherTimer = $null
+    }
+    # 任务 014 Bug A.1：关闭 polling 兜底 timer
+    if ($script:EnvWatcherPollingTimer) {
+        try { $script:EnvWatcherPollingTimer.Stop(); $script:EnvWatcherPollingTimer.Dispose() } catch { }
+        $script:EnvWatcherPollingTimer = $null
     }
 
     # Stop gateway process if we started it
@@ -1912,7 +2121,14 @@ function Get-ObjectPropertyValue {
 function Open-BrowserUrlSafe {
     param([string]$Url)
     if ([string]::IsNullOrWhiteSpace($Url)) { return }
-    Start-Process $Url | Out-Null
+    # 任务 014 Bug C：用户机器无默认浏览器 / shell 注册损坏时，Start-Process 可能抛
+    # FileNotFoundException 或 Win32Exception，必须吞掉避免冲到 dispatcher 未捕获处理器。
+    try {
+        Start-Process $Url | Out-Null
+    } catch {
+        try { Add-LogLine ("打开浏览器失败：{0}" -f $_.Exception.Message) } catch { }
+        try { Send-Telemetry -EventName 'unexpected_error' -FailureReason ('open_browser: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) -Properties @{ source = 'open_browser' } } catch { }
+    }
 }
 
 function Find-VisualDescendantByType {
@@ -2342,14 +2558,19 @@ function Open-InExplorer {
     param([string]$Path)
 
     if (-not $Path) { return }
-    if (Test-Path $Path) {
-        Start-Process explorer.exe -ArgumentList """$Path""" | Out-Null
-        return
-    }
-
-    $parent = Split-Path -Parent $Path
-    if ($parent -and (Test-Path $parent)) {
-        Start-Process explorer.exe -ArgumentList """$parent""" | Out-Null
+    # 任务 014 Bug C：explorer.exe 调用极少抛错，但 Path 含特殊字符 / 权限异常时仍可能炸。
+    # 全段 try-catch 防 dispatcher 未捕获。
+    try {
+        if (Test-Path $Path) {
+            Start-Process explorer.exe -ArgumentList """$Path""" | Out-Null
+            return
+        }
+        $parent = Split-Path -Parent $Path
+        if ($parent -and (Test-Path $parent)) {
+            Start-Process explorer.exe -ArgumentList """$parent""" | Out-Null
+        }
+    } catch {
+        try { Add-LogLine ("打开资源管理器失败：{0}" -f $_.Exception.Message) } catch { }
     }
 }
 
@@ -3428,6 +3649,42 @@ $defaults = Get-HermesDefaults
                 <Grid x:Name="HomeModePanel" Visibility="Collapsed">
                     <Border x:Name="HomeReadyContainer">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,12,0,0">
+                            <!-- 任务 014 Bug A：渠道依赖安装失败横幅（默认隐藏，安装失败时显示） -->
+                            <Border x:Name="HomeDepFailureBanner" Margin="0,0,0,16" Padding="16,12"
+                                    CornerRadius="12" MaxWidth="640"
+                                    Background="#FFF1EB" BorderBrush="#E59B4E" BorderThickness="1"
+                                    Visibility="Collapsed" Cursor="Hand">
+                                <DockPanel LastChildFill="True">
+                                    <Button x:Name="HomeDepFailureViewButton" DockPanel.Dock="Right"
+                                            Style="{StaticResource TextButtonStyle}" Content="查看详情"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock VerticalAlignment="Center" FontSize="20" Margin="0,0,10,0"
+                                                   Foreground="#B0502A" Text="!"/>
+                                        <TextBlock x:Name="HomeDepFailureText" VerticalAlignment="Center"
+                                                   FontSize="13" TextWrapping="Wrap"
+                                                   Foreground="#6E3A1F"
+                                                   Text="渠道依赖未就绪。点这里查看详情"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                            <!-- 任务 014 Bug B：旧版 OpenClaw 迁移横幅（不再强行进 Install Mode） -->
+                            <Border x:Name="HomeOpenClawBanner" Margin="0,0,0,16" Padding="16,12"
+                                    CornerRadius="12" MaxWidth="640"
+                                    Background="{StaticResource SurfaceSecondaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                    Visibility="Collapsed">
+                                <DockPanel LastChildFill="True">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button x:Name="HomeOpenClawImportButton" Margin="0,0,8,0"
+                                                Style="{StaticResource TextButtonStyle}" Content="立即迁移"/>
+                                        <Button x:Name="HomeOpenClawSkipButton"
+                                                Style="{StaticResource TextButtonStyle}" Content="稍后再说"/>
+                                    </StackPanel>
+                                    <TextBlock VerticalAlignment="Center" FontSize="13" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Text="检测到旧版 OpenClaw 配置，可按需迁移；不影响继续使用。"/>
+                                </DockPanel>
+                            </Border>
                             <Border x:Name="HomeStatusBadgeBorder" Width="76" Height="76" CornerRadius="38"
                                     HorizontalAlignment="Center">
                                 <Border.Background>
@@ -3690,6 +3947,9 @@ foreach ($name in @(
     'InstallStepTipBorder','InstallStepTipText',
     # 任务 012 新增 - Home Mode 已就绪 + 启动 WebUI 进度卡
     'HomeReadyContainer','HomeStatusBadgeBorder',
+    # 任务 014 新增 - Home Mode 内 OpenClaw 迁移横幅（Bug B）+ 渠道依赖失败横幅（Bug A）
+    'HomeDepFailureBanner','HomeDepFailureText','HomeDepFailureViewButton',
+    'HomeOpenClawBanner','HomeOpenClawImportButton','HomeOpenClawSkipButton',
     'LaunchProgressCard','LaunchSpinnerGlyph','LaunchSpinnerRotate',
     'LaunchProgressEyebrow','LaunchProgressHeadline','LaunchProgressSubline',
     'LaunchCurrentStageText','LaunchCurrentStageDetail','LaunchProgressBar','LaunchProgressMiniSteps',
@@ -4541,7 +4801,17 @@ function Step-LaunchSequence {
                 Set-Footer '正在启动 hermes-web-ui...'
                 Add-LogLine '正在启动 hermes-web-ui...'
 
-                Start-Process -FilePath $webUi.WebUiCmd -ArgumentList @('start', $webUi.Port) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-webui-start.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-webui-start-err.log')
+                # 任务 014 Bug C：WebUiCmd 在罕见情况下（用户手动删了文件 / 路径权限）
+                # 可能 Test-Path 通过但 Start-Process 仍抛 FileNotFoundException。
+                # 显式 try-catch 把异常变成可处理的 throw，避免 dispatcher 未捕获。
+                if (-not (Test-Path $webUi.WebUiCmd)) {
+                    throw ("hermes-web-ui 命令文件不存在：{0}" -f $webUi.WebUiCmd)
+                }
+                try {
+                    Start-Process -FilePath $webUi.WebUiCmd -ArgumentList @('start', $webUi.Port) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-webui-start.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-webui-start-err.log')
+                } catch {
+                    throw ("启动 hermes-web-ui 失败：{0}" -f $_.Exception.Message)
+                }
 
                 $s.HealthDeadline = (Get-Date).AddSeconds(30)
                 $s.Phase = 'wait-healthy'
@@ -6142,7 +6412,10 @@ function Refresh-Status {
 
     $isInstalled = [bool]($script:CurrentStatus.Status.Installed -or $script:CurrentStatus.HermesCommand)
     $pendingOpenClaw = Test-OpenClawPending -state $script:CurrentStatus
-    if ((-not $isInstalled) -or $pendingOpenClaw) {
+    # 任务 014 Bug B：已装机器即使 OpenClaw 残留也走 Home Mode（不再误判成 Install Mode）。
+    # 迁移功能保留：Home Mode 顶部会显示一个 OpenClaw 横幅，按钮指向 openclaw-migrate / openclaw-skip。
+    # Install Mode 只在「真未装」时进入。
+    if (-not $isInstalled) {
         Set-LauncherWindowMode -Mode 'Install'
         $controls.InstallModePanel.Visibility = 'Visible'
         $controls.HomeModePanel.Visibility = 'Collapsed'
@@ -6332,6 +6605,36 @@ function Refresh-Status {
             try { if ($controls.LaunchProgressCard) { $controls.LaunchProgressCard.Visibility = 'Collapsed' } } catch { }
             try { if ($controls.HomeReadyContainer) { $controls.HomeReadyContainer.Visibility = 'Visible' } } catch { }
         }
+
+        # 任务 014 Bug B：Home Mode 内的 OpenClaw 迁移横幅显隐
+        try {
+            if ($controls.HomeOpenClawBanner) {
+                if ($pendingOpenClaw) {
+                    $controls.HomeOpenClawBanner.Visibility = 'Visible'
+                    if ($controls.HomeOpenClawImportButton) { $controls.HomeOpenClawImportButton.IsEnabled = [bool]$script:CurrentStatus.HermesCommand }
+                    if ($controls.HomeOpenClawSkipButton) { $controls.HomeOpenClawSkipButton.IsEnabled = $true }
+                } else {
+                    $controls.HomeOpenClawBanner.Visibility = 'Collapsed'
+                }
+            }
+        } catch { }
+
+        # 任务 014 Bug A：渠道依赖安装失败横幅显隐 + 主按钮屏蔽
+        try {
+            if ($controls.HomeDepFailureBanner) {
+                if ($script:LastDepInstallFailure) {
+                    $channel = [string]$script:LastDepInstallFailure.ChannelLabel
+                    if ($controls.HomeDepFailureText) {
+                        $controls.HomeDepFailureText.Text = "渠道依赖安装失败：$channel。点这里查看详情"
+                    }
+                    $controls.HomeDepFailureBanner.Visibility = 'Visible'
+                    # 主按钮变灰，提示用户先解决依赖问题
+                    Set-PrimaryAction -ActionId 'launch' -Label '渠道依赖未就绪' -Enabled $false
+                } else {
+                    $controls.HomeDepFailureBanner.Visibility = 'Collapsed'
+                }
+            }
+        } catch { }
     }
     Set-Footer ("Hermes 命令路径：{0}" -f $(if ($script:CurrentStatus.HermesCommand) { $script:CurrentStatus.HermesCommand } else { '未找到' }))
 }
@@ -6339,11 +6642,15 @@ function Refresh-Status {
 function Invoke-AppAction {
     param([string]$ActionId)
 
-    $state = Get-UiState
-    $script:CurrentStatus = $state
-    $installDir = $state.InstallDir
-    $hermesHome = $state.HermesHome
-    $hermesCommand = $state.HermesCommand
+    # 任务 014 Bug C：包裹整段 action 处理逻辑，任何文件不存在 / Start-Process 失败等
+    # 异常都不再冒泡到 WPF Dispatcher 未捕获处理器，避免 dashboard 上 dispatcher:
+    # FileNotFoundException 占失败事件 ~20%。
+    try {
+        $state = Get-UiState
+        $script:CurrentStatus = $state
+        $installDir = $state.InstallDir
+        $hermesHome = $state.HermesHome
+        $hermesCommand = $state.HermesCommand
 
     switch ($ActionId) {
         'refresh' {
@@ -6612,6 +6919,15 @@ function Invoke-AppAction {
             }
         }
     }
+    } catch {
+        # 任务 014 Bug C：把异常类型 + 消息记到日志和遥测，不让任何异常冒到 Dispatcher 未捕获处理器
+        try {
+            $exType = $_.Exception.GetType().FullName
+            $exMsg  = $_.Exception.Message
+            Add-LogLine ("操作 '{0}' 异常：{1}: {2}" -f $ActionId, $exType, $exMsg)
+            Send-Telemetry -EventName 'unexpected_error' -FailureReason ('action: ' + $ActionId + ': ' + $exType + ': ' + $exMsg) -Properties @{ source = 'invoke_app_action'; action = $ActionId }
+        } catch { }
+    }
 }
 
 $controls.ClearLogButton.Add_Click({ $controls.LogTextBox.Clear() })
@@ -6687,6 +7003,12 @@ $controls.StageModelButton.Add_Click({ Invoke-AppAction 'launch' })
 $controls.StageAdvancedButton.Add_Click({ Show-AdvancedPanel })
 $controls.OpenClawImportButton.Add_Click({ Invoke-AppAction 'openclaw-migrate' })
 $controls.OpenClawSkipButton.Add_Click({ Invoke-AppAction 'openclaw-skip' })
+# 任务 014 Bug B：Home Mode 内的 OpenClaw 迁移按钮（用户已装机器，不应进 Install Mode）
+$controls.HomeOpenClawImportButton.Add_Click({ Invoke-AppAction 'openclaw-migrate' })
+$controls.HomeOpenClawSkipButton.Add_Click({ Invoke-AppAction 'openclaw-skip' })
+# 任务 014 Bug A：渠道依赖安装失败横幅 → 显示错误尾部 + 复制按钮
+$controls.HomeDepFailureViewButton.Add_Click({ Show-DepInstallFailureDialog })
+$controls.HomeDepFailureBanner.Add_MouseLeftButtonUp({ Show-DepInstallFailureDialog })
 
 # 任务 011：「关于」按钮 + 首次同意提示「知道了」按钮
 $controls.AboutButton.Add_Click({ Show-AboutDialog })
