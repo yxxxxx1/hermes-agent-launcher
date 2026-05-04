@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.2.zip`: versioned Windows download linked by `index.html` (任务 015：修复 webui 配 Telegram 不写 .env 的根因 — 清理 ~/.hermes/profiles/ 下的 GBK 乱码目录 + 写 active_profile=default + 升级 hermes-web-ui 0.4.9 → 0.5.9)
+- `Hermes-Windows-Launcher-v2026.05.04.3.zip`: versioned Windows download linked by `index.html` (任务 014 Bug A.4 真机 hotfix:Install-GatewayPlatformDeps 改用 ModuleName + 严格 __file__ 校验,防 cwd / PYTHONPATH 上同名模块伪造已装,导致 python-telegram-bot 等渠道依赖永远不会安装)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

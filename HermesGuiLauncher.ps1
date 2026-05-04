@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.2'
+$script:LauncherVersion = 'Windows v2026.05.04.3'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -682,14 +682,43 @@ function Install-GatewayPlatformDeps {
     if (-not (Test-Path $pythonExe)) { return $false }
     $anyInstalled = $false
 
-    # Map: env-var-that-enables-platform → Python-import-test → pip-package-name
+    # Map: env-var-that-enables-platform → Python module name → pip-package-name
+    # 任务 014 Bug A.4: 改用 ModuleName + 严格 __file__ 校验,防止其他同名模块（如 tqdm.contrib.telegram
+    # 之类不在 site-packages 根的同名模块）让 import 成功但实际目标包没装 → 误判跳过安装。
+    # PM 真机 v2026.05.04.1/2026.05.04.2 仍踩到的 bug:webui 显示"Telegram 已配置",但 site-packages 里
+    # 没有 python-telegram-bot,gateway 日志一直 "No adapter available for telegram"。
     $platformDeps = @(
-        @{ EnvKey = 'FEISHU_APP_ID';       ImportTest = 'import lark_oapi';          Package = 'lark-oapi' }
-        @{ EnvKey = 'TELEGRAM_BOT_TOKEN';   ImportTest = 'import telegram';           Package = 'python-telegram-bot' }
-        @{ EnvKey = 'SLACK_BOT_TOKEN';      ImportTest = 'import slack_bolt';         Package = 'slack-bolt' }
-        @{ EnvKey = 'DINGTALK_CLIENT_ID';   ImportTest = 'import dingtalk_stream';    Package = 'dingtalk-stream' }
-        @{ EnvKey = 'DISCORD_BOT_TOKEN';    ImportTest = 'import discord';            Package = 'discord.py' }
+        @{ EnvKey = 'FEISHU_APP_ID';       ModuleName = 'lark_oapi';        Package = 'lark-oapi' }
+        @{ EnvKey = 'TELEGRAM_BOT_TOKEN';   ModuleName = 'telegram';         Package = 'python-telegram-bot' }
+        @{ EnvKey = 'SLACK_BOT_TOKEN';      ModuleName = 'slack_bolt';       Package = 'slack-bolt' }
+        @{ EnvKey = 'DINGTALK_CLIENT_ID';   ModuleName = 'dingtalk_stream';  Package = 'dingtalk-stream' }
+        @{ EnvKey = 'DISCORD_BOT_TOKEN';    ModuleName = 'discord';          Package = 'discord.py' }
     )
+
+    # 任务 014 Bug A.4: 严格校验某个 Python 模块是否真的装在 venv site-packages 里。
+    # 不能只看 import 是否成功 —— 真机复现:`import telegram` 在不装 python-telegram-bot 时仍可能
+    # succeed(被 cwd / PYTHONPATH / sys.path 上的同名文件兜住),launcher 误以为已装跳过 install。
+    # 现在校验 module.__file__ 必须在 venv site-packages 里,否则视同未装。
+    $expectedSitePackages = (Join-Path $HermesInstallDir 'venv\Lib\site-packages').ToLower()
+    $expectedSitePackagesEsc = $expectedSitePackages.Replace('\', '\\')
+    $verifyTemplate = @"
+import sys
+try:
+    m = __import__('{0}')
+    p = (getattr(m, '__file__', '') or '').lower()
+    expected = '{1}'
+    if p and expected in p:
+        print('OK')
+    else:
+        print('PATH_MISMATCH:' + str(p))
+        sys.exit(2)
+except ImportError as e:
+    print('IMPORT_ERROR:' + str(e))
+    sys.exit(1)
+except Exception as e:
+    print('UNEXPECTED_ERROR:' + str(e))
+    sys.exit(3)
+"@
 
     # Read .env lines (skip comments and empty lines)
     $envLines = Get-Content $envFile -ErrorAction SilentlyContinue |
@@ -724,15 +753,20 @@ function Install-GatewayPlatformDeps {
         $configured = $envLines | Where-Object { $_ -match "^\s*$($dep.EnvKey)\s*=\s*.+" }
         if (-not $configured) { continue }
 
-        # Check if the Python package is already installed
-        $result = & $pythonExe -c $dep.ImportTest 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        # 任务 014 Bug A.4: 严格校验,不再只看 exit code(防止 cwd 同名模块伪造已装)
+        $verifyScript = $verifyTemplate -f $dep.ModuleName, $expectedSitePackagesEsc
+        $result = & $pythonExe -c $verifyScript 2>&1
+        $verifyOk = ($LASTEXITCODE -eq 0 -and ($result -join '') -match 'OK')
+        if ($verifyOk) {
             # 任务 014 Bug A.3：该渠道依赖已就绪 → 清除以前的失败记录（如有）
             if ($script:LastDepInstallFailure -and $script:LastDepInstallFailure.EnvKey -eq $dep.EnvKey) {
                 $script:LastDepInstallFailure = $null
             }
             continue
         }
+        # 记录原因(用于诊断:是 ImportError 还是 PATH_MISMATCH)
+        $verifyReason = ($result -join ' | ')
+        Add-LogLine ("渠道依赖 {0} 严格校验未通过: {1}" -f $dep.Package, $verifyReason)
 
         # Package missing — install it
         Add-LogLine ("正在安装渠道依赖：{0}..." -f $dep.Package)
@@ -757,11 +791,23 @@ function Install-GatewayPlatformDeps {
             }
             $exitCode = $LASTEXITCODE
             if ($exitCode -eq 0) {
-                Add-LogLine ("{0} 安装成功" -f $dep.Package)
-                $anyInstalled = $true
-                # 任务 014 Bug A.3：本渠道刚装上 → 清除失败记录
-                if ($script:LastDepInstallFailure -and $script:LastDepInstallFailure.EnvKey -eq $dep.EnvKey) {
-                    $script:LastDepInstallFailure = $null
+                # 任务 014 Bug A.4: 安装"成功"后再用严格校验确认包真的进了 venv site-packages。
+                # 防止 uv exit 0 但实际什么也没装(cache 命中但已损坏 / 网络代理静默吞失败 / 装到全局 site-packages 而非 venv)。
+                $postVerifyScript = $verifyTemplate -f $dep.ModuleName, $expectedSitePackagesEsc
+                $postVerifyResult = & $pythonExe -c $postVerifyScript 2>&1
+                $postVerifyOk = ($LASTEXITCODE -eq 0 -and ($postVerifyResult -join '') -match 'OK')
+                if ($postVerifyOk) {
+                    Add-LogLine ("{0} 安装成功(已严格校验包路径)" -f $dep.Package)
+                    $anyInstalled = $true
+                    # 任务 014 Bug A.3：本渠道刚装上 → 清除失败记录
+                    if ($script:LastDepInstallFailure -and $script:LastDepInstallFailure.EnvKey -eq $dep.EnvKey) {
+                        $script:LastDepInstallFailure = $null
+                    }
+                } else {
+                    $installFailed = $true
+                    $postVerifyReason = ($postVerifyResult -join ' | ')
+                    $installOutputText = $installOutputText + "`n[POST-VERIFY-FAILED] " + $postVerifyReason
+                    Add-LogLine ("{0} 安装命令 exit 0 但严格校验仍未通过: {1}" -f $dep.Package, $postVerifyReason)
                 }
             } else {
                 $installFailed = $true
