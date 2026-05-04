@@ -33,13 +33,14 @@
 - bot 能正常回复消息
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] `%USERPROFILE%` 路径截图(确认含中文):`testcases/core-paths/_evidence/TC-007-userprofile.png`
-- [ ] 安装完成截图:`testcases/core-paths/_evidence/TC-007-installed.png`
-- [ ] config.yaml 内容(确认 UTF-8 无 BOM,中文正常):`testcases/core-paths/_evidence/TC-007-config.yaml`
-- [ ] bot 回复截图:`testcases/core-paths/_evidence/TC-007-bot-reply.png`
-- [ ] 全程错误日志(应为空):`testcases/core-paths/_evidence/TC-007-errors.log`
-- [ ] 通过 / 未通过 / 无法本地验证(若 sandbox 无中文 Windows,声明盲区)
-- [ ] 备注:_______________
+- [ ] `%USERPROFILE%` 路径截图(确认含中文):`testcases/core-paths/_evidence/TC-007-userprofile.png`(待 PM 真机验收时填)
+- [ ] 安装完成截图:`testcases/core-paths/_evidence/TC-007-installed.png`(待 PM 真机验收时填)
+- [ ] config.yaml 内容(确认 UTF-8 无 BOM,中文正常):`testcases/core-paths/_evidence/TC-007-config.yaml`(待 PM 真机验收时填)
+- [ ] bot 回复截图:`testcases/core-paths/_evidence/TC-007-bot-reply.png`(待 PM 真机验收时填)
+- [ ] 全程错误日志(应为空):`testcases/core-paths/_evidence/TC-007-errors.log`(待 PM 真机验收时填)
+- [x] 任务 014 新增的文件 IO 全部用 UTF-8 NoBom:**`Send-Telemetry` 通过 ConvertTo-Json + StringContent UTF8(false) 编码;`Show-DepInstallFailureDialog` 不写文件;`Get-EnvFileSignature` 只读 mtime+length,不读全文**(陷阱 #21 已避免)
+- **状态**:**无法本地验证(原因:sandbox 用户名 `74431` 是英文数字)**
+- 备注:任务 014 不新增任何 .env / config.yaml / 仓库源码写入操作(只读)。新增的字符串如 `Show-DepInstallFailureDialog` 弹窗内容、telemetry payload 都通过 UTF-8 NoBom 路径或在 .NET String 层处理,不存在 GBK 编码风险。需 PM 真机抽查中文用户名机器。
 
 ## 失败处理
 - "GBK codec":陷阱 #21 — 检查 `Set-Content` 调用,改为 `[System.IO.File]::WriteAllText` + UTF8NoBom

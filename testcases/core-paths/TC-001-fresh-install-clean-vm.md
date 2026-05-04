@@ -32,12 +32,12 @@
 - 无任何"无法找到指定文件" / "WinError 267" / "GBK codec" 报错
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 3 截图(Install Mode 主面板):`testcases/core-paths/_evidence/TC-001-step3.png`
-- [ ] 步骤 6 终端窗口截图:`testcases/core-paths/_evidence/TC-001-step6.png`
-- [ ] 步骤 8 截图(Home Mode):`testcases/core-paths/_evidence/TC-001-step8.png`
-- [ ] 安装日志全文:`testcases/core-paths/_evidence/TC-001-install.log`
-- [ ] 通过 / 未通过 / 无法本地验证
-- [ ] 备注:_______________
+- [ ] 步骤 3 截图(Install Mode 主面板):`testcases/core-paths/_evidence/TC-001-step3.png`(待 PM 真机验收时填)
+- [ ] 步骤 6 终端窗口截图:`testcases/core-paths/_evidence/TC-001-step6.png`(待 PM 真机验收时填)
+- [ ] 步骤 8 截图(Home Mode):`testcases/core-paths/_evidence/TC-001-step8.png`(待 PM 真机验收时填)
+- [ ] 安装日志全文:`testcases/core-paths/_evidence/TC-001-install.log`(待 PM 真机验收时填)
+- **状态**:**无法本地验证(原因:sandbox 没有干净 Win VM,且当前已装 hermes)**
+- 备注:任务 014 工程师在 sandbox 上无法重置到全新 Win 环境,且任务 014 修复点不触及 install 主路径(只动了 Refresh-Status 条件、watcher polling、Restart-HermesGateway fallback 与 try-catch 包裹)。Install 主路径的回归风险**理论上低**——`Test-HermesInstalled` / `Resolve-HermesCommand` / `Test-InstallPreflight` 全部未改;`Refresh-Status` 在 `(-not $isInstalled)` 分支(即未装)的 Install Mode 渲染逻辑保持原样。需 PM 真机抽查或下次 Phase 2 摸底任务覆盖。
 
 ## 失败处理
 - 终端闪退:陷阱 #17 复发 → 检查 wrapper 脚本的 5 秒缓冲逻辑

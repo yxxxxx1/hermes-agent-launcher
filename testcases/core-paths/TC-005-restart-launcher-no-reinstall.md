@@ -26,11 +26,13 @@
 - 第二次开启的体验**与第一次开启完全一致**(除了首次的 EULA 确认 / 安装位置确认)
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 4 截图(Home Mode):`testcases/core-paths/_evidence/TC-005-step4.png`
-- [ ] 步骤 6 启动到 webui 打开的耗时:______ 秒(预期 < 30 秒)
-- [ ] 启动器日志(确认无 install 路径调用):`testcases/core-paths/_evidence/TC-005-launcher.log`
-- [ ] 通过 / 未通过 / 无法本地验证
-- [ ] 备注:_______________
+- [ ] 步骤 4 截图(Home Mode):`testcases/core-paths/_evidence/TC-005-step4.png`(待 PM 真机验收时填)
+- [ ] 步骤 6 启动到 webui 打开的耗时:______ 秒(预期 < 30 秒,待 PM 真机验收时填)
+- [ ] 启动器日志(确认无 install 路径调用):`testcases/core-paths/_evidence/TC-005-launcher.log`(待 PM 真机验收时填)
+- [x] Bug B 修复点同 TC-002:`Refresh-Status` 条件已解耦 `pendingOpenClaw`,无残留情况下直接 Home Mode
+- [x] Fast path 代码 review:`Start-LaunchAsync` L3917 起的 `if ($health.Healthy)` 块仍走 fast path,**没**重新装 Node.js / web-ui
+- **状态**:**通过(代码 review)/ 真机视觉行为无法本地验证**
+- 备注:任务 014 的修改不触及 fast path 主逻辑;只在 fast path 内增加了 `$script:LastDepInstallFailure` 检查与 banner 显示。需 PM 真机抽查。
 
 ## 失败处理
 - 出现 Install Mode → Bug B 复发,直接关联 `regression/B-installed-machine-home-mode.md`

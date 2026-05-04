@@ -1,0 +1,17 @@
+=== Test 1: Open-BrowserUrlSafe with empty url (early return) ===
+NO_THROW + NO_START (good - early return path)
+
+=== Test 2: Open-BrowserUrlSafe-Stub (simulated FileNotFoundException in catch path) ===
+[LOG] OpenBrowser failed: 使用“2”个参数调用“Open”时发生异常:“未能找到路径“C:\Definitely\Not\Exists\xyz_stub.tmp”的一部分。”
+[TELEMETRY] unexpected_error :: open_browser: System.Management.Automation.MethodInvocationException: 使用“2”个参数调用“Open”时发生异常:“未能找到路径“C:\Definitely\Not\Exists\xyz_stub.tmp”的一部分。”
+NO_THROW (good - try-catch absorbed exception)
+
+=== Test 3: Open-InExplorer-Stub (simulated FileNotFoundException) ===
+[LOG] OpenExplorer failed: 使用“2”个参数调用“Open”时发生异常:“未能找到路径“C:\Definitely\Not\Exists\explorer_stub.tmp”的一部分。”
+[TELEMETRY] unexpected_error :: open_explorer: System.Management.Automation.MethodInvocationException: 使用“2”个参数调用“Open”时发生异常:“未能找到路径“C:\Definitely\Not\Exists\explorer_stub.tmp”的一部分。”
+NO_THROW (good - try-catch absorbed exception)
+
+=== Test 4: Open-InExplorer with non-existent path (real function, no stub) ===
+NO_THROW (good)
+
+All tests done.

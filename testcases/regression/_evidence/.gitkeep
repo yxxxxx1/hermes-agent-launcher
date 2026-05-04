@@ -1,0 +1,15 @@
+# 任务 014 + 后续 regression 用例的执行证据存放点
+#
+# 已 commit 的证据:
+# - M1-xaml-banner-relocation.txt — XAML banner 移动到 HomeBannerStack 的验证(QA Patch round 1)
+# - C1-dot-source-test.txt        — Open-BrowserUrlSafe / Open-InExplorer try-catch 模拟测试(QA Patch round 1)
+#
+# 未提交的证据(待 PM 真机验收时填):
+# - A1-env-diff.png / A1-launcher.log
+# - A2-env-mtime.png / A2-launcher.log
+# - A3-banner.png / A3-dialog.png / A3-clipboard.txt
+# - B1-home.png / B1-launcher.log
+# - B2-home-with-banner.png / B2-after-skip.png / B2-state.json
+# - B3-second-open.png / B3-launcher.log
+# - C2-after-action.png / C2-launcher.log
+# - C3-dashboard.png(7 天后)

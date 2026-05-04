@@ -26,11 +26,13 @@
 - 主按钮可点击(非 disabled 状态)
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 5 截图(Home Mode 全图):`testcases/core-paths/_evidence/TC-002-home.png`
-- [ ] 启动后 5 秒内的 launcher 日志:`testcases/core-paths/_evidence/TC-002-launcher.log`
-- [ ] `Test-HermesInstalled` 返回值(可在启动器内 SelfTest 模式跑或日志里找):_______________
-- [ ] 通过 / 未通过 / 无法本地验证
-- [ ] 备注:_______________
+- [ ] 步骤 5 截图(Home Mode 全图):`testcases/core-paths/_evidence/TC-002-home.png`(待 PM 真机验收时填)
+- [ ] 启动后 5 秒内的 launcher 日志:`testcases/core-paths/_evidence/TC-002-launcher.log`(待 PM 真机验收时填)
+- [x] `Test-HermesInstalled` 返回值(SelfTest JSON 字段):**`Status.Installed=true`、`Status.HermesExe=...\venv\Scripts\hermes.exe`**(运行 `HermesGuiLauncher.ps1 -SelfTest` 验证)
+- [x] Bug B 修复点代码 review 通过:**`Refresh-Status` L6195 条件已从 `((-not $isInstalled) -or $pendingOpenClaw)` 改为 `(-not $isInstalled)`**(grep 验证只剩此一处条件)
+- [x] XAML 加载验证:**`HomeModePanel`、`HomeReadyContainer`、`HomeBannerStack` 均 FindName 成功,见 `testcases/regression/_evidence/M1-xaml-banner-relocation.txt`**
+- **状态**:**通过(代码 review + SelfTest + XAML load)/ 真机视觉行为无法本地验证**
+- 备注:工程师对照 Bug B 修复点验证了:1)`$isInstalled = true` 时 `Refresh-Status` 走 else 分支(Home Mode);2)Home Mode 块在 `pendingOpenClaw=true` 时显示 `HomeOpenClawBanner`(用户仍能迁移);3)`HomeOpenClawBanner` 已移到 `HomeBannerStack` 顶层(QA Patch M1)。**真机点击行为 + 视觉间距需 PM 真机验收**。
 
 ## 失败处理
 - 出现 Install Mode → Bug B 未修复或复发,直接关联到 Task 014 的回归用例 `regression/B-installed-machine-home-mode.md`

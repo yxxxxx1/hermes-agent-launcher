@@ -28,12 +28,12 @@
 - 步骤 7 后:webui 正常打开(8643 端口)
 
 ## 执行证据(发版前由 agent / PM 填)
-- [ ] 步骤 1 网络确认截图:`testcases/core-paths/_evidence/TC-008-network.png`
-- [ ] 步骤 5 安装日志(含镜像源 URL):`testcases/core-paths/_evidence/TC-008-install.log`
-- [ ] 安装总耗时:______ 分钟
-- [ ] 步骤 7 webui 截图:`testcases/core-paths/_evidence/TC-008-webui.png`
-- [ ] 通过 / 未通过 / 无法本地验证(sandbox 通常无国内网络环境,大概率声明盲区)
-- [ ] 备注:_______________
+- [ ] 步骤 1 网络确认截图:`testcases/core-paths/_evidence/TC-008-network.png`(待 PM 真机验收时填)
+- [ ] 步骤 5 安装日志(含镜像源 URL):`testcases/core-paths/_evidence/TC-008-install.log`(待 PM 真机验收时填)
+- [ ] 安装总耗时:______ 分钟(待 PM 真机验收时填)
+- [ ] 步骤 7 webui 截图:`testcases/core-paths/_evidence/TC-008-webui.png`(待 PM 真机验收时填)
+- **状态**:**无法本地验证(原因:sandbox 在海外网络环境,任务 014 不触及 install 主路径)**
+- 备注:任务 014 修复点(Bug A/B/C)与国内网络 + 镜像 fallback 路径(任务 009)无交叉。`Test-InstallPreflight` 网络检测逻辑、`New-ExternalInstallWrapperScript` 镜像注入路径都未改。需 PM 在国内网络环境抽查。
 
 ## 失败处理
 - 安装卡在 github.com / pypi.org 超时:镜像 fallback 未生效或某个依赖跳过了镜像
