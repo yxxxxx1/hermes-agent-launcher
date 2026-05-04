@@ -800,6 +800,32 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #40 hermes-web-ui < 0.5.0 在 Windows 中文环境下创建 GBK 乱码 profile 目录
+
+**触发条件**：用户在中文 Windows(系统编码 GBK)下运行 hermes-web-ui 0.4.x；webui 启动时 GatewayManager 试图扫描/初始化 profile
+
+**坑的表现**：
+- `~/.hermes/profiles/` 下出现两个 GBK→UTF-8 解码事故产物的乱码目录(如 `��default`、`██████████████████`)
+- webui 的 GatewayManager 反复试图操作这些不存在的 profile 路径，server.log 一堆 `ENOENT: ...\profiles\��default\config.yaml` + `UnicodeEncodeError: 'gbk' codec can't encode character`
+- 用户在 webui 上"配 Telegram"操作根本没发出 `PUT /api/hermes/config/credentials` 请求(server.log 977 行无任何 credentials 记录，`.env` 文件 mtime 比配置时间早 2 天)
+- 表象：用户在 webui 看到 Telegram 已配置，但 gateway 启动时只看到 1 个 platform = api_server，bot 没上线，发消息没回
+
+**预防动作**：
+- 启动器在每次 `Start-HermesGateway` / `Restart-HermesGateway` 前调用 `Repair-HermesProfileDirectory`：
+  1. 写 `~/.hermes/active_profile = "default"`(用 .NET UTF-8 无 BOM)
+  2. 扫描 `~/.hermes/profiles/`，目录名不匹配 `^[A-Za-z0-9_\-]+$` 的全部 `Remove-Item -Recurse -Force` 删除
+- webui 锁定到 ≥ 0.5.x(已修 Windows 中文环境编码问题)
+- 不要相信 webui 前端"已保存"的视觉反馈 — 用户填完 token 后必须验证 `~/.hermes/.env` 的 `LastWriteTime` 是不是新于操作时间
+
+**诊断动作**：
+- 看 `~/.hermes/profiles/` 是否有非 ASCII 命名的目录 → 99% 是这个陷阱
+- 看 `~/.hermes-web-ui/server.log` 是否有 `��default` / `UnicodeEncodeError` / `ENOENT.*\\profiles\\` → 确认
+- 看 `~/.hermes/.env` 的 `LastWriteTime` vs 用户配置 Telegram 的时间 → mtime 没变 = 写入路径完全断了
+
+**踩过日期**：2026-05-04
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

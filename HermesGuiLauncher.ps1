@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.1'
+$script:LauncherVersion = 'Windows v2026.05.04.2'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -53,7 +53,7 @@ $script:UiMonoFontFamily = 'JetBrains Mono, Cascadia Code, Consolas, Microsoft Y
 $script:HermesWebUiHost = '127.0.0.1'
 $script:HermesWebUiPort = 8648
 $script:HermesWebUiNpmPackage = 'hermes-web-ui'
-$script:HermesWebUiVersion = '0.4.9'
+$script:HermesWebUiVersion = '0.5.9'
 $script:NodeMinVersion = 'v23.0.0'
 $script:NodeDownloadUrl = 'https://nodejs.org/dist/v23.11.0/node-v23.11.0-win-x64.zip'
 $script:NodeExpectedDir = 'node-v23.11.0-win-x64'
@@ -1367,12 +1367,64 @@ def _posix_to_win_path(posix_path: str) -> str:
     }
 }
 
+function Repair-HermesProfileDirectory {
+    <#
+    .SYNOPSIS
+    任务 015：清理 ~/.hermes/profiles/ 下的乱码目录(GBK→UTF-8 解码错误产物，
+    上游 hermes-web-ui < 0.5.0 在 Windows 中文环境下创建 profile 时编码错误)。
+    同时写 active_profile=default，强制 webui 的 hermes-profile.js 走 default
+    路径(~/.hermes/.env)，避免它去操作不存在的 profile 子目录。
+    根因：webui 的 GatewayManager 扫描乱码目录时持续报 ENOENT + UnicodeEncodeError，
+    干扰 PUT /api/hermes/config/credentials 的写入路径，导致 .env 永远不被更新。
+    #>
+    $hermesHome = Join-Path $env:USERPROFILE '.hermes'
+    if (-not (Test-Path $hermesHome)) { return }
+
+    # 1. 写 active_profile=default(覆盖式写入，无 BOM)
+    $activeProfileFile = Join-Path $hermesHome 'active_profile'
+    try {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($activeProfileFile, 'default', $utf8NoBom)
+    } catch {
+        Add-LogLine ("写 active_profile 失败：{0}" -f $_.Exception.Message)
+    }
+
+    # 2. 清乱码 profile 目录(目录名只允许 ASCII 字母/数字/下划线/连字符；
+    # 任何非此字符集的目录视为 GBK→UTF-8 编码事故产物，删除)
+    $profilesDir = Join-Path $hermesHome 'profiles'
+    if (-not (Test-Path $profilesDir)) { return }
+    try {
+        $cleanedCount = 0
+        Get-ChildItem -LiteralPath $profilesDir -Directory -ErrorAction Stop | ForEach-Object {
+            $name = $_.Name
+            if ($name -notmatch '^[A-Za-z0-9_\-]+$') {
+                try {
+                    Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+                    $cleanedCount++
+                } catch {
+                    Add-LogLine ("清理乱码 profile 失败：{0}" -f $_.Exception.Message)
+                }
+            }
+        }
+        if ($cleanedCount -gt 0) {
+            Add-LogLine ("已清理 {0} 个乱码 profile 目录(防 webui 编码 bug)" -f $cleanedCount)
+            try { Send-Telemetry -EventName 'profile_dir_repaired' -Properties @{ count = $cleanedCount } } catch { }
+        }
+    } catch {
+        Add-LogLine ("扫描 profiles 目录失败：{0}" -f $_.Exception.Message)
+    }
+}
+
 function Start-HermesGateway {
     param(
         [string]$HermesInstallDir
     )
     $hermesExe = Join-Path $HermesInstallDir 'venv\Scripts\hermes.exe'
     if (-not (Test-Path $hermesExe)) { return }
+
+    # 任务 015：每次启 gateway 前清乱码 profile 目录 + 写 active_profile=default。
+    # 即使本会话清过，webui 仍可能在运行中触发新的乱码目录创建，需防御性重清。
+    try { Repair-HermesProfileDirectory } catch { }
 
     # Auto-install missing platform dependencies before starting gateway
     try { Install-GatewayPlatformDeps -HermesInstallDir $HermesInstallDir } catch {
@@ -1472,6 +1524,9 @@ function Restart-HermesGateway {
         $script:GatewayHermesExe = $hermesExe
         Add-LogLine ("Gateway 可执行文件已从 InstallDir 推导：{0}" -f $hermesExe)
     }
+
+    # 任务 015：Restart 路径也清乱码 profile + 写 active_profile=default
+    try { Repair-HermesProfileDirectory } catch { }
 
     # Install platform deps for newly configured channels (e.g. python-telegram-bot)
     # hermes.exe is at hermes-agent\venv\Scripts\hermes.exe → need 3 levels up
