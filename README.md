@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.1.zip`: versioned Windows download linked by `index.html` (任务 013 hotfix：修复 Stop-ExistingGateway 漏杀 venv python worker 导致 gateway.lock 不释放 → 新 gateway 自杀 → webui "未连接"。陷阱 #39：venv python.exe 是 stub launcher，必须用 `Get-CimInstance Win32_Process` 按 CommandLine 过滤，不能用 `Get-Process.Path`)
+- `Hermes-Windows-Launcher-v2026.05.04.2.zip`: versioned Windows download linked by `index.html` (任务 013 hotfix：修复 Stop-ExistingGateway 漏杀 venv python worker 导致 gateway.lock 不释放 → 新 gateway 自杀 → webui "未连接"。陷阱 #39：venv python.exe 是 stub launcher，必须用 `Get-CimInstance Win32_Process` 按 CommandLine 过滤，不能用 `Get-Process.Path`)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
