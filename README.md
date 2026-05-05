@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.5.zip`: versioned Windows download linked by `index.html` (任务 014 Bug B 紧急修复:Test-HermesWebUiHealth 用 Invoke-WebRequest -TimeoutSec 1 打 /health,但 Windows 上 .NET HttpClient 第一次连 IPv4 loopback 有 ~1.4 秒固定延迟(curl/浏览器没有),导致健康检查 100% 超时,启动后弹窗"hermes-web-ui 启动失败"——但 webui 实际完全正常。修复:改用 TCP 端口探测(TcpClient.ConnectAsync + 500ms),0-22ms 瞬间完成。陷阱 #42。)
+- `Hermes-Windows-Launcher-v2026.05.04.6.zip`: versioned Windows download linked by `index.html` (任务 014 Bug C 修复:LaunchProgressCard 成功路径漏调 Hide,启动成功后进度卡卡屏不消失。被陷阱 #42 健康检查永远 false 掩盖了——一旦修了 #42 就暴露。修复:wait-healthy 健康通过后切到 success 态(7 段全绿 ✓ + URL bar + 暖橙→墨绿 spinner 切✓),~2 秒倒计时后自动 Hide-LaunchProgressCard 回主页。陷阱 #43。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

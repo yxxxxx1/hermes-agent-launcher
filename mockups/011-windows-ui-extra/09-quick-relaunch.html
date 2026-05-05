@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<title>Hermes 启动器 · 快速打开 WebUI</title>
+<style>
+  :root {
+    --bg-app: #F2F0E8;
+    --bg-app-secondary: #EBE8E0;
+    --bg-glow: #F4C98A;
+    --surface-primary: #FAF8F2;
+    --surface-secondary: #F4F0E8;
+    --surface-tertiary: #F0E8DE;
+    --surface-hover: #F2E6D6;
+    --text-primary: #262621;
+    --text-secondary: #5E594F;
+    --text-tertiary: #897F75;
+    --text-on-accent: #FCFCF7;
+    --accent-primary: #D9772B;
+    --accent-soft: #F2B56B;
+    --accent-deep: #A85420;
+    --success: #4F8F7A;
+    --success-soft: #DBEDE5;
+    --warning: #C78A3A;
+    --warning-soft: #F4E8D2;
+    --danger: #C25E52;
+    --danger-soft: #F7E0D8;
+    --line-soft: rgba(0, 0, 0, 0.06);
+    --line-softer: rgba(0, 0, 0, 0.04);
+    --shadow-window: 0 24px 64px rgba(60, 40, 20, 0.18), 0 4px 12px rgba(60, 40, 20, 0.08);
+    --shadow-card: 0 6px 18px rgba(60, 40, 20, 0.06);
+    --shadow-button: 0 8px 20px rgba(217, 119, 43, 0.28), 0 2px 4px rgba(168, 84, 32, 0.18);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    font-family: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont,
+                 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    color: var(--text-primary);
+    background: radial-gradient(1200px 800px at 50% 30%, #EFEAE0 0%, #DCD5C7 60%, #C9C0B0 100%);
+    overflow: hidden;
+  }
+
+  .stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 32px; }
+  .frame-holder { --w: 920; --h: 560; --s: 1;
+    width: calc(var(--w) * 1px * var(--s));
+    height: calc(var(--h) * 1px * var(--s));
+    position: relative;
+  }
+  .window {
+    width: calc(var(--w) * 1px); height: calc(var(--h) * 1px);
+    transform: scale(var(--s)); transform-origin: top left;
+    border-radius: 12px; background: var(--bg-app);
+    box-shadow: var(--shadow-window); overflow: hidden;
+    display: flex; flex-direction: column; border: 1px solid var(--line-soft);
+  }
+
+  /* 标题栏 */
+  .title-bar {
+    height: 36px; background: var(--surface-primary);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 0 0 12px; user-select: none; flex-shrink: 0;
+  }
+  .title-left { display: flex; align-items: center; gap: 10px; }
+  .app-icon {
+    width: 18px; height: 18px; border-radius: 5px;
+    background: radial-gradient(circle at 30% 30%, var(--accent-soft), var(--accent-primary) 60%, var(--accent-deep) 100%);
+    box-shadow: 0 1px 2px rgba(168, 84, 32, 0.3); position: relative;
+  }
+  .app-icon::after {
+    content: ''; position: absolute; inset: 4px; border-radius: 2px;
+    border: 1.5px solid rgba(255, 255, 255, 0.65);
+    border-bottom-color: transparent; border-right-color: transparent;
+  }
+  .title-text { font-size: 12px; color: var(--text-secondary); }
+  .window-controls { display: flex; }
+  .window-controls button {
+    width: 46px; height: 36px; background: transparent; border: 0;
+    color: var(--text-tertiary); cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .window-controls button:hover { background: var(--surface-secondary); }
+  .window-controls .close:hover { background: var(--danger); color: #fff; }
+  .window-controls svg { width: 10px; height: 10px; }
+
+  /* Body */
+  .body {
+    flex: 1;
+    background:
+      radial-gradient(720px 520px at 50% 78%, rgba(244, 201, 138, 0.32) 0%, rgba(244, 201, 138, 0) 60%),
+      radial-gradient(420px 360px at 18% 22%, rgba(244, 201, 138, 0.18) 0%, rgba(244, 201, 138, 0) 60%),
+      var(--bg-app);
+    padding: 24px 36px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: relative;
+  }
+
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; }
+  .brand-title { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; }
+  .brand-subtitle { font-size: 12.5px; color: var(--text-tertiary); margin-top: 4px; }
+  .btn-about {
+    height: 36px; padding: 0 16px; border-radius: 10px;
+    background: transparent; border: 1.5px solid rgba(168, 84, 32, 0.32);
+    color: var(--accent-deep); font-size: 13.5px; font-weight: 600;
+    font-family: inherit; cursor: pointer; transition: all 0.16s ease;
+  }
+  .btn-about:hover { background: rgba(217, 119, 43, 0.06); border-color: var(--accent-primary); }
+
+  /* ====== 启动卡(快速路径,精简版) ====== */
+  .launch-card {
+    flex: 1;
+    background: var(--surface-primary);
+    border: 1px solid var(--line-softer);
+    border-radius: 18px;
+    padding: 28px 32px 24px;
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .launch-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(420px 320px at 100% 100%, rgba(244, 201, 138, 0.22) 0%, rgba(244, 201, 138, 0) 60%);
+    pointer-events: none;
+  }
+  .launch-card > * { position: relative; z-index: 1; }
+
+  /* 顶部 hero 行 */
+  .launch-head {
+    display: flex; align-items: center; gap: 18px;
+  }
+
+  .launch-spinner {
+    flex-shrink: 0;
+    position: relative;
+    width: 56px; height: 56px;
+  }
+  .launch-spinner-bg {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: radial-gradient(circle at 38% 35%, #FFE7C4 0%, #F5C285 55%, #E59B4E 100%);
+    box-shadow:
+      0 8px 22px rgba(217, 119, 43, 0.22),
+      inset 0 1px 1px rgba(255, 255, 255, 0.55);
+    animation: spinner-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes spinner-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.95; }
+    50%      { transform: scale(0.94); opacity: 1; }
+  }
+  .launch-spinner-ring {
+    position: absolute; inset: 5px; border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.4);
+    border-top-color: var(--text-on-accent);
+    animation: spinner-spin 1.2s linear infinite;
+  }
+  @keyframes spinner-spin { to { transform: rotate(360deg); } }
+
+  .launch-text {
+    flex: 1;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+
+  .launch-eyebrow {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 700;
+    color: var(--accent-deep); letter-spacing: 0.08em; text-transform: uppercase;
+    width: fit-content;
+  }
+  .launch-eyebrow::before {
+    content: ''; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent-primary);
+    animation: eyebrow-blink 1.4s ease-in-out infinite;
+  }
+  @keyframes eyebrow-blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+  .launch-headline {
+    font-size: 26px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.2;
+    color: var(--text-primary);
+  }
+
+  .launch-subline {
+    font-size: 13.5px; line-height: 1.55; color: var(--text-secondary);
+  }
+
+  /* 当前阶段文字 */
+  .current-stage {
+    background: var(--surface-secondary);
+    border: 1px solid var(--line-softer);
+    border-radius: 12px;
+    padding: 13px 16px;
+    display: flex; align-items: center; gap: 12px;
+    font-size: 13.5px;
+  }
+  .current-stage-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent-primary);
+    box-shadow: 0 0 0 0 rgba(217, 119, 43, 0.6);
+    animation: stage-dot-pulse 1.6s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes stage-dot-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 43, 0.6); }
+    50%      { box-shadow: 0 0 0 6px rgba(217, 119, 43, 0); }
+  }
+  .current-stage-text { color: var(--text-primary); font-weight: 600; }
+  .current-stage-detail {
+    color: var(--text-tertiary);
+    margin-left: auto;
+    font-size: 12px;
+  }
+
+  /* 3 步迷你阶段(精简版,只 3 段) */
+  .mini-steps {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .mini-step {
+    flex: 1;
+    height: 32px;
+    background: var(--surface-secondary);
+    border: 1px solid var(--line-softer);
+    border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+    color: var(--text-tertiary);
+    letter-spacing: 0.02em;
+    transition: all 0.18s ease;
+    position: relative;
+  }
+  .mini-step.done {
+    background: var(--success-soft);
+    color: var(--success);
+    border-color: rgba(79, 143, 122, 0.3);
+  }
+  .mini-step.active {
+    background: linear-gradient(135deg, rgba(244, 201, 138, 0.4), rgba(217, 119, 43, 0.18));
+    color: var(--accent-deep);
+    border-color: rgba(217, 119, 43, 0.4);
+    box-shadow: 0 0 0 3px rgba(217, 119, 43, 0.12);
+  }
+  .mini-step .check {
+    width: 11px; height: 11px; margin-right: 5px;
+  }
+
+  /* 按钮组 */
+  .launch-buttons {
+    display: flex; gap: 12px; align-items: center;
+    margin-top: auto;
+    padding-top: 4px;
+  }
+
+  .btn {
+    height: 46px; padding: 0 24px; border-radius: 12px;
+    font-size: 14.5px; font-weight: 600; font-family: inherit;
+    border: 0; cursor: pointer; transition: all 0.18s ease;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    letter-spacing: 0.02em;
+  }
+  .btn-primary {
+    background: linear-gradient(180deg, #E58236, var(--accent-primary) 60%, #C76819);
+    color: var(--text-on-accent);
+    box-shadow: var(--shadow-button);
+    min-width: 168px;
+  }
+  .btn-primary.disabled {
+    background: var(--surface-tertiary);
+    color: var(--text-tertiary);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+  .btn-primary.disabled .spinner {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--text-tertiary);
+    border-top-color: transparent;
+    animation: btn-spin 0.9s linear infinite;
+  }
+  @keyframes btn-spin { to { transform: rotate(360deg); } }
+
+  .btn-secondary {
+    background: transparent; color: var(--accent-deep);
+    border: 1.5px solid var(--accent-deep);
+    height: 46px; padding: 0 22px;
+    border-radius: 12px; font-size: 14px; font-weight: 600; font-family: inherit;
+    cursor: pointer; transition: all 0.18s ease;
+    min-width: 124px;
+  }
+  .btn-secondary:hover { background: rgba(217, 119, 43, 0.06); border-color: var(--accent-primary); }
+
+  .mockup-tag {
+    position: fixed; top: 12px; left: 12px;
+    background: rgba(38, 38, 33, 0.78); color: var(--text-on-accent);
+    padding: 6px 12px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.06em; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .mockup-note {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(38, 38, 33, 0.78); color: var(--text-on-accent);
+    padding: 6px 14px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.04em; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+
+  /* ============== Mobile auto-fit ============== */
+  @media (max-width: 960px) {
+    html, body {
+      height: auto !important;
+      overflow: visible !important;
+      overflow-x: hidden !important;
+      min-height: 100vh;
+    }
+    .stage {
+      position: static !important;
+      padding: 0 !important;
+      display: block !important;
+      height: auto !important;
+    }
+    .frame-holder {
+      width: 100vw !important;
+      height: calc(560 / 920 * 100vw) !important;
+    }
+    .window {
+      width: 920px !important;
+      height: 560px !important;
+      transform: scale(calc(100vw / 920)) !important;
+      transform-origin: top left !important;
+      border-radius: 0 !important;
+    }
+    .mockup-note {
+      position: static !important;
+      transform: none !important;
+      display: block !important;
+      width: fit-content;
+      margin: 8px auto 16px !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+  <span class="mockup-tag">Mockup 9 · 第二次启动 · 快速路径</span>
+  <span class="mockup-note">↑ 跳过环境/下载/解压/装 WebUI 4 段 · 只 3 段 · 没有"中途别关"警告 · 没有进度条</span>
+
+  <div class="stage">
+    <div class="frame-holder" id="holder">
+      <div class="window">
+
+        <div class="title-bar">
+          <div class="title-left">
+            <div class="app-icon"></div>
+            <span class="title-text">Hermes 启动器</span>
+          </div>
+          <div class="window-controls">
+            <button title="最小化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><line x1="0" y1="5" x2="10" y2="5"/></svg></button>
+            <button title="最大化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg></button>
+            <button class="close" title="关闭"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><line x1="0" y1="0" x2="10" y2="10"/><line x1="10" y1="0" x2="0" y2="10"/></svg></button>
+          </div>
+        </div>
+
+        <div class="body">
+
+          <div class="header">
+            <div>
+              <h1 class="brand-title">Hermes Agent</h1>
+              <span class="brand-subtitle">为中文用户准备的图形启动器 · v2026.05.04.6</span>
+            </div>
+            <button class="btn-about">关于</button>
+          </div>
+
+          <!-- 启动卡(快速路径) -->
+          <div class="launch-card">
+
+            <div class="launch-head">
+              <div class="launch-spinner">
+                <div class="launch-spinner-bg"></div>
+                <div class="launch-spinner-ring"></div>
+              </div>
+              <div class="launch-text">
+                <span class="launch-eyebrow">正在打开 WebUI</span>
+                <h2 class="launch-headline">正在打开 hermes-web-ui</h2>
+                <p class="launch-subline">几秒就好</p>
+              </div>
+            </div>
+
+            <!-- 当前阶段(只 1 行,无右侧详情) -->
+            <div class="current-stage">
+              <span class="current-stage-dot"></span>
+              <span class="current-stage-text">正在等待 hermes-web-ui 就绪</span>
+              <span class="current-stage-detail">健康检查中</span>
+            </div>
+
+            <!-- 3 步迷你阶段(只 3 段,块更大) -->
+            <div class="mini-steps">
+              <div class="mini-step done">
+                <svg class="check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 5 4 7 8 3"/></svg>
+                启 Gateway
+              </div>
+              <div class="mini-step active">等待就绪</div>
+              <div class="mini-step">启 WebUI</div>
+            </div>
+
+            <!-- 按钮组(无进度条 + 无预计时间) -->
+            <div class="launch-buttons">
+              <button class="btn btn-primary disabled" disabled>
+                <span class="spinner"></span>
+                启动中...
+              </button>
+              <button class="btn-secondary">取消</button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const holder = document.getElementById('holder');
+      const W = 920, H = 560;
+      function scale() {
+        const padding = 32;
+        const availW = window.innerWidth - padding * 2;
+        const availH = window.innerHeight - padding * 2;
+        const s = Math.min(availW / W, availH / H, 1);
+        holder.style.setProperty('--s', s);
+      }
+      scale();
+      window.addEventListener('resize', scale);
+      window.addEventListener('orientationchange', scale);
+    })();
+  </script>
+</body>
+</html>

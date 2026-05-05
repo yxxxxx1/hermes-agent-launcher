@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.5'
+$script:LauncherVersion = 'Windows v2026.05.04.6'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3871,7 +3871,7 @@ $defaults = Get-HermesDefaults
                         </Border.Effect>
                         <StackPanel>
                             <DockPanel LastChildFill="True">
-                                <Border DockPanel.Dock="Left" Width="56" Height="56" CornerRadius="28"
+                                <Border x:Name="LaunchSpinnerBorder" DockPanel.Dock="Left" Width="56" Height="56" CornerRadius="28"
                                         Margin="0,0,18,0">
                                     <Border.Background>
                                         <RadialGradientBrush GradientOrigin="0.38,0.35" Center="0.5,0.5" RadiusX="0.55" RadiusY="0.55">
@@ -4088,7 +4088,7 @@ foreach ($name in @(
     'HomeBannerStack',
     'HomeDepFailureBanner','HomeDepFailureText','HomeDepFailureViewButton',
     'HomeOpenClawBanner','HomeOpenClawImportButton','HomeOpenClawSkipButton',
-    'LaunchProgressCard','LaunchSpinnerGlyph','LaunchSpinnerRotate',
+    'LaunchProgressCard','LaunchSpinnerBorder','LaunchSpinnerGlyph','LaunchSpinnerRotate',
     'LaunchProgressEyebrow','LaunchProgressHeadline','LaunchProgressSubline',
     'LaunchCurrentStageText','LaunchCurrentStageDetail','LaunchProgressBar','LaunchProgressMiniSteps',
     'LaunchMiniStep1Border','LaunchMiniStep1Text','LaunchMiniStep2Border','LaunchMiniStep2Text',
@@ -4428,6 +4428,11 @@ function Start-LaunchAsync {
 function Stop-LaunchAsync {
     param([string]$ErrorMessage)
     if ($script:LaunchTimer) { $script:LaunchTimer.Stop() }
+    # 任务 014 Bug C (v2026.05.04.6):success 态停留期间用户点关闭按钮 → 立刻 stop 倒计时 timer
+    if ($script:LaunchSuccessHideTimer) {
+        try { $script:LaunchSuccessHideTimer.Stop() } catch { }
+        $script:LaunchSuccessHideTimer = $null
+    }
     # 任务 012 P1-3：如果解压 Runspace 还在跑，安全释放（不等完成，不抛异常）
     if ($script:LaunchState) {
         try {
@@ -4626,8 +4631,10 @@ $script:LaunchPhaseMap = @{
     'start-gateway'        = @{ Step = 5; Text = '正在启动 Hermes Gateway'; Detail = '';               ProgressMin = 70;  ProgressMax = 78  }
     'wait-gateway-healthy' = @{ Step = 6; Text = '等待 Gateway 就绪';  Detail = '';                     ProgressMin = 78;  ProgressMax = 88  }
     'start-webui'          = @{ Step = 7; Text = '正在启动 hermes-web-ui'; Detail = '';                ProgressMin = 88;  ProgressMax = 95  }
-    'wait-healthy'         = @{ Step = 7; Text = '等待 hermes-web-ui 就绪'; Detail = '健康检查中';       ProgressMin = 95;  ProgressMax = 99  }
+    'wait-healthy'         = @{ Step = 6; Text = '等待 hermes-web-ui 就绪'; Detail = '健康检查中';       ProgressMin = 90;  ProgressMax = 99  }
 }
+# 任务 014 Bug C (v2026.05.04.6):wait-healthy.Step 从 7 改成 6,跟 mini-step 6 "等待就绪" 对齐
+# (mini-step 7 "启 WebUI" 应该在最终成功瞬间才标 done,由 Set-LaunchProgressCardSuccess 处理)
 
 # 显示 LaunchProgressCard,隐藏 HomeReadyContainer
 function Show-LaunchProgressCard {
@@ -4640,6 +4647,104 @@ function Show-LaunchProgressCard {
         if ($controls.LaunchCurrentStageText) { $controls.LaunchCurrentStageText.Text = '正在检查环境' }
         if ($controls.LaunchCurrentStageDetail) { $controls.LaunchCurrentStageDetail.Text = '' }
         if ($controls.LaunchProgressEstTime) { $controls.LaunchProgressEstTime.Text = '' }
+
+        # 任务 014 Bug C (v2026.05.04.6):上次 success 态残留可能让 spinner 还是墨绿/✓ — 复位为暖橙 ⟳
+        try {
+            if ($controls.LaunchSpinnerBorder) {
+                $rgb = New-Object System.Windows.Media.RadialGradientBrush
+                $rgb.GradientOrigin = New-Object System.Windows.Point 0.38, 0.35
+                $rgb.Center = New-Object System.Windows.Point 0.5, 0.5
+                $rgb.RadiusX = 0.55; $rgb.RadiusY = 0.55
+                $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0xFF, 0xE7, 0xC4)), 0))
+                $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0xF5, 0xC2, 0x85)), 0.55))
+                $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0xE5, 0x9B, 0x4E)), 1))
+                $controls.LaunchSpinnerBorder.Background = $rgb
+            }
+            if ($controls.LaunchSpinnerGlyph) { $controls.LaunchSpinnerGlyph.Text = [char]0x27F3 }  # ⟳
+            if ($controls.LaunchProgressEyebrow) {
+                $controls.LaunchProgressEyebrow.Text = '正在启动 WebUI'
+                $accentDeep = Get-PaletteBrush 'AccentDeepBrush'
+                if ($accentDeep) { $controls.LaunchProgressEyebrow.Foreground = $accentDeep }
+            }
+            if ($controls.LaunchProgressHeadline) { $controls.LaunchProgressHeadline.Text = '第一次启动需要装一些组件' }
+            if ($controls.LaunchProgressSubline) { $controls.LaunchProgressSubline.Text = '完成后会自动在浏览器中打开 hermes-web-ui · 中途请勿关闭窗口' }
+            if ($controls.LaunchProgressCancelButton) { $controls.LaunchProgressCancelButton.Content = '取消并返回' }
+        } catch { }
+    } catch { }
+}
+
+# 任务 014 Bug C (v2026.05.04.6):切换 LaunchProgressCard 到 success 态
+# wait-healthy 检测到 webui 健康后调用此函数,展示"全 7 段绿 ✓ + URL bar + 倒计时收起"
+# 见设计稿 mockups/011-windows-ui-extra/08-launching-success.html
+function Set-LaunchProgressCardSuccess {
+    param([string]$Url)
+    try {
+        # spinner Border 切墨绿径向渐变
+        if ($controls.LaunchSpinnerBorder) {
+            $rgb = New-Object System.Windows.Media.RadialGradientBrush
+            $rgb.GradientOrigin = New-Object System.Windows.Point 0.38, 0.35
+            $rgb.Center = New-Object System.Windows.Point 0.5, 0.5
+            $rgb.RadiusX = 0.55; $rgb.RadiusY = 0.55
+            $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0xB8, 0xDD, 0xCC)), 0))
+            $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0x6F, 0xA9, 0x95)), 0.55))
+            $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0x3F, 0x7A, 0x65)), 1))
+            $controls.LaunchSpinnerBorder.Background = $rgb
+        }
+        # glyph ⟳ → ✓
+        if ($controls.LaunchSpinnerGlyph) { $controls.LaunchSpinnerGlyph.Text = [char]0x2713 }  # ✓
+        # eyebrow 文案 + 颜色墨绿
+        if ($controls.LaunchProgressEyebrow) {
+            $controls.LaunchProgressEyebrow.Text = 'WebUI 已启动'
+            $success = Get-PaletteBrush 'SuccessBrush'
+            if ($success) { $controls.LaunchProgressEyebrow.Foreground = $success }
+        }
+        # headline / subline 文案
+        if ($controls.LaunchProgressHeadline) { $controls.LaunchProgressHeadline.Text = '已在浏览器中打开' }
+        if ($controls.LaunchProgressSubline) { $controls.LaunchProgressSubline.Text = '2 秒后自动收起此窗口' }
+        # current-stage 改成 URL 文本
+        if ($controls.LaunchCurrentStageText) { $controls.LaunchCurrentStageText.Text = $Url }
+        if ($controls.LaunchCurrentStageDetail) { $controls.LaunchCurrentStageDetail.Text = '' }
+        # progress 100%
+        if ($controls.LaunchProgressBar) { $controls.LaunchProgressBar.Value = 100 }
+        # mini-steps 1-7 全 done
+        for ($i = 1; $i -le 7; $i++) { Set-LaunchMiniStepState -StepIndex $i -State 'done' }
+        # 取消按钮 → 关闭窗口
+        if ($controls.LaunchProgressCancelButton) { $controls.LaunchProgressCancelButton.Content = '关闭窗口' }
+        # 隐藏预计时间
+        if ($controls.LaunchProgressEstTime) { $controls.LaunchProgressEstTime.Text = '' }
+    } catch { }
+}
+
+# 任务 014 Bug C (v2026.05.04.6):success 态停留 ~2 秒后自动 Hide-LaunchProgressCard
+# 期间 subline 倒计时 "2 秒 → 1 秒 → 即将" 让用户感知"自动收尾"
+# 用户中途点关闭窗口按钮 → Stop-LaunchAsync(无 ErrorMessage)立即收起,timer 自然 Stop
+$script:LaunchSuccessHideTimer = $null
+function Start-LaunchSuccessAutoHide {
+    try {
+        # stop any existing timer
+        if ($script:LaunchSuccessHideTimer) {
+            try { $script:LaunchSuccessHideTimer.Stop() } catch { }
+            $script:LaunchSuccessHideTimer = $null
+        }
+        $script:LaunchSuccessHideTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:LaunchSuccessHideTimer.Interval = [TimeSpan]::FromMilliseconds(700)
+        $script:LaunchSuccessHideTickCount = 0
+        $script:LaunchSuccessHideTimer.Add_Tick({
+            try {
+                $script:LaunchSuccessHideTickCount++
+                switch ($script:LaunchSuccessHideTickCount) {
+                    1 { if ($controls.LaunchProgressSubline) { $controls.LaunchProgressSubline.Text = '1 秒后自动收起此窗口' } }
+                    2 { if ($controls.LaunchProgressSubline) { $controls.LaunchProgressSubline.Text = '即将收起...' } }
+                    default {
+                        $script:LaunchSuccessHideTimer.Stop()
+                        $script:LaunchSuccessHideTimer = $null
+                        Hide-LaunchProgressCard
+                        try { Refresh-Status } catch { }
+                    }
+                }
+            } catch { }
+        })
+        $script:LaunchSuccessHideTimer.Start()
     } catch { }
 }
 
@@ -4978,9 +5083,16 @@ function Step-LaunchSequence {
                     $hermesHome = Join-Path $env:USERPROFILE '.hermes'
                     Save-LauncherState -HermesHome $hermesHome -LocalChatVerified $true
                     Start-GatewayEnvWatcher
-                    Refresh-Status
                     $controls.PrimaryActionButton.IsEnabled = $true
                     $script:LaunchState = $null
+
+                    # 任务 014 Bug C (v2026.05.04.6):切换到 success 态(全 7 段绿 ✓ + URL bar + 倒计时)
+                    # 然后 ~2 秒后自动 Hide-LaunchProgressCard + Refresh-Status 回到主页
+                    # 见设计稿 mockups/011-windows-ui-extra/08-launching-success.html
+                    # 修陷阱 #43:任务 012 漏了成功路径的 Hide,被陷阱 #42 掩盖直到 v2026.05.04.5 才暴露
+                    $browserUrl = "http://$($webUi.Host):$($webUi.Port)"
+                    Set-LaunchProgressCardSuccess -Url $browserUrl
+                    Start-LaunchSuccessAutoHide
                     return
                 }
 

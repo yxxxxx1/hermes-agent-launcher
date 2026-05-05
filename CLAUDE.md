@@ -902,6 +902,31 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #43 长期 UI 状态机的"成功路径收尾"被错误路径意外掩盖
+
+**触发条件**：UI 状态机有"启动中 → 成功 / 失败"两条收尾路径,只有失败路径调用了清理函数(如 Hide UI 元素),成功路径漏调。同时另一个 bug 让"健康检查永远 false",导致状态机**永远走失败路径**——失败路径的清理掩盖了成功路径漏调的事实。
+
+**坑的表现**(任务 014 Bug C 真实情况)：
+- 任务 012 上线 `LaunchProgressCard` 启动进度卡时,只在 `Stop-LaunchAsync(失败路径)` 调了 `Hide-LaunchProgressCard`,成功路径 `wait-healthy` 健康通过后**忘了调 Hide**
+- 但当时陷阱 #42 让 `Test-HermesWebUiHealth` 永远 Healthy=false,30 秒超时必走失败路径,Hide 被调用,**没人发现成功路径漏 Hide**
+- v2026.05.04.5 修了 #42 后,健康检查瞬间通过 → 走成功路径 → **进度卡卡在屏幕上不消失**,但浏览器实际已打开
+- PM 截图:UI 显示"等待 hermes-web-ui 就绪 · 健康检查中",步骤 7"启 WebUI"高亮,但浏览器 webui 完全正常工作
+
+**预防动作**：
+- 任何 UI 状态机的"收尾函数"(Hide / Reset / Cleanup)必须在**所有终态路径**(success / error / cancel)统一调用,不能只在 error 路径
+- Code review 时 grep `Hide-LaunchProgressCard` 这种清理函数,必须出现在 ≥2 处(成功 + 失败),否则就有这种"长期掩盖"风险
+- 上线 UI 状态机时**必须真机测一遍成功路径**,不能只测失败路径(失败路径在开发机上更容易复现,容易成默认测试场景)
+- 修 bug 之间有依赖关系时,要警惕"修一个暴露另一个":陷阱 #42 的修复直接暴露了 #43,**修 #42 时应该同时验证之前被它掩盖的下游路径**
+
+**自检盲区**：
+- AI 工程师交付任务 012 时,代码 review 看到 `Show-LaunchProgressCard` + `Hide-LaunchProgressCard` 配对,以为没问题——但**没核对 Hide 的所有调用点是否覆盖完整状态机**
+- 真机测试时,陷阱 #42 让所有"成功路径"都走不通,自然测不到这个 bug
+- 整合者 / QA Agent 没建立"清理函数调用矩阵"的检查习惯,grep 一次成本极低但常被跳过
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。
