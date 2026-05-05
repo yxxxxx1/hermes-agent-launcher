@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.3.zip`: versioned Windows download linked by `index.html` (任务 014 Bug A.4 真机 hotfix:Install-GatewayPlatformDeps 改用 ModuleName + 严格 __file__ 校验,防 cwd / PYTHONPATH 上同名模块伪造已装,导致 python-telegram-bot 等渠道依赖永远不会安装)
+- `Hermes-Windows-Launcher-v2026.05.04.4.zip`: versioned Windows download linked by `index.html` (任务 014 Bug A.5 紧急修复:全文件 ErrorActionPreference='Stop' 让 uv pip install 写 stderr 时被 PowerShell 包成 NativeCommandError 抛异常,install 子流程秒进 catch 块永远装不上 python-telegram-bot 等渠道依赖。修复:Install-GatewayPlatformDeps 内部局部切 EAP='Continue',只看 $LASTEXITCODE。陷阱 #41。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

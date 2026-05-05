@@ -826,6 +826,46 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #41 全局 `$ErrorActionPreference='Stop'` + native command + `2>&1` = stderr 进度信息变 NativeCommandError
+
+**触发条件**：PowerShell 文件顶部设置 `$ErrorActionPreference = 'Stop'`(本项目第 6 行),又在某个 try/catch 块里调用 native command(`& $exe ... 2>&1`),而该 native command 会把进度信息写到 stderr(uv / pip / node / git 等很多 CLI 都这样)
+
+**坑的表现**：
+- native command 写一行 stderr → PowerShell 在 'Stop' 模式下把 stderr 行包装成 `NativeCommandError` 对象立即抛异常
+- catch 块兜住 → launcher 报"安装失败：Using Python 3.13.12 environment at: ..."(把 uv 的开场白当作错误信息)
+- **但 native command 实际可能根本没失败,只是 stderr 写了正常进度信息**
+- 灾难性后果:Install-GatewayPlatformDeps 永远进 catch,python-telegram-bot 等依赖永远装不上,gateway 一直报"No adapter available for telegram",发版 v2026.05.04.1 / v2026.05.04.2 / v2026.05.04.3 全踩,直到 v2026.05.04.4 才修
+
+**典型 stderr 进度行**：
+- uv: `Using Python 3.13.12 environment at: ...` / `Resolved N packages in Xms` / `Installed N package in Xms`
+- pip: `WARNING: ...` / `Looking in indexes: ...`
+- npm/node: 各种 deprecation 警告
+
+**预防动作**：
+- 任何 try/catch 块里调用会写 stderr 进度的 native command,**必须**局部切回 `$ErrorActionPreference = 'Continue'`,出口 finally 还原:
+  ```powershell
+  $savedEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+      $output = & $exe args 2>&1
+      $code = $LASTEXITCODE
+      # 只看 $LASTEXITCODE,不依赖异常机制判定失败
+  } finally {
+      $ErrorActionPreference = $savedEAP
+  }
+  ```
+- 失败判定**只看 `$LASTEXITCODE`**,绝不靠 try/catch 兜 NativeCommandError
+- 工程师/QA 检查清单:任何 `& $native ... 2>&1` 段的上下文里有没有 `$ErrorActionPreference = 'Stop'`(本文件第 6 行就是),有就必须局部切 'Continue'
+- 测试方法:**模拟调用方 EAP=Stop 的上下文**跑目标函数,而不是单独跑 native command
+
+**为什么 v2026.05.04.1/04.2/04.3 三次没修好**：
+- 三次发版都在改"严格校验逻辑"(改 ImportTest → 改 __file__ 校验 → 改 ModuleName),但**安装那步永远没机会跑完**——因为 install 子流程秒进 catch 块。三次都没意识到 root cause 是 EAP 把 stderr 当异常,不是校验逻辑本身的问题。
+- 自检盲区:Claude Code 自检"Install-GatewayPlatformDeps 函数代码看起来对",但没在 EAP='Stop' 上下文里端到端跑一次"装个真包"。
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

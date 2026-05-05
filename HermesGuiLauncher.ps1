@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.3'
+$script:LauncherVersion = 'Windows v2026.05.04.4'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -748,6 +748,15 @@ except Exception as e:
         'DISCORD_BOT_TOKEN'  = 'Discord'
     }
 
+    # 任务 014 Bug A.5 (v2026.05.04.4 紧急修复): 全文件级别 $ErrorActionPreference='Stop'
+    # 会让 native command (uv / python) 写 stderr 时被 PowerShell 包成 NativeCommandError 抛异常,
+    # 直接进 catch 块 → install 根本没等跑完就报"安装失败"。
+    # uv pip install 的进度信息("Using Python 3.13.12 environment at: ...")是写 stderr 的,必触发。
+    # 修复:在 foreach 期间局部切 EAP='Continue',只看 $LASTEXITCODE,出函数前 finally 还原。
+    # 见陷阱 #41。
+    $savedErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
     foreach ($dep in $platformDeps) {
         # Check if this platform is configured in .env (uncommented, with a value)
         $configured = $envLines | Where-Object { $_ -match "^\s*$($dep.EnvKey)\s*=\s*.+" }
@@ -847,6 +856,10 @@ except Exception as e:
                 }
             } catch { }
         }
+    }
+    } finally {
+        # 任务 014 Bug A.5: 还原 EAP,防止泄漏到调用方
+        $ErrorActionPreference = $savedErrorActionPreference
     }
     return $anyInstalled
 }
