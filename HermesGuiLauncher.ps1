@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.14'
+$script:LauncherVersion = 'Windows v2026.05.04.15'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3187,7 +3187,23 @@ Write-Host '[Hermes 启动器] 已切换到国内镜像源，加速安装...' -F
 # === 镜像源配置结束 ===
 
 "@
-        $content = $mirrorHeader + $content
+        # 任务 014 Bug K (v2026.05.04.15):必须插到 param() 块之后!
+        # PowerShell 要求 param() 是脚本第一个非注释/空行语句。
+        # 之前的 `$content = $mirrorHeader + $content` 把 $env: 赋值拼在 param 块前,
+        # 导致 parser 把 param 块里的 [string]$Branch = "main" 当成普通赋值表达式,
+        # 报 "The assignment expression is not valid / InvalidLeftHandSide"。
+        # 见陷阱 #49。
+        $paramEndRegex = [regex]::new('(?s)^.*?param\s*\([^)]*\)\s*[\r\n]+')
+        $paramMatch = $paramEndRegex.Match($content)
+        if ($paramMatch.Success) {
+            $headerEnd = $paramMatch.Length
+            # 用 substring 拼接,避免 [regex]::Replace 把 $mirrorHeader 里 `$env:` 之类当成反向引用
+            $content = $content.Substring(0, $headerEnd) + $mirrorHeader + $content.Substring($headerEnd)
+        } else {
+            # fallback: 找不到 param 块时仍按旧方式拼(install.ps1 改了结构时不至于裸崩)
+            Add-LogLine '警告:install.ps1 没找到 param 块,镜像注入可能失效'
+            $content = $mirrorHeader + $content
+        }
     }
 
     [System.IO.File]::WriteAllText($tempPath, $content, (New-Object System.Text.UTF8Encoding $true))

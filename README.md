@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.14.zip`: versioned Windows download linked by `index.html` (任务 014 Bug J 紧急修复:陷阱 #47 自建镜像方案上线后,中国测试者跑出 "Unexpected token '32' in expression or statement" parse 报错——install.ps1 文件内容变成空格分隔的十进制数字串。Root cause:Cloudflare Pages 给 .ps1 返回 octet-stream → Invoke-WebRequest 把 $resp.Content 当 byte[],写出来是 hex dump。修复:1) 代码 byte[] 显式 UTF-8 decode 成 string;2) _headers 让 Cloudflare 给 mirror/*.ps1 返回 text/plain。陷阱 #48。)
+- `Hermes-Windows-Launcher-v2026.05.04.15.zip`: versioned Windows download linked by `index.html` (任务 014 Bug K 紧急修复:陷阱 #48 byte[] 修了之后中国测试者再次踩——install.ps1 报 "InvalidLeftHandSide" parse 错误。Root cause:launcher 把镜像 env 注入头部时 `$content = $mirrorHeader + $content` 把 `$env:PIP_INDEX_URL = ...` 拼在 param() 块前,PowerShell 要求 param() 必须是脚本第一个非注释/空行语句。修复:用 regex 找 param() 块结束位置,在其后用 substring 拼接(避免 [regex]::Replace 把 `$env:` 当反向引用)。陷阱 #49。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

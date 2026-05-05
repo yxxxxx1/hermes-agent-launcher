@@ -1107,6 +1107,56 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #49 PowerShell param() 必须是脚本第一个非注释/空行语句,在前面拼接代码会让 param 块失效
+
+**触发条件**：launcher 对上游 install.ps1 做"在头部插入镜像源 env 变量"的 patch:
+```powershell
+$content = $mirrorHeader + $content   # ← 把 $env:PIP_INDEX_URL = ... 拼到 install.ps1 头部
+```
+
+**坑的表现**(陷阱 #48 byte[] 修了之后立即踩):
+- 中国测试者真机报错:
+  ```
+  At C:\...\hermes-install-XXX.ps1:26 char:23
+  +     [string]$Branch = "main",
+  +                       ~~~~~~
+  The assignment expression is not valid. The input to an assignment operator
+  must be an object that is able to accept assignments, such as a variable
+  or a property.
+  At ...:27 char:27
+  +     [string]$HermesHome = "$env:LOCALAPPDATA\hermes",
+  ...
+  + FullyQualifiedErrorId : InvalidLeftHandSide
+  ```
+- install.ps1 完全没机会跑
+
+**Root cause**:
+- PowerShell 语法规则:**`param(...)` 块必须是脚本第一个非注释/空行语句**
+- 如果前面有任何代码语句(包括 `$env:X = 'Y'` 赋值),PowerShell parser 把后面的 `param()` 当成普通函数调用,把 `[string]$Branch = "main"` 当成普通"对类型转换表达式赋值"——这在 PowerShell 里非法 → "InvalidLeftHandSide"
+
+**预防动作**:
+- patch 上游 .ps1 文件时,**绝不把代码拼到头部**;必须用 regex 找 `param()` 块结束位置,在 param 块**之后**插入:
+  ```powershell
+  $paramEndRegex = [regex]::new('(?s)^.*?param\s*\([^)]*\)\s*[\r\n]+')
+  $paramMatch = $paramEndRegex.Match($content)
+  if ($paramMatch.Success) {
+      $headerEnd = $paramMatch.Length
+      $content = $content.Substring(0, $headerEnd) + $injectedHeader + $content.Substring($headerEnd)
+  }
+  ```
+- 用 `Substring` 拼接,不用 `[regex]::Replace`(避免 `$env:X` 里的 `$` 被当成反向引用)
+- 单元测试:patch 后用 `[System.Management.Automation.PSParser]::Tokenize()` 验证 parse 通过,再发版
+
+**自检盲区**:
+- launcher 跑 SelfTest 通过(SelfTest 不调用 New-TempScriptFromUrl)
+- launcher 在工程师机器跑(NetworkEnv='overseas',不进入 mirror header 注入分支)→ 永远不会触发这个 bug
+- 中国地区测试者(NetworkEnv='china')才会进入注入分支 → 踩 bug
+- 修陷阱 #48 byte[] 时只 verify 了"download 后内容是 string",没 verify "patch 后内容能 parse"
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。
