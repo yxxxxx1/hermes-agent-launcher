@@ -329,3 +329,103 @@ WPF 的 `ComboBox` 在 `IsEditable="True"` 模式下，内部的 `PART_EditableT
 **动作**:PM 真机看完后如果觉得间距不舒服,下一轮调 `HomeBannerStack.Margin` 或 `HomeReadyContainer.Margin`。
 
 **优先级**:低(视觉精修)
+
+---
+
+### 待办：开源 pre-flight 检查清单（任务 015 G 时记录）
+
+**背景**：v2026.05.06.2 已在关于对话框加了 GitHub 仓库链接 `https://github.com/yxxxxx1/hermes-agent-launcher`，准备开源。开源之前必须处理以下事项，**当前都没做**。
+
+#### G1. **添加 LICENSE 文件（必须）**
+
+- 根目录没有 `LICENSE` 文件，README 里说"MIT 协议"但 GitHub 不会显示 License 标签
+- 动作：在仓库根目录新建 `LICENSE`，内容用 MIT 标准模板（Copyright (c) 2026 yxxxxx1），版权人写你自己
+
+**优先级**：开源前必须
+
+#### G2. **git 历史已经包含 PM 内部文档（最大坑，先决策）**
+
+`git log --all --name-only` 已经能看到这些文件曾出现在 commit 里：
+- `CLAUDE.md`（项目章程，含 PM 协作姿态、AI 自检盲区、47 条踩坑日记）
+- `DECISIONS.md`（产品决策归档）
+- `TODO.md`（本文件）
+- `WORKFLOW.md`（多 Agent 协作流）
+- `tasks/`（每个任务的需求文档 + 工程师/QA/整合者报告）
+- `openspec/`（早期设计文档）
+
+**风险**：仓库一旦改 public，**git 历史里所有这些文档全球可见**——包括 PM "我不懂代码" / AI "盲区声明" / "PM 让我做的所有产品决策细节" 这些不该公开的东西。
+
+**三种处理思路（开源前 PM 必须从中三选一）**：
+
+- **A. 接受历史公开（最省事）**：直接 public，老 commit 的内部文档随便看。代价：CLAUDE.md 里的协作细节、tasks/ 里的 QA 报告全透明。
+- **B. 重写 git 历史（用 git-filter-repo 把这些路径全部从历史删掉）**：保持同一仓库继续用，但**所有现有 fork / PR / star 失效**，commit hash 全变。代价：技术操作有风险，老链接全失效。
+- **C. 新建 public 干净仓库（推荐）**：保留当前 private repo 作为开发主仓，从某个干净 snapshot（比如只 copy 当前文件树，去掉所有内部文档，单 commit "Initial open-source release"）新建 public repo。两边并行：private 继续 PM + AI 协作，public 只做发版同步 + 接受外部 issue/PR。
+
+不论选哪个，下一步必须做 G3。
+
+**优先级**：开源前必须决策
+
+#### G3. **`.gitignore` 加内部文档排除（防新提交）**
+
+当前 `.gitignore` 没有显式排除 `CLAUDE.md` 等。需要补上一段：
+
+```
+# 内部协作文档（开源后不入新 commit；老 commit 的处理见 G2）
+CLAUDE.md
+DECISIONS.md
+TODO.md
+WORKFLOW.md
+RETROSPECTIVE-*.md
+tasks/
+openspec/
+prompts/
+```
+
+**注意**：如果走 G2 方案 C（新建干净仓库），这段加在 public 仓库的 .gitignore 里；如果走 A 或 B，加在当前仓库（B 还需要先 git rm 文件再 ignore）。
+
+**优先级**：跟 G2 同步做
+
+#### G4. **README.md 用户视角重写**
+
+当前 README 同时混了：
+- 顶部："是什么 / 下载 / 使用价值"——用户视角，OK
+- 中间："文件清单 / Run 命令 / SelfTest / 打包流程"——开发者视角，外部用户不需要
+
+**建议**：拆成两份，README.md 留顶部用户视角内容；新建 `CONTRIBUTING.md` 把 Run / SelfTest / 打包流程 / 发版流程 移过去，给想贡献的人看。
+
+**优先级**：开源后 1-2 天内做（不影响首次开源）
+
+#### G5. **代码 / 注释扫一遍"内部口语"**
+
+PowerShell 文件里有大量注释写"任务 014 Bug R"、"PM 视角"、"陷阱 #46" 这种内部黑话和编号。
+- 路人看不懂"陷阱 #46"指什么
+- "PM" 第一人称让人觉得是私人项目，不像开源协作
+
+**建议**：开源前做一轮 grep 替换，"PM" → "the maintainer" 或直接删除自指；"任务 0XX" / "陷阱 #N" 内部编号保留或加文档链接（指向 CLAUDE.md，但前提是 G2 选了能让外部看到 CLAUDE.md 的方案）。
+
+**优先级**：低（开源后慢慢改，不影响功能）
+
+#### G6. **secret / 凭据扫描**
+
+`.cloudflareignore` 已经排除了 `worker/`，但代码里可能仍有以下风险点未审：
+- 是否有 commit 历史里出现过 wrangler.toml 旧版本带过 token
+- 是否有 .env / .env.example 漏在某次 commit
+- 是否有 PowerShell 注释里写过测试用 API key
+
+**建议**：开源前用 [trufflehog](https://github.com/trufflesecurity/trufflehog) 或 [gitleaks](https://github.com/gitleaks/gitleaks) 扫一遍 git 历史。
+
+**优先级**：开源前必须
+
+#### G7. **Issue 模板 / CI（低优）**
+
+- `.github/ISSUE_TEMPLATE/` 加 bug / feature 两个模板（让外部反馈结构化）
+- `.github/workflows/selftest.yml` 加 GitHub Actions 跑 SelfTest（每 PR 自动验证）
+
+**优先级**：低（开源后 1 周内做也行）
+
+---
+
+**整体优先级排序**：
+1. **必做（开源 D-day 前）**：G1 + G2 决策 + G3 + G6
+2. **次必做（开源后 1 周内）**：G4
+3. **可选**：G5 / G7
