@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.9.zip`: versioned Windows download linked by `index.html` (任务 014 Bug G 修复:全新装 hermes-agent default config.yaml 不含 platforms.api_server 块,Repair-GatewayApiPort 旧逻辑只 fix 已有 port 不主动追加,gateway 启动跳过 api_server,8642 端口无人监听,webui 显示"未连接"。修复:Repair-GatewayApiPort 处理三种状态——平台块完全缺失/缺 api_server 子块/port 不对,缺啥补啥。陷阱 #46。)
+- `Hermes-Windows-Launcher-v2026.05.04.10.zip`: versioned Windows download linked by `index.html` (副标题文案优化:`为中文用户准备的图形启动器` → `更聪明的个人 AI 助理`,去掉跟标题栏 `Hermes Agent 桌面控制台` 的重复,文案更直接。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

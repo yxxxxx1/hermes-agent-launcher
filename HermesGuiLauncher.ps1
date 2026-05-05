@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.9'
+$script:LauncherVersion = 'Windows v2026.05.04.10'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3526,7 +3526,7 @@ $defaults = Get-HermesDefaults
                                Foreground="{StaticResource TextPrimaryBrush}"/>
                     <TextBlock x:Name="BrandSubtitleText" Margin="0,4,0,0" FontSize="12.5"
                                Foreground="{StaticResource TextTertiaryBrush}"
-                               Text="为中文用户准备的图形启动器"/>
+                               Text="更聪明的个人 AI 助理"/>
                 </StackPanel>
             </DockPanel>
 
@@ -4266,7 +4266,7 @@ foreach ($name in @(
 
 # 任务 012：FooterVersionText 在 XAML 里没默认值（避免 XAML 字符串内 $($script:LauncherVersion) 让 [xml] 解析变脆），上来在代码里设。
 try { if ($controls.FooterVersionText) { $controls.FooterVersionText.Text = $script:LauncherVersion } } catch { }
-try { if ($controls.BrandSubtitleText) { $controls.BrandSubtitleText.Text = "为中文用户准备的图形启动器 · $($script:LauncherVersion)" } } catch { }
+try { if ($controls.BrandSubtitleText) { $controls.BrandSubtitleText.Text = "更聪明的个人 AI 助理 · $($script:LauncherVersion)" } } catch { }
 
 $controls.HermesHomeTextBox.Text = $defaults.HermesHome
 $controls.InstallDirTextBox.Text = $defaults.InstallDir
