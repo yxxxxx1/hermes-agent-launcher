@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.8'
+$script:LauncherVersion = 'Windows v2026.05.04.9'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -1026,11 +1026,21 @@ function Stop-ExistingGateway {
 function Repair-GatewayApiPort {
     <#
     .SYNOPSIS
-    Ensure config.yaml has api_server port = 8642 (the default).
+    Ensure config.yaml has platforms.api_server with port 8642.
     hermes-web-ui hardcodes upstream to http://127.0.0.1:8642.  If config.yaml
     has a different port, the gateway binds elsewhere and webui shows "未连接".
     The env var API_SERVER_PORT does NOT override config.yaml (config takes
     priority in the gateway code), so we must fix the file directly.
+
+    任务 014 Bug G (v2026.05.04.9):新装的 hermes-agent default config.yaml
+    可能完全没有 platforms.api_server 块 → gateway 启动跳过 api_server →
+    端口 8642 没人监听 → webui 显示"未连接"。
+    本函数在缺失时主动追加 api_server 块,见陷阱 #46。
+
+    三种状态都要处理:
+    1. config.yaml 完全没 platforms 块 → 追加完整 platforms + api_server
+    2. 有 platforms 但没 api_server 子块 → 在 platforms: 之后插入 api_server
+    3. 有 api_server 但 port 不对 → 修 port (原有逻辑)
     #>
     $configFile = Join-Path $env:USERPROFILE '.hermes\config.yaml'
     if (-not (Test-Path $configFile)) { return }
@@ -1038,17 +1048,41 @@ function Repair-GatewayApiPort {
         # Must read/write as UTF-8 — PowerShell 5.1 Set-Content defaults to GBK
         # on Chinese Windows, which corrupts non-ASCII YAML and crashes the gateway.
         $content = [System.IO.File]::ReadAllText($configFile, [System.Text.Encoding]::UTF8)
-        # Match port: <number> under platforms.api_server.extra section
-        # Only fix if it's NOT already 8642
-        if ($content -match '(?m)(^\s+port:\s+)(\d+)' -and $Matches[2] -ne '8642') {
+        $modified = $false
+        $apiServerSubBlock = "  api_server:`n    extra:`n      port: 8642`n      host: 127.0.0.1`n    enabled: true`n    key: ""`"`n    cors_origins: ""*`"`n"
+        # 用 PowerShell 字符串拼接构造 YAML,避免 here-string 缩进困扰
+        $apiServerSubBlock = "  api_server:" + [Environment]::NewLine +
+                             "    extra:" + [Environment]::NewLine +
+                             "      port: 8642" + [Environment]::NewLine +
+                             "      host: 127.0.0.1" + [Environment]::NewLine +
+                             "    enabled: true" + [Environment]::NewLine +
+                             "    key: """"" + [Environment]::NewLine +
+                             "    cors_origins: ""*""" + [Environment]::NewLine
+
+        if ($content -notmatch '(?m)^platforms:') {
+            # 状态 1:整个 platforms 块缺失 → 追加 platforms + api_server
+            if (-not $content.EndsWith([Environment]::NewLine)) { $content += [Environment]::NewLine }
+            $content += "platforms:" + [Environment]::NewLine + $apiServerSubBlock
+            $modified = $true
+            Add-LogLine "已在 config.yaml 添加 platforms.api_server 块（WebUI 要求）"
+        } elseif ($content -notmatch '(?ms)^platforms:.*?^\s+api_server:') {
+            # 状态 2:platforms 块存在但缺 api_server → 紧跟 platforms: 后插入 api_server 子块
+            $content = $content -replace '(?m)^platforms:\s*\r?\n', ('platforms:' + [Environment]::NewLine + $apiServerSubBlock)
+            $modified = $true
+            Add-LogLine "已在 config.yaml 的 platforms 块添加 api_server 子块（WebUI 要求）"
+        } elseif ($content -match '(?m)(^\s+port:\s+)(\d+)' -and $Matches[2] -ne '8642') {
+            # 状态 3:已有 api_server 但 port 错 → 修 port
             $oldPort = $Matches[2]
             $content = $content -replace '(?m)(^\s+port:\s+)\d+', '${1}8642'
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($configFile, $content, $utf8NoBom)
+            $modified = $true
             Add-LogLine ("已修复 config.yaml 端口：{0} → 8642（WebUI 要求）" -f $oldPort)
         }
+        if ($modified) {
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($configFile, $content, $utf8NoBom)
+        }
     } catch {
-        Add-LogLine ("config.yaml 端口修复跳过：{0}" -f $_.Exception.Message)
+        Add-LogLine ("config.yaml 端口/api_server 修复跳过：{0}" -f $_.Exception.Message)
     }
 }
 

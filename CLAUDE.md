@@ -990,6 +990,38 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #46 全新装 hermes-agent default config.yaml 不含 platforms.api_server 块
+
+**触发条件**：用户卸载后重装(或全新用户首次装),hermes-agent 拉了新版本(commit 601e5f1d5),default config.yaml 只有 model/agent/terminal 等基础配置,**完全没有 platforms 块**。
+
+**坑的表现**:
+- launcher 流程:install hermes-agent → start gateway → gateway 启动时 config.yaml 没 api_server → gateway log 出现 `WARNING: No messaging platforms enabled` + `Gateway will continue running for cron job execution`(只跑 cron 不绑端口)
+- **8642 端口完全没人监听**(`Get-NetTCPConnection -LocalPort 8642` 返回空)
+- webui 浏览器打开后显示"未连接"
+- 30 秒后被 webui GatewayManager 的 timeout 杀死(陷阱 #22)然后 GatewayManager 自己重启 → **侥幸**这次 launcher 已经异步把 api_server 写进 config.yaml(不是 launcher 逻辑救场,是 webui 时序刚好对上)
+
+**Root cause**:
+- launcher 的 `Repair-GatewayApiPort` 旧逻辑用 regex `(?m)(^\s+port:\s+)(\d+)` **只 fix 已有 port 数字**
+- 如果 config.yaml 完全没 platforms.api_server 块,这个 regex 不匹配 → 函数静默返回不做事
+- gateway 启动时读 config.yaml,看不到 api_server,跳过启动 → 端口空缺
+
+**预防动作**:
+- `Repair-GatewayApiPort` 必须处理**三种状态**,缺啥补啥:
+  1. config.yaml 完全没 platforms 块 → 追加 `platforms:\n  api_server:\n  ...`
+  2. 有 platforms 块但没 api_server 子块 → 在 platforms: 之后插入 api_server 子块(跟 telegram/weixin 等子块并列)
+  3. 有 api_server 但 port 不是 8642 → 修 port (旧逻辑保留)
+- launcher 在 Start-HermesGateway / Restart-HermesGateway 之前**强制**调 Repair-GatewayApiPort,不能假设 default config.yaml "应该有" api_server
+- 上游 hermes-agent 升级版本后 default config.yaml 可能再变,launcher 应该用主动写入而非依赖 default
+
+**自检盲区**:
+- 工程师本地测试时 config.yaml 一直保留旧版本(已有 api_server),因此 Repair-GatewayApiPort 旧逻辑跑得通
+- 全新用户/卸载重装路径才暴露 — 仅在 install path **首次** Start-HermesGateway 那一瞬间踩
+- 单元测试覆盖不到"hermes-agent 上游升级换 default config.yaml 模板"这种场景
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。
