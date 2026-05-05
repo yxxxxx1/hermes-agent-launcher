@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.20'
+$script:LauncherVersion = 'Windows v2026.05.04.21'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -2941,15 +2941,14 @@ function Test-NetworkEnvironment {
 
 function Get-MirrorConfig {
     # 返回各下载源的镜像配置（写死优先级：阿里>清华>中科大/豆瓣，ghproxy>其他）
-    # 任务 014 Bug H (v2026.05.04.12):
-    # - 把 hermes.aisuper.win 自建镜像放在第 0 位（国内 Cloudflare 可达性 ~99%,远超社区镜像）
-    # - 加 ghfast.top / gh-proxy.com 等 2026 仍活跃的社区镜像,提升兜底覆盖率
-    # 见陷阱 #47。
+    # 任务 014 Bug O (v2026.05.04.21):撤掉自建源 hermes.aisuper.win/mirror
+    # 理由:它只解决"下载 install.ps1"一步,后续 git clone / PyPI / npm 仍走原网络,
+    # 整个流程稳定性没本质提升,且增加自建运维成本。
+    # 保留社区镜像作为 GitHub 不通时的兜底。
     [pscustomobject]@{
         # GitHub raw 文件镜像：用于下载 install.ps1
         # 格式：直接替换 raw.githubusercontent.com 或拼接代理前缀
         GitHubRaw = @(
-            'https://hermes.aisuper.win/mirror',           # 自建镜像（国内首选,启动器自己控制）
             'https://raw.githubusercontent.com',           # 官方（overseas 首选）
             'https://raw.gitmirror.com',                   # gitmirror
             'https://gh.api.99988866.xyz/https://raw.githubusercontent.com',  # 99988866 代理
@@ -3058,9 +3057,9 @@ function New-TempScriptFromUrl {
                 }
             }
         }
-        # 任务 014 Bug H (v2026.05.04.12): GitHubRaw[0] 现在是自建 hermes.aisuper.win,
-        # GitHubRaw[1] 是 raw.githubusercontent.com 官方。国内网络: 自建[0] → 社区[2..n] → 官方[1] 兜底
-        $orderedUrls = @($candidateUrls[0]) + @($candidateUrls[2..($candidateUrls.Count - 1)]) + @($candidateUrls[1])
+        # 任务 014 Bug O (v2026.05.04.21):撤掉自建源后,GitHubRaw[0] 是官方,[1..n] 是社区。
+        # 国内网络:从社区[1..n] 开始尝试,官方[0] 放最后兜底
+        $orderedUrls = @($candidateUrls[1..($candidateUrls.Count - 1)]) + @($candidateUrls[0])
     } else {
         # 海外网络：直接用官方 URL
         $orderedUrls = @($Url)
@@ -3908,18 +3907,11 @@ $defaults = Get-HermesDefaults
                                                 <TextBlock Text="官方源 · github.com" FontSize="12.5" FontWeight="Medium"
                                                            Foreground="{StaticResource TextPrimaryBrush}"/>
                                             </DockPanel>
-                                            <DockPanel Margin="0,0,0,5">
-                                                <TextBlock DockPanel.Dock="Right" Text="未连接"
-                                                           FontSize="11.5"
-                                                           Foreground="{StaticResource TextTertiaryBrush}"/>
-                                                <TextBlock Text="自建镜像 · hermes.aisuper.win" FontSize="12.5" FontWeight="Medium"
-                                                           Foreground="{StaticResource TextPrimaryBrush}"/>
-                                            </DockPanel>
                                             <DockPanel>
                                                 <TextBlock DockPanel.Dock="Right" Text="全部未连接"
                                                            FontSize="11.5"
                                                            Foreground="{StaticResource TextTertiaryBrush}"/>
-                                                <TextBlock Text="5 个社区镜像" FontSize="12.5" FontWeight="Medium"
+                                                <TextBlock Text="5 个国内镜像源" FontSize="12.5" FontWeight="Medium"
                                                            Foreground="{StaticResource TextPrimaryBrush}"/>
                                             </DockPanel>
                                         </StackPanel>
@@ -6278,13 +6270,12 @@ function Test-InstallPreflight {
             $warnings.Add(("安装脚本地址返回状态异常：{0}" -f $resp.StatusCode)) | Out-Null
         }
     } catch {
-        # 官方源不通 → 检测是否为国内网络（会用镜像源），不硬性阻塞
-        # 任务 014 Bug H (v2026.05.04.12):测全部镜像（之前 [1..2] 漏测后两个）
+        # 官方源不通 → 测社区镜像
+        # 任务 014 Bug O (v2026.05.04.21):撤掉自建源后,GitHubRaw[0] 是官方,[1..n] 是社区镜像
         $mirrorCfg = Get-MirrorConfig
         $mirrorReachable = $false
         $reachedMirror = $null
-        # 测全部除了 [1] 官方源以外的镜像([0] 是自建,[2..] 是社区镜像)
-        $mirrorsToProbe = @($mirrorCfg.GitHubRaw[0]) + @($mirrorCfg.GitHubRaw[2..($mirrorCfg.GitHubRaw.Count - 1)])
+        $mirrorsToProbe = $mirrorCfg.GitHubRaw[1..($mirrorCfg.GitHubRaw.Count - 1)]
         foreach ($mirrorBase in $mirrorsToProbe) {
             try {
                 if ($mirrorBase -match '/https?://') {
