@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.05.1'
+$script:LauncherVersion = 'Windows v2026.05.05.2'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -4742,6 +4742,9 @@ function Stop-LaunchAsync {
         try { $script:LaunchSuccessHideTimer.Stop() } catch { }
         $script:LaunchSuccessHideTimer = $null
     }
+    # 任务 015 Bug D (v2026.05.05.2):捕获最后阶段名,用于 webui_failed 上报
+    $lastPhase = $null
+    try { if ($script:LaunchState -and $script:LaunchState.Phase) { $lastPhase = [string]$script:LaunchState.Phase } } catch { }
     # 任务 012 P1-3：如果解压 Runspace 还在跑，安全释放（不等完成，不抛异常）
     if ($script:LaunchState) {
         try {
@@ -4763,7 +4766,35 @@ function Stop-LaunchAsync {
     Hide-LaunchProgressCard
     if ($ErrorMessage) {
         Add-ActionLog -Action '开始使用' -Result ('失败：' + $ErrorMessage) -Next '可改用命令行对话'
-        try { Send-Telemetry -EventName 'webui_failed' -FailureReason $ErrorMessage } catch { }
+        # 任务 015 Bug D (v2026.05.05.2):webui_failed 上报必须带:
+        #   - last_phase:状态机最后到哪个阶段(install / start-webui / wait-healthy 等)
+        #   - webui_stdout_tail:%TEMP%\hermes-webui-start.log 末尾(npm/node 输出)
+        #   - webui_stderr_tail:%TEMP%\hermes-webui-start-err.log 末尾(报错)
+        #   - gateway_log_tail:~/.hermes/logs/gateway.log 末尾(gateway 是否真活着)
+        # 之前 reason 只有"30 秒超时",看板看不出卡在哪一步。陷阱 #44。
+        $extraProps = @{}
+        if ($lastPhase) { $extraProps['last_phase'] = $lastPhase }
+        $readTailSafely = {
+            param([string]$Path, [int]$MaxBytes = 2000)
+            if (-not (Test-Path -LiteralPath $Path)) { return $null }
+            try {
+                $tail = Get-Content -LiteralPath $Path -Tail 30 -ErrorAction SilentlyContinue
+                if (-not $tail) { return $null }
+                $joined = ($tail -join "`n")
+                if ($joined.Length -gt $MaxBytes) { $joined = $joined.Substring($joined.Length - $MaxBytes) }
+                return $joined
+            } catch { return $null }
+        }
+        try {
+            $stdoutTail = & $readTailSafely (Join-Path $env:TEMP 'hermes-webui-start.log') 1500
+            if ($stdoutTail) { $extraProps['webui_stdout_tail'] = $stdoutTail }
+            $stderrTail = & $readTailSafely (Join-Path $env:TEMP 'hermes-webui-start-err.log') 1500
+            if ($stderrTail) { $extraProps['webui_stderr_tail'] = $stderrTail }
+            $gatewayLog = Join-Path (Join-Path $env:USERPROFILE '.hermes') 'logs\gateway.log'
+            $gatewayTail = & $readTailSafely $gatewayLog 1000
+            if ($gatewayTail) { $extraProps['gateway_log_tail'] = $gatewayTail }
+        } catch { }
+        try { Send-Telemetry -EventName 'webui_failed' -FailureReason $ErrorMessage -Properties $extraProps } catch { }
         $message = @(
             'hermes-web-ui 启动失败。'
             ''

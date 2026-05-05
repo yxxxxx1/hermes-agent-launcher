@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.05.1.zip`: versioned Windows download linked by `index.html` (任务 015 Bug A/B/C：A 修上游 install.ps1 patch 因 LF/CRLF 行尾不匹配静默失败导致 hermes.exe 装不上 + gateway 询问问句仍出现的根因；B 让安装 wrapper 用 Start-Transcript 把上游 stdout/stderr 镜像到 `%TEMP%\hermes-install-transcript.log`，silent_fail 上报时带尾 60 行，避免必须靠用户截图定位；C 复制反馈按钮加 3×100ms 退避重试，剪贴板被微信/RDP 占用时不再炸 dispatcher，失败给用户可见提示。)
+- `Hermes-Windows-Launcher-v2026.05.05.2.zip`: versioned Windows download linked by `index.html` (任务 015 Bug D：webui_failed 仪表化升级。30 秒超时这条 reason 之前看不出卡在哪一步;现在上报带 last_phase + `%TEMP%\hermes-webui-start.log` 末尾 + `%TEMP%\hermes-webui-start-err.log` 末尾 + ~/.hermes/logs/gateway.log 末尾，下次 webui 失败可以从看板直接定位是 npm 启动挂还是 health check 起不来。陷阱 #44。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
