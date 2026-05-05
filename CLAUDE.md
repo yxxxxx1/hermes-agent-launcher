@@ -1157,6 +1157,56 @@ $content = $mirrorHeader + $content   # ← 把 $env:PIP_INDEX_URL = ... 拼到 
 
 ---
 
+### #50 上游 install.ps1 silent-fail:`Out-Null` 吞错误 + native command try/catch 接不到 → exit 0 假装成功
+
+**触发条件**：上游 install.ps1 的 `Install-Dependencies` 函数:
+```powershell
+try {
+    & $UvCmd pip install -e ".[all]" 2>&1 | Out-Null    # ← 输出全吞
+} catch {
+    & $UvCmd pip install -e "." | Out-Null              # ← native command 失败不抛 .NET 异常,catch 永远不触发
+}
+Write-Success "Main package installed"   # ← 总是打印,即使 install 失败
+```
+
+**坑的表现**(陷阱 #49 修了之后中国测试者第三次踩):
+- 用户跑完独立 PowerShell 终端 → 终端 close → exit code = 0
+- launcher Monitor 看到 exit 0 走 success 分支 → `Refresh-Status`
+- 但 **`hermes.exe` 没生成**(install 实际失败,只是错误被吞了)
+- launcher 主界面卡在"3 正在安装",不切换到"已就绪"
+- 重启 launcher 也是同样状态(因为 hermes.exe 真的不存在,Refresh-Status 不可能切到 home mode)
+- **用户看到无解状态**:终端关了、launcher 不动、不知道是不是装好了
+
+**Root cause 链**:
+1. 上游 `2>&1 | Out-Null` 吞掉所有 uv pip install 错误
+2. PowerShell `&` 调 native command 失败时**不抛 .NET 异常**(默认 EAP=Continue 在子 scope),catch block 永远不触发
+3. `Write-Success "Main package installed"` 总是 print → 用户/launcher 都被骗
+4. install.ps1 自身 `try { Main } catch { ... }` 包了 Main,Main 内部如果 throw 才会进 catch。但 `Out-Null` 静默 silent fail 不抛,Main 走完正常退出 → exit code 0
+5. 国内裸网下 `uv pip install -e ".[all]"` 容易踩,因为 hermes-agent 的 `[all]` extras 可能在国内 PyPI 镜像缺包
+
+**预防动作**(双管齐下):
+1. **launcher 端兜底**:Monitor success branch 不能只信 exit code,**必须 verify hermes.exe 真的存在**
+   ```powershell
+   if ($exitCode -eq 0 -and (Test-Path $expectedHermesExe)) { 走 success }
+   elseif ($exitCode -eq 0 -and -not (Test-Path $expectedHermesExe)) { 走 silent-fail UI }
+   else { 走普通失败 UI }
+   ```
+2. **mirror env 加 fallback PyPI**:`UV_EXTRA_INDEX_URL = 'https://pypi.tuna.tsinghua.edu.cn/simple/'`(原来设为 `''` 把 fallback 清空了)。阿里源没的包可以从清华源拿
+
+**自检盲区**:
+- 工程师机器(海外网络)`uv pip install` 不会失败,根本不踩 silent-fail 路径
+- launcher 自身的 SelfTest 不调 install,看不到 install.ps1 行为
+- exit code 0 看起来"成功",没人想到去 verify 实际产物
+- 上游 install.ps1 是黑盒(我们 mirror 不改它),需要在 launcher 端兜底它的不可靠
+
+**长期方案**:
+- 看上游是否愿意修 silent-fail(给 install.ps1 提 issue / PR 把 `2>&1 | Out-Null` 改成显式判 `$LASTEXITCODE`)
+- 我们的 mirror copy 可以本地 patch install.ps1(类似上游本地补丁清单 P1-P3 那样),但要 sync 流程
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.15'
+$script:LauncherVersion = 'Windows v2026.05.04.16'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3180,7 +3180,7 @@ function Install-SystemPackages {
 # === 由 Hermes 启动器注入：国内镜像源配置 ===
 `$env:PIP_INDEX_URL = '$pypiMirror'
 `$env:UV_INDEX_URL = '$pypiMirror'
-`$env:UV_EXTRA_INDEX_URL = ''
+`$env:UV_EXTRA_INDEX_URL = 'https://pypi.tuna.tsinghua.edu.cn/simple/'
 `$env:NPM_CONFIG_REGISTRY = '$npmMirror'
 `$env:UV_DEFAULT_INDEX = '$pypiMirror'
 Write-Host '[Hermes 启动器] 已切换到国内镜像源，加速安装...' -ForegroundColor Cyan
@@ -5389,9 +5389,44 @@ function Start-ExternalInstallMonitor {
             $script:ExternalInstallProcess = $null
             Stop-ExternalInstallTimer
 
-            if ($exitCode -eq 0) {
+            # 任务 014 Bug L (v2026.05.04.16):上游 install.ps1 的 Install-Dependencies 用
+            # `uv pip install -e ".[all]" 2>&1 | Out-Null` 吞掉所有错误,且 try/catch 接不到
+            # native command 失败 → 即使 PyPI 装包失败,install.ps1 仍 exit 0 假装成功。
+            # 终端关闭 + exit 0,但 hermes.exe 没生成 → launcher 不刷新到 home mode,
+            # 用户看到卡在"3 正在安装"无解。
+            # 修复:exit 0 后再 verify hermes.exe 真的生成,没生成则当失败处理。见陷阱 #50。
+            $expectedHermesExe = Join-Path $defaults.InstallDir 'venv\Scripts\hermes.exe'
+            $hermesExeReallyExists = Test-Path -LiteralPath $expectedHermesExe
+            if ($exitCode -eq 0 -and $hermesExeReallyExists) {
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '安装终端已自动关闭，安装过程结束' -Next '启动器已自动刷新状态，请按推荐步骤继续'
                 try { Send-Telemetry -EventName 'hermes_install_completed' -Properties @{ exit_code = 0 } } catch { }
+            } elseif ($exitCode -eq 0 -and -not $hermesExeReallyExists) {
+                # exit 0 但 hermes.exe 没生成 → install.ps1 silent fail
+                Add-ActionLog -Action '安装 / 更新 Hermes' -Result '安装终端报告完成,但 hermes.exe 未生成' -Next '安装实际失败(很可能 PyPI 装包失败被上游脚本静默吞掉)。请重新安装或截图终端日志反馈给开发者'
+                try { Send-Telemetry -EventName 'hermes_install_failed' -FailureReason 'silent_fail_no_hermes_exe' -Properties @{ stage = 'external_terminal_silent_fail'; exit_code = 0 } } catch { }
+                $recentLog = @()
+                if ($controls.LogTextBox.Text) {
+                    $lines = $controls.LogTextBox.Text -split "`r?`n"
+                    $recentLog = @($lines | Where-Object { $_ -ne '' } | Select-Object -Last 10)
+                }
+                $silentFailSummary = @(
+                    "安装中断 · 退出码 0 但 hermes.exe 未生成 · 阶段:执行官方安装脚本"
+                    ''
+                    '可能的原因:'
+                    '  • 国内 PyPI 镜像缺少某些 hermes-agent 依赖包'
+                    '  • uv pip install 跑到一半失败,但官方脚本静默吞掉了错误(没暴露给启动器)'
+                    '  • 磁盘空间不足'
+                    ''
+                    '建议:点"重新开始"重试一次。多次失败请截图终端日志反馈。'
+                ) -join "`n"
+                $controls.InstallFailureSummaryText.Text = $silentFailSummary
+                $controls.InstallFailureSummaryText.Visibility = 'Visible'
+                try {
+                    $tail8 = @($recentLog | Select-Object -Last 8)
+                    if ($controls.InstallFailureLogPreviewText) { $controls.InstallFailureLogPreviewText.Text = ($tail8 -join "`n") }
+                    if ($controls.InstallFailureLogPreviewBorder) { $controls.InstallFailureLogPreviewBorder.Visibility = 'Visible' }
+                } catch { }
+                try { Set-InstallStepCardState -StepIndex 3 -State 'failed' } catch { }
             } else {
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result ("安装终端已结束，退出码：{0}" -f $exitCode) -Next '安装失败时终端通常会保留；如已关闭，请重新打开安装并查看终端报错'
                 try { Send-Telemetry -EventName 'hermes_install_failed' -FailureReason ('exit_code=' + $exitCode) -Properties @{ stage = 'external_terminal'; exit_code = [int]$exitCode } } catch { }
@@ -5429,7 +5464,8 @@ function Start-ExternalInstallMonitor {
             }
             Refresh-Status
             # 任务 012：失败时 Refresh-Status 会把 LogPreview 重新隐藏（默认行为），所以这里再设回来
-            if ($exitCode -ne 0) {
+            # 任务 014 Bug L (v2026.05.04.16):silent fail (exit 0 但 hermes.exe 没生成) 也走失败 UI
+            if ($exitCode -ne 0 -or -not $hermesExeReallyExists) {
                 try {
                     if ($controls.InstallFailureLogPreviewBorder) {
                         $controls.InstallFailureLogPreviewBorder.Visibility = 'Visible'

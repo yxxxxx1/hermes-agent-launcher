@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.15.zip`: versioned Windows download linked by `index.html` (任务 014 Bug K 紧急修复:陷阱 #48 byte[] 修了之后中国测试者再次踩——install.ps1 报 "InvalidLeftHandSide" parse 错误。Root cause:launcher 把镜像 env 注入头部时 `$content = $mirrorHeader + $content` 把 `$env:PIP_INDEX_URL = ...` 拼在 param() 块前,PowerShell 要求 param() 必须是脚本第一个非注释/空行语句。修复:用 regex 找 param() 块结束位置,在其后用 substring 拼接(避免 [regex]::Replace 把 `$env:` 当反向引用)。陷阱 #49。)
+- `Hermes-Windows-Launcher-v2026.05.04.16.zip`: versioned Windows download linked by `index.html` (任务 014 Bug L 修复:install.ps1 跑完终端关闭 + exit 0,但 hermes.exe 没生成 → launcher 卡在"3 正在安装"。Root cause:上游 `Install-Dependencies` 用 `2>&1 | Out-Null` 吞 uv pip install 错误,native command 失败也不抛 .NET 异常,catch 接不到 → silent fail 假装成功。修复:1) launcher Monitor 兜底 verify hermes.exe 真的存在,silent fail 时显示明确失败 UI;2) mirror env 加 UV_EXTRA_INDEX_URL 清华源 fallback,让阿里源没的包能从清华源拿。陷阱 #50。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
