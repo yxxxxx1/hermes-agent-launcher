@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.4.zip`: versioned Windows download linked by `index.html` (任务 014 Bug A.5 紧急修复:全文件 ErrorActionPreference='Stop' 让 uv pip install 写 stderr 时被 PowerShell 包成 NativeCommandError 抛异常,install 子流程秒进 catch 块永远装不上 python-telegram-bot 等渠道依赖。修复:Install-GatewayPlatformDeps 内部局部切 EAP='Continue',只看 $LASTEXITCODE。陷阱 #41。)
+- `Hermes-Windows-Launcher-v2026.05.04.5.zip`: versioned Windows download linked by `index.html` (任务 014 Bug B 紧急修复:Test-HermesWebUiHealth 用 Invoke-WebRequest -TimeoutSec 1 打 /health,但 Windows 上 .NET HttpClient 第一次连 IPv4 loopback 有 ~1.4 秒固定延迟(curl/浏览器没有),导致健康检查 100% 超时,启动后弹窗"hermes-web-ui 启动失败"——但 webui 实际完全正常。修复:改用 TCP 端口探测(TcpClient.ConnectAsync + 500ms),0-22ms 瞬间完成。陷阱 #42。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

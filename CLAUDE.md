@@ -866,6 +866,42 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #42 Windows IPv4 loopback 上 .NET Invoke-WebRequest / HttpClient 有 ~1.4 秒固定延迟,curl / 浏览器没有
+
+**触发条件**：PowerShell launcher 用 `Invoke-WebRequest http://127.0.0.1:port/...` 或 `HttpClient.GetAsync` 做 webui 健康检查,超时设短(本项目设 `-TimeoutSec 1`)
+
+**坑的表现**：
+- 健康检查 100% 超时(每次 ~1015ms 后报"操作已超时"),但 webui 实际完全健康(curl 瞬间 200,浏览器正常加载)
+- launcher 状态卡显示 `WebUiHealthy:false`,SelfTest JSON 同样 `Healthy:false`
+- 启动序列里"30 秒等 /health 通过"必超时 → throw → `Stop-LaunchAsync -ErrorMessage` → 弹窗"hermes-web-ui 启动失败,30 秒超时"
+- 用户:浏览器明明打开正常,launcher 为啥说没启动?
+
+**根本原因**:
+- Windows 上 .NET socket 层第一次连接 IPv4 loopback 有固定 ~1.4 秒开销(可能是 NLA / Windows Defender / proxy auto-detection 的某种组合,但实测 `UseProxy=false` 也降不下来)
+- 这个开销对 curl / 浏览器(走原生 Win32 socket)没有,只对 .NET 网络栈有
+- `-TimeoutSec 1` 阈值刚好低于这个固定开销 → 必超时
+
+**预防动作**：
+- launcher 内部健康检查用 TCP 端口探测,不要 HTTP GET:
+  ```powershell
+  $tcp = [System.Net.Sockets.TcpClient]::new()
+  try {
+      $task = $tcp.ConnectAsync($host, $port)
+      $portUp = $task.Wait(500) -and $tcp.Connected
+  } finally { $tcp.Close() }
+  ```
+- 端口探测 0-22ms 瞬间完成,语义"端口已绑"=用户浏览器能连,准确度对桌面 launcher 场景足够
+- 如果必须做 HTTP GET 验证 body(如版本号),超时**至少 3 秒**,且只在低频路径用(版本检测、关于页),绝不在 UI 状态轮询里
+
+**自检盲区**:
+- 这个 bug 在干净的开发机上**可能复现不出**(.NET socket 第一次连接的延迟跟 NLA / 防病毒 / 网络策略相关)
+- 工程师本地测试通过 ≠ 用户机器通过
+- SelfTest JSON 输出 `Healthy:false` 时已经有迹象,但容易被忽略当作"用户还没启动 webui"
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.4'
+$script:LauncherVersion = 'Windows v2026.05.04.5'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -648,21 +648,34 @@ function Install-HermesWebUi {
 }
 
 function Test-HermesWebUiHealth {
+    # 任务 014 Bug B (v2026.05.04.5):改用 TCP 端口探测代替 Invoke-WebRequest /health。
+    # 见陷阱 #42。Windows IPv4 loopback 上 .NET Invoke-WebRequest / HttpClient 第一次连接
+    # 固定 ~1.4 秒延迟(curl / 浏览器没有),launcher 用 -TimeoutSec 1 几乎必超时,导致:
+    #   - SelfTest 永远 WebUi.Healthy:false
+    #   - 启动后 30 秒等 /health 通过必超时 → 弹窗"hermes-web-ui 启动失败"
+    # 但 webui 实际完全正常(浏览器能加载,curl 瞬间 200)。
+    # TCP 端口探测 0-22ms 瞬间完成,语义"webui 已绑端口"=用户浏览器能连,准确度足够。
+    $url = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)"
+    $portUp = $false
+    $tcp = $null
     try {
-        $url = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)/health"
-        # 任务 012 P1-3：1s timeout — 本地 loopback 足够，减少 UI 线程阻塞时间
-        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+        $tcp = [System.Net.Sockets.TcpClient]::new()
+        $task = $tcp.ConnectAsync($script:HermesWebUiHost, $script:HermesWebUiPort)
+        if ($task.Wait(500) -and $tcp.Connected) { $portUp = $true }
+    } catch { } finally {
+        if ($tcp) { try { $tcp.Close() } catch { } }
+    }
+    if ($portUp) {
         return [pscustomobject]@{
             Healthy = $true
-            Url     = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)"
+            Url     = $url
             Message = 'hermes-web-ui 正在运行。'
         }
-    } catch {
-        return [pscustomobject]@{
-            Healthy = $false
-            Url     = "http://$($script:HermesWebUiHost):$($script:HermesWebUiPort)"
-            Message = 'hermes-web-ui 未响应。'
-        }
+    }
+    return [pscustomobject]@{
+        Healthy = $false
+        Url     = $url
+        Message = 'hermes-web-ui 未响应。'
     }
 }
 
