@@ -927,6 +927,38 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #44 launcher 不在跑时改 .env,gateway 永不重启加载新配置
+
+**触发条件**：
+1. 用户首次启动 launcher → 走 install path → gateway 启动(无微信/钉钉等)→ launcher 关闭
+2. 用户再次开 launcher → fast path(webui 还活着)→ 不重启 gateway → 直接打开浏览器
+3. 用户在 webui 里配新平台(微信/钉钉/Slack 等)→ webui 写 .env mtime 更新
+4. 但此时 launcher 已退出,`.env` watcher 也没了(它在 launcher 进程内)
+5. gateway 一直跑着旧的 in-memory 配置,**永远收不到新平台变化**
+
+**坑的表现**：
+- webui 显示"已配置 [平台]",但发消息无回应
+- gateway.log 启动行 "Gateway running with N platform(s)" 数字不变(旧值)
+- gateway 日志没有"Connecting to [新平台]..."的痕迹
+- 用户重启 launcher 也没用(fast path 不会重启 gateway——它只在`gateway 死了`或`新装了 Python 包`时重启)
+- 微信/钉钉/Slack 这些**默认依赖**(aiohttp/cryptography 已装)的平台**最容易踩**——因为 Install-GatewayPlatformDeps 不需要装新包就触发不到 depsInstalled
+
+**预防动作**：
+- fast path 必须加 `.env mtime > gateway.lock mtime` 的 stale check(`Test-GatewayConfigStale`)→ 触发 Restart
+- gateway.lock 是 gateway 启动瞬间创建的,mtime 等于启动时间;.env 任何时候被改 mtime 都会更新 → 时间对比一目了然
+- 不要假设"用户都从 webui 配置后立刻没关 launcher"——真实场景是用户经常关掉 launcher 后再去配置(认为 launcher 只是启动器,关了不影响)
+- launcher 长期任务**不能**只靠"watcher 在跑时才生效",必须有"重新打开 launcher 时回看 .env 状态"的兜底
+- 同样的逻辑,未来加任何"在线配置"功能(改 config.yaml / token)都该有 stale check
+
+**自检盲区**：
+- AI 工程师测 Install-GatewayPlatformDeps 时,只测了"装新 Python 包→ depsInstalled=true→ Restart"路径
+- 微信用 aiohttp/cryptography 默认就有,**不需要装新包**——Install-GatewayPlatformDeps 不会标记 depsInstalled=true → fast path 不重启
+- Telegram 之所以"凑巧"工作,是因为 python-telegram-bot 需要装新包,装包后会触发 Restart 路径
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

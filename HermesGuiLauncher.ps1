@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.6'
+$script:LauncherVersion = 'Windows v2026.05.04.7'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -1657,6 +1657,34 @@ function Get-EnvFileSignature {
         $info = Get-Item -LiteralPath $Path -ErrorAction Stop
         return ('{0}|{1}' -f $info.LastWriteTimeUtc.Ticks, $info.Length)
     } catch { return 'error' }
+}
+
+function Test-GatewayConfigStale {
+    <#
+    .SYNOPSIS
+    任务 014 Bug D (v2026.05.04.7):检测当前运行的 gateway 是否在用过期 .env。
+    返回 $true = .env 比 gateway.lock 新,gateway 加载的是旧配置,需要 restart。
+    返回 $false = .env 没变,或 lock 不存在(gateway 没在跑)。
+
+    场景:用户在 webui 里配了新平台(微信/钉钉/飞书等)→ webui 写 .env →
+          mtime 更新。如果 launcher 当时不在跑(没人 watch .env),gateway
+          也不会自动重启,继续用启动时的旧 .env → "Gateway running with N platform(s)"
+          少一个 → webui 显示"已配置"但 gateway 收不到消息。
+
+    见陷阱 #44。
+    #>
+    try {
+        $envFile = Join-Path $env:USERPROFILE '.hermes\.env'
+        $lockFile = Join-Path $env:USERPROFILE '.hermes\gateway.lock'
+        if (-not (Test-Path -LiteralPath $envFile)) { return $false }
+        if (-not (Test-Path -LiteralPath $lockFile)) { return $false }  # gateway 没在跑,不算 stale
+        $envInfo = Get-Item -LiteralPath $envFile -ErrorAction Stop
+        $lockInfo = Get-Item -LiteralPath $lockFile -ErrorAction Stop
+        # .env mtime > lock mtime → gateway 是用旧 .env 启动的
+        return ($envInfo.LastWriteTimeUtc -gt $lockInfo.LastWriteTimeUtc)
+    } catch {
+        return $false
+    }
 }
 
 function Start-GatewayEnvWatcher {
@@ -4349,6 +4377,14 @@ function Start-LaunchAsync {
             $gatewayStartedOrRestarted = $true
         } elseif ($depsInstalled) {
             Add-LogLine "检测到新安装的渠道依赖，正在重启 Gateway..."
+            Restart-HermesGateway
+            $gatewayStartedOrRestarted = $true
+        } elseif (Test-GatewayConfigStale) {
+            # 任务 014 Bug D (v2026.05.04.7):.env 比 gateway 启动还新 → gateway 用的是旧配置。
+            # 场景:用户上次启动 launcher 后,在 webui 里配了新平台(如微信),launcher 退出后
+            # .env watcher 也跟着没了,gateway 一直跑着旧配置。这次重新打开 launcher 必须 restart。
+            # 见陷阱 #44。
+            Add-LogLine ".env 比 Gateway 启动时间新，重启 Gateway 加载新渠道配置..."
             Restart-HermesGateway
             $gatewayStartedOrRestarted = $true
         }

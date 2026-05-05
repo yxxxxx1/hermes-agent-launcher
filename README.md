@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.6.zip`: versioned Windows download linked by `index.html` (任务 014 Bug C 修复:LaunchProgressCard 成功路径漏调 Hide,启动成功后进度卡卡屏不消失。被陷阱 #42 健康检查永远 false 掩盖了——一旦修了 #42 就暴露。修复:wait-healthy 健康通过后切到 success 态(7 段全绿 ✓ + URL bar + 暖橙→墨绿 spinner 切✓),~2 秒倒计时后自动 Hide-LaunchProgressCard 回主页。陷阱 #43。)
+- `Hermes-Windows-Launcher-v2026.05.04.7.zip`: versioned Windows download linked by `index.html` (任务 014 Bug D 修复:用户在 webui 配新平台(微信/钉钉等)→ webui 写 .env → mtime 更新,但 launcher 当时不在跑(没人 watch),gateway 一直跑着旧 .env,新平台永远不上线。修复:fast path 加 Test-GatewayConfigStale 检测——.env mtime > gateway.lock mtime 即触发 Restart。陷阱 #44。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
