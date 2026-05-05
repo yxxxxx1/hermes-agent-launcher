@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.06.1.zip`: versioned Windows download linked by `index.html` (任务 015 Bug F：A) 漏斗末位事件 first_conversation 永远 0 因为 launcher 这层埋不了,改成 webui_session_kept_5min 代理指标(webui_started 后 5 分钟 launcher 还活着即算)。B) 增加用户地区分布,完全靠 Worker 边缘 `request.cf.country/region`,launcher 一行不动;events 表加 server_country/server_region 两列,dashboard 加"用户地区分布"区块。C) 关于对话框「我们收集」列加"基于 IP 推断的国家/省份",index.html 主页隐私文案精简(行业惯例放关于内)。陷阱 #47。)
+- `Hermes-Windows-Launcher-v2026.05.06.2.zip`: versioned Windows download linked by `index.html` (任务 015 Bug G：项目开源准备。关于对话框 Hero 之后加「开源项目 · MIT 协议」卡片,显示 GitHub 仓库地址 `https://github.com/yxxxxx1/hermes-agent-launcher`,点击 Hyperlink 调 Open-BrowserUrlSafe 打开浏览器。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

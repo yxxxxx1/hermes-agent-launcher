@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.06.1'
+$script:LauncherVersion = 'Windows v2026.05.06.2'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -6797,6 +6797,31 @@ function Show-AboutDialog {
         <!-- 匿名数据上报卡 -->
         <ScrollViewer Grid.Row="1" Margin="32,0,32,0" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <!-- 任务 015 Bug G (v2026.05.06.2):开源项目卡。
+                     PM 决定开源后,关于对话框第一眼是 GitHub 项目地址。 -->
+                <Border Margin="0,0,0,12" Padding="16,14" CornerRadius="14"
+                        Background="{StaticResource SurfacePrimaryBrush}"
+                        BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
+                    <DockPanel LastChildFill="True">
+                        <Border DockPanel.Dock="Left" Width="28" Height="28" CornerRadius="14"
+                                Background="{StaticResource SurfaceSecondaryBrush}" Margin="0,0,12,0">
+                            <TextBlock Text="✦" FontSize="14" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       Text="开源项目 · MIT 协议"/>
+                            <TextBlock x:Name="AboutGitHubLink" Margin="0,3,0,0" FontSize="12"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Cursor="Hand"
+                                       Text="https://github.com/yxxxxx1/hermes-agent-launcher"
+                                       TextDecorations="Underline"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
                 <Border Padding="20,18" CornerRadius="14"
                         Background="{StaticResource SurfacePrimaryBrush}"
                         BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1">
@@ -6923,10 +6948,16 @@ function Show-AboutDialog {
         $aboutWindow.Owner = $window
 
         $aboutControls = @{}
-        foreach ($name in @('AboutVersionText','AboutTelemetryToggle','AboutTelemetryStatus','AboutCloseButton')) {
+        foreach ($name in @('AboutVersionText','AboutTelemetryToggle','AboutTelemetryStatus','AboutCloseButton','AboutGitHubLink')) {
             $aboutControls[$name] = $aboutWindow.FindName($name)
         }
         $aboutControls.AboutVersionText.Text = ("Windows · {0}" -f $script:LauncherVersion)
+        # 任务 015 Bug G (v2026.05.06.2):GitHub 链接点击 → Open-BrowserUrlSafe
+        if ($aboutControls.AboutGitHubLink) {
+            $aboutControls.AboutGitHubLink.Add_MouseLeftButtonUp({
+                try { Open-BrowserUrlSafe -Url 'https://github.com/yxxxxx1/hermes-agent-launcher' } catch { }
+            })
+        }
         $aboutControls.AboutTelemetryToggle.IsChecked = (Get-TelemetryEnabled)
         # 状态文字初始值（暖色调适配，任务 012）
         $successBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#4F8F7A')
