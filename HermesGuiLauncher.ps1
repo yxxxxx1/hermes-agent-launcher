@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.12'
+$script:LauncherVersion = 'Windows v2026.05.04.13'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -5524,6 +5524,18 @@ function New-ExternalInstallWrapperScript {
 `$env:PYTHONIOENCODING = 'utf-8'
 `$env:PYTHONUTF8 = '1'
 chcp 65001 > `$null
+# 任务 014 Bug I (v2026.05.04.13):wrapper 启动时立即打印提示,让用户知道终端是活的。
+# 之前空白终端让用户以为卡死,实际可能 install.ps1 在装 uv (国内 astral.sh 慢)阶段,
+# 或在 git clone hermes-agent (国内 GitHub 不通)阶段卡几十秒没回显。
+Write-Host ''
+Write-Host '====================================================' -ForegroundColor Cyan
+Write-Host '  Hermes 启动器 - 安装终端' -ForegroundColor Cyan
+Write-Host '====================================================' -ForegroundColor Cyan
+Write-Host ''
+Write-Host '[启动器] 正在准备 Hermes 安装环境...' -ForegroundColor Yellow
+Write-Host '[启动器] 接下来会调用官方安装脚本(预计 1-3 分钟,看网络)' -ForegroundColor Yellow
+Write-Host '[启动器] 国内网络下,装 uv / git clone 阶段可能停顿几十秒,不要关闭' -ForegroundColor Yellow
+Write-Host ''
 `$installArgs = @($argLiteral)
 `$code = 0
 try {
@@ -6935,7 +6947,8 @@ function Refresh-Status {
             # 提示卡
             $controls.InstallStepTipBorder.Visibility = 'Visible'
             $controls.InstallStepTipText.Text = '另一个黑色窗口是官方安装终端，在那里下载和安装 Hermes。最小化它没问题，但请不要关闭。'
-            Set-InstallActionButtons -PrimaryActionId 'refresh' -PrimaryLabel '安装进行中' -PrimaryEnabled $false -SecondaryActionId 'open-docs' -SecondaryLabel '查看官方文档' -SecondaryEnabled $true -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
+            # 任务 014 Bug I (v2026.05.04.13):删"查看官方文档"按钮(无效入口,链接是 placeholder)
+            Set-InstallActionButtons -PrimaryActionId 'refresh' -PrimaryLabel '安装进行中' -PrimaryEnabled $false -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
         } elseif (-not $script:InstallPreflightConfirmed -or -not $preflight.CanInstall) {
             # 任务 012：状态 1 - 环境检测
             $controls.InstallTaskStepTagNum.Text = '1'
@@ -6982,11 +6995,15 @@ function Refresh-Status {
                     $blockingText += "`n`n建议：点击下方更改安装位置按钮，恢复默认路径后重新检测。"
                 }
                 $controls.InstallFailureSummaryText.Text = $blockingText
-                $primaryAction = if (-not $preflight.HasGit) { 'open-git-download' } elseif ($hasDirBlocking) { 'change-location' } else { 'open-docs' }
-                $primaryLabel = if (-not $preflight.HasGit) { '打开 Git 下载页' } elseif ($hasDirBlocking) { '更改安装位置' } else { '查看解决说明' }
-                $secondaryAction = if (-not $preflight.HasGit) { 'install-git' } else { 'open-docs' }
-                $secondaryLabel = if (-not $preflight.HasGit) { '自动安装 Git' } else { '查看官方文档' }
-                $secondaryEnabled = if (-not $preflight.HasGit) { $preflight.HasWinget } else { $true }
+                # 任务 014 Bug I (v2026.05.04.13):删"查看官方文档"和"查看解决说明"(URL 是 placeholder,无效入口)
+                # 没 Git → 主"打开 Git 下载页" + 次"自动安装 Git"
+                # 目录不可写 → 主"更改安装位置",次隐藏
+                # 网络/其他阻塞 → 主"重新检测",次隐藏(因为没具体可操作步骤,Tertiary 也是重新检测)
+                $primaryAction = if (-not $preflight.HasGit) { 'open-git-download' } elseif ($hasDirBlocking) { 'change-location' } else { 'refresh' }
+                $primaryLabel = if (-not $preflight.HasGit) { '打开 Git 下载页' } elseif ($hasDirBlocking) { '更改安装位置' } else { '重新检测' }
+                $secondaryAction = if (-not $preflight.HasGit) { 'install-git' } else { '' }
+                $secondaryLabel = if (-not $preflight.HasGit) { '自动安装 Git' } else { '' }
+                $secondaryEnabled = if (-not $preflight.HasGit) { $preflight.HasWinget } else { $false }
                 Set-InstallActionButtons -PrimaryActionId $primaryAction -PrimaryLabel $primaryLabel -PrimaryEnabled $true -SecondaryActionId $secondaryAction -SecondaryLabel $secondaryLabel -SecondaryEnabled $secondaryEnabled -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
             }
         } elseif (-not $script:InstallLocationConfirmed) {
