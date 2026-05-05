@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.24'
+$script:LauncherVersion = 'Windows v2026.05.05.1'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -2354,6 +2354,25 @@ function Set-ClipboardTextSafe {
     [System.Windows.Forms.Clipboard]::SetText($Text)
 }
 
+# 任务 015 Bug C (v2026.05.05.1):Windows 剪贴板偶发被其他进程独占
+# (CLIPBRD_E_CANT_OPEN HRESULT 0x800401D0,常见于 RDP / 微信 / 输入法 / 截图工具)。
+# WPF SetText 抛异常上抛到 dispatcher → unexpected_error。
+# 改成 3 次 100ms 退避重试,最终成功返回 $true,失败返回 $false。
+# 调用方根据返回值决定 UI 反馈("已复制" vs "请稍后再试")。陷阱 #43。
+function Copy-ToClipboardWithRetry {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    for ($i = 0; $i -lt 3; $i++) {
+        try {
+            [System.Windows.Clipboard]::SetText($Text)
+            return $true
+        } catch {
+            if ($i -lt 2) { Start-Sleep -Milliseconds 100 }
+        }
+    }
+    return $false
+}
+
 function ConvertTo-PlainMap {
     param($InputObject)
 
@@ -3087,6 +3106,12 @@ function New-TempScriptFromUrl {
     if (-not $content) {
         throw "已尝试所有镜像源，请检查网络连接。"
     }
+
+    # 任务 015 Bug A (v2026.05.05.1)：上游 install.ps1 在 GitHub raw 是 LF 行尾,
+    # 而本启动器文件是 CRLF,here-string $rgOriginal / $gatewayPromptOriginal 也是 CRLF。
+    # $content.Contains() 按字节严格比对,行尾不一致 patch 全部静默失败,
+    # 用户看到原版上游交互问句 + 上游 ripgrep 容错路径未触发。见陷阱 #41。
+    $content = $content -replace "(?<!`r)`n", "`r`n"
 
     $rgOriginal = @'
     Write-Info "Checking ripgrep (fast file search)..."
@@ -5482,7 +5507,26 @@ function Start-ExternalInstallMonitor {
             } elseif ($exitCode -eq 0 -and -not $hermesExeReallyExists) {
                 # exit 0 但 hermes.exe 没生成 → install.ps1 silent fail
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result '安装终端报告完成,但 hermes.exe 未生成' -Next '安装实际失败(很可能 PyPI 装包失败被上游脚本静默吞掉)。请重新安装或截图终端日志反馈给开发者'
-                try { Send-Telemetry -EventName 'hermes_install_failed' -FailureReason 'silent_fail_no_hermes_exe' -Properties @{ stage = 'external_terminal_silent_fail'; exit_code = 0 } } catch { }
+                # 任务 015 Bug B (v2026.05.05.1):读 wrapper 的 transcript 截尾 60 行上报,
+                # 这样不用用户截图就能定位 install.ps1 真正挂在哪一步。陷阱 #42。
+                $transcriptTail = ''
+                try {
+                    $transcriptPath = Join-Path $env:TEMP 'hermes-install-transcript.log'
+                    if (Test-Path -LiteralPath $transcriptPath) {
+                        $rawLines = Get-Content -LiteralPath $transcriptPath -Tail 60 -ErrorAction SilentlyContinue
+                        if ($rawLines) {
+                            # 截到 3500 字节以内,避免 properties 字段过大被 D1 拒
+                            $joined = ($rawLines -join "`n")
+                            if ($joined.Length -gt 3500) { $joined = $joined.Substring($joined.Length - 3500) }
+                            $transcriptTail = $joined
+                        }
+                    }
+                } catch { }
+                try {
+                    $silentProps = @{ stage = 'external_terminal_silent_fail'; exit_code = 0 }
+                    if ($transcriptTail) { $silentProps['last_lines'] = $transcriptTail }
+                    Send-Telemetry -EventName 'hermes_install_failed' -FailureReason 'silent_fail_no_hermes_exe' -Properties $silentProps
+                } catch { }
                 $recentLog = @()
                 if ($controls.LogTextBox.Text) {
                     $lines = $controls.LogTextBox.Text -split "`r?`n"
@@ -5508,7 +5552,24 @@ function Start-ExternalInstallMonitor {
                 try { Set-InstallStepCardState -StepIndex 3 -State 'failed' } catch { }
             } else {
                 Add-ActionLog -Action '安装 / 更新 Hermes' -Result ("安装终端已结束，退出码：{0}" -f $exitCode) -Next '安装失败时终端通常会保留；如已关闭，请重新打开安装并查看终端报错'
-                try { Send-Telemetry -EventName 'hermes_install_failed' -FailureReason ('exit_code=' + $exitCode) -Properties @{ stage = 'external_terminal'; exit_code = [int]$exitCode } } catch { }
+                # 任务 015 Bug B (v2026.05.05.1):非零 exit_code 失败也带上 transcript 尾 60 行
+                $transcriptTail2 = ''
+                try {
+                    $transcriptPath = Join-Path $env:TEMP 'hermes-install-transcript.log'
+                    if (Test-Path -LiteralPath $transcriptPath) {
+                        $rawLines = Get-Content -LiteralPath $transcriptPath -Tail 60 -ErrorAction SilentlyContinue
+                        if ($rawLines) {
+                            $joined = ($rawLines -join "`n")
+                            if ($joined.Length -gt 3500) { $joined = $joined.Substring($joined.Length - 3500) }
+                            $transcriptTail2 = $joined
+                        }
+                    }
+                } catch { }
+                try {
+                    $failProps = @{ stage = 'external_terminal'; exit_code = [int]$exitCode }
+                    if ($transcriptTail2) { $failProps['last_lines'] = $transcriptTail2 }
+                    Send-Telemetry -EventName 'hermes_install_failed' -FailureReason ('exit_code=' + $exitCode) -Properties $failProps
+                } catch { }
                 $recentLog = @()
                 if ($controls.LogTextBox.Text) {
                     $lines = $controls.LogTextBox.Text -split "`r?`n"
@@ -5678,6 +5739,12 @@ Write-Host '[启动器] 国内网络下,装 uv / git clone 阶段可能停顿几
 Write-Host ''
 `$installArgs = @($argLiteral)
 `$code = 0
+# 任务 015 Bug B (v2026.05.05.1):用 Start-Transcript 把上游 install.ps1 的 stdout/stderr
+# 同时镜像到日志文件,silent_fail 时启动器读最后几行上报到 telemetry,
+# 这样不用让用户截图也能知道上游脚本到底挂在哪一步。陷阱 #42。
+`$transcriptPath = Join-Path `$env:TEMP 'hermes-install-transcript.log'
+`$transcriptOk = `$false
+try { Start-Transcript -Path `$transcriptPath -Force | Out-Null; `$transcriptOk = `$true } catch { }
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$InstallScriptPath' @installArgs
     `$code = `$LASTEXITCODE
@@ -5686,6 +5753,7 @@ try {
     Write-Host (`$_.Exception.Message) -ForegroundColor Red
     `$code = 1
 }
+if (`$transcriptOk) { try { Stop-Transcript | Out-Null } catch { } }
 if (`$code -ne 0) {
     Write-Host ''
     Write-Host ('安装过程出错，退出码: ' + `$code) -ForegroundColor Red
@@ -7637,17 +7705,23 @@ function Invoke-AppAction {
 
 $controls.ClearLogButton.Add_Click({ $controls.LogTextBox.Clear() })
 $controls.CopyFeedbackButton.Add_Click({
-    [System.Windows.Clipboard]::SetText((Get-InstallFeedbackText))
-    Add-ActionLog -Action '复制反馈信息' -Result '已复制当前状态、安装检测结果和最近日志' -Next '直接发给开发者即可'
+    # 任务 015 Bug C (v2026.05.05.1):走 retry helper,失败给用户可见提示
+    if (Copy-ToClipboardWithRetry -Text (Get-InstallFeedbackText)) {
+        Add-ActionLog -Action '复制反馈信息' -Result '已复制当前状态、安装检测结果和最近日志' -Next '直接发给开发者即可'
+    } else {
+        Add-ActionLog -Action '复制反馈信息' -Result '剪贴板被其他程序占用，复制失败' -Next '关闭微信/RDP/截图工具后再试，或手动选中日志右键复制'
+    }
 })
 # 任务 014 Bug R (v2026.05.04.24):主区域失败 LogPreview 的"复制反馈信息"按钮
 # 简化后唯一的复制入口,直接调 Get-InstallFeedbackText 拿完整反馈(版本+状态+完整日志)
+# 任务 015 Bug C (v2026.05.05.1):走 retry helper,失败有用户可见提示
 if ($controls.InstallFailureLogCopyButton) {
     $controls.InstallFailureLogCopyButton.Add_Click({
-        try {
-            [System.Windows.Clipboard]::SetText((Get-InstallFeedbackText))
+        if (Copy-ToClipboardWithRetry -Text (Get-InstallFeedbackText)) {
             Add-ActionLog -Action '复制反馈信息' -Result '已复制当前状态、安装检测结果和最近日志' -Next '直接发给开发者即可'
-        } catch { }
+        } else {
+            Add-ActionLog -Action '复制反馈信息' -Result '剪贴板被其他程序占用，复制失败' -Next '关闭微信/RDP/截图工具后再试，或手动选中日志右键复制'
+        }
     })
 }
 # 任务 012：启动 WebUI 进度卡的"取消并返回"按钮

@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.24.zip`: versioned Windows download linked by `index.html` (任务 014 Bug R:install mode 显示简化。原来主区域有 LogPreview + 底部又有完整 LogTextBox 黑框,信息冗余。修复:底部 LogSectionBorder 在 install mode 也始终隐藏(LogTextBox 仍存在用于 Get-InstallFeedbackText 读取),失败状态 LogPreview 上的"复制错误"按钮升级为"复制反馈信息"(复用同款逻辑,复制完整反馈含日志/版本/状态)。设计稿见 mockup 12 / 13。)
+- `Hermes-Windows-Launcher-v2026.05.05.1.zip`: versioned Windows download linked by `index.html` (任务 015 Bug A/B/C：A 修上游 install.ps1 patch 因 LF/CRLF 行尾不匹配静默失败导致 hermes.exe 装不上 + gateway 询问问句仍出现的根因；B 让安装 wrapper 用 Start-Transcript 把上游 stdout/stderr 镜像到 `%TEMP%\hermes-install-transcript.log`，silent_fail 上报时带尾 60 行，避免必须靠用户截图定位；C 复制反馈按钮加 3×100ms 退避重试，剪贴板被微信/RDP 占用时不再炸 dispatcher，失败给用户可见提示。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
