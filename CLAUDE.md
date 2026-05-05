@@ -1057,6 +1057,56 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #48 Cloudflare Pages 给 .ps1 文件返回 octet-stream → Invoke-WebRequest $resp.Content 是 byte[] 而非 string,写出变 hex dump
+
+**触发条件**：把 `.ps1` 文件镜像到 Cloudflare Pages,launcher 用 `Invoke-WebRequest -UseBasicParsing` 拉它然后写本地文件。
+
+**坑的表现**(陷阱 #47 自建镜像方案上线后立即踩):
+- 中国测试者真机报错:
+  ```
+  At C:\Users\YG\AppData\Local\Temp\hermes-install-XXX.ps1:9 char:4
+  + 35 32 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 61 ...
+  +    ~~
+  Unexpected token '32' in expression or statement.
+  ```
+- 文件内容变成空格分隔的十进制数字串(每个数字代表一个 byte 的十进制 ASCII)
+- `35 32 61 61 ...` 解码 = `# === ===...`(install.ps1 头部的 ASCII art)
+
+**Root cause 链**:
+1. Cloudflare Pages 静态文件 Content-Type 自动推断:**`.ps1` 文件返回 `application/octet-stream`**(因为 Cloudflare 不识别 .ps1 是脚本)
+2. PowerShell `Invoke-WebRequest -UseBasicParsing` 拿到 octet-stream Content-Type,把 `$resp.Content` **解析为 byte[]** 而不是 string
+3. byte[] 通过隐式 ToString() / 写文件时,变成 `[byte 1] [byte 2] ...`(空格分隔的十进制数字串)
+4. 写到 .ps1 文件,powershell parse 看到 "35 32 61..." → "Unexpected token '32'" parse error
+5. install.ps1 完全没机会跑,报"安装过程出错,退出码 1"
+
+**之前为啥没踩**:GitHub raw / 社区镜像返回 `Content-Type: text/plain`,Invoke-WebRequest 把 Content 当 string 处理。**自建镜像引入了新 Content-Type 行为**。
+
+**预防动作**(双重保险):
+1. **代码端**:`Invoke-WebRequest` 拿到 `$resp.Content` 时 type-check,byte[] 显式 `[System.Text.Encoding]::UTF8.GetString()` 解码:
+   ```powershell
+   if ($resp.Content -is [byte[]]) {
+       return [System.Text.Encoding]::UTF8.GetString($resp.Content)
+   }
+   return $resp.Content
+   ```
+2. **服务端**:Cloudflare Pages 加 `_headers` 文件覆盖 .ps1 路径的 Content-Type:
+   ```
+   /mirror/*.ps1
+     Content-Type: text/plain; charset=utf-8
+   ```
+
+**自检盲区**:
+- 工程师本地手动 curl 测 mirror URL 看到 200 + 内容正确,以为镜像没问题
+- 但**没用 `Invoke-WebRequest` 模拟 launcher 的真实下载路径**测试
+- curl 默认显示原始 byte stream,看不出 .NET HTTP client 会怎么解析 Content-Type
+- 上线 mirror 后**没让 PM 端到端跑一次**就发版,直接踩到中国用户
+
+**类似踩过的镜像/代理 Content-Type 坑**:任何镜像方案(GitHub raw → 自建 / GitHub raw → S3 / GitHub raw → CDN),都要 verify Content-Type 跟原源一致,否则 client 解析行为可能变。
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

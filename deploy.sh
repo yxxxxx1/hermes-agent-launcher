@@ -64,6 +64,7 @@ cp HermesGuiLauncher.ps1 "$DEPLOY_DIR/"
 cp HermesMacGuiLauncher.command "$DEPLOY_DIR/"
 cp Start-HermesGuiLauncher.cmd "$DEPLOY_DIR/"
 cp _redirects "$DEPLOY_DIR/" 2>/dev/null || true
+cp _headers "$DEPLOY_DIR/" 2>/dev/null || true
 
 # Copy downloads directory
 mkdir -p "$DEPLOY_DIR/downloads"

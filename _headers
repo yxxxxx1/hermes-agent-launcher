@@ -1,0 +1,9 @@
+# Cloudflare Pages headers config
+# https://developers.cloudflare.com/pages/configuration/headers/
+
+# 任务 014 Bug J (v2026.05.04.14): 让 mirror/*.ps1 返回 text/plain 而非 octet-stream,
+# 否则 launcher 用 Invoke-WebRequest 拉到的 $resp.Content 是 byte[],写出来变 hex dump。
+# 见陷阱 #48。
+/mirror/*.ps1
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=300

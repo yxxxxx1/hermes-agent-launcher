@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.13'
+$script:LauncherVersion = 'Windows v2026.05.04.14'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3072,6 +3072,15 @@ function New-TempScriptFromUrl {
         $resp = Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -TimeoutSec 30
         if (-not $resp.Content) {
             throw "未能从 $downloadUrl 下载到安装脚本内容。"
+        }
+        # 任务 014 Bug J (v2026.05.04.14):自建镜像 hermes.aisuper.win 的 .ps1 文件
+        # Cloudflare Pages 默认 Content-Type: application/octet-stream → Invoke-WebRequest
+        # 把 $resp.Content 解析为 byte[],ToString 后变成空格分隔的 decimal 数字串
+        # ("35 32 61 61 ...") → 子 powershell parse 报 "Unexpected token '32'" 失败。
+        # 修复:byte[] 显式 UTF-8 decode 成 string,跟之前 GitHub raw 返回 text/plain
+        # 时的行为一致。见陷阱 #48。
+        if ($resp.Content -is [byte[]]) {
+            return [System.Text.Encoding]::UTF8.GetString($resp.Content)
         }
         return $resp.Content
     }

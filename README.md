@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.13.zip`: versioned Windows download linked by `index.html` (任务 014 Bug I 修复两件:1) 删除"查看官方文档"无效入口(URL 是 placeholder);2) 独立 PowerShell 安装终端启动时立即打印"[启动器] 正在准备..."提示,避免国内用户在 install.ps1 装 uv / git clone hermes-agent 阶段长时间无回显误判卡死。)
+- `Hermes-Windows-Launcher-v2026.05.04.14.zip`: versioned Windows download linked by `index.html` (任务 014 Bug J 紧急修复:陷阱 #47 自建镜像方案上线后,中国测试者跑出 "Unexpected token '32' in expression or statement" parse 报错——install.ps1 文件内容变成空格分隔的十进制数字串。Root cause:Cloudflare Pages 给 .ps1 返回 octet-stream → Invoke-WebRequest 把 $resp.Content 当 byte[],写出来是 hex dump。修复:1) 代码 byte[] 显式 UTF-8 decode 成 string;2) _headers 让 Cloudflare 给 mirror/*.ps1 返回 text/plain。陷阱 #48。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
