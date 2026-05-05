@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.7'
+$script:LauncherVersion = 'Windows v2026.05.04.8'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -1564,8 +1564,17 @@ function Restart-HermesGateway {
     Kill the current gateway process and start a fresh one.
     Called by the .env file watcher when channel config changes.
     Must install platform deps before starting, same as Start-HermesGateway.
+
+    任务 014 Bug E/F (v2026.05.04.8):新增 -RetryCount 参数 + post-verify。
+    Restart 完后调 Test-GatewayConnectedPlatformsMatchEnv 验证 platform 数,
+    mismatch 触发自动重试 1 次(防止 lock held / install fail 等 race)。
     #>
-    Add-LogLine "检测到 .env 文件变化，准备重启 Gateway..."
+    param([int]$RetryCount = 0)
+    if ($RetryCount -eq 0) {
+        Add-LogLine "检测到 .env 文件变化，准备重启 Gateway..."
+    } else {
+        Add-LogLine ("第 {0} 次重试 Gateway 重启..." -f $RetryCount)
+    }
     $hermesExe = $script:GatewayHermesExe
     # 任务 014 Bug A.2（陷阱 #27 升级版）：当 $script:GatewayHermesExe 为 null（例如
     # 上次启动器没走 fast path 初始化，或 polling 抢先于 fast path 初始化触发），
@@ -1638,10 +1647,35 @@ function Restart-HermesGateway {
 
         # Verify gateway stays alive after a short delay
         Start-Sleep -Milliseconds 3000
-        if ($proc.HasExited) {
+        $earlyExit = $proc.HasExited
+        if ($earlyExit) {
             Add-LogLine ("Gateway 进程启动后立即退出（退出码: {0}），渠道可能无法使用" -f $proc.ExitCode)
         } else {
             Add-LogLine "Gateway 进程运行正常"
+        }
+
+        # 任务 014 Bug E/F (v2026.05.04.8):post-verify 验证 platform 数匹配
+        # 早退场景(lock held)直接判失败;活着的等多 5 秒让所有 platform connect
+        # 见陷阱 #45。
+        if ($RetryCount -lt 1) {
+            $needsRetry = $false
+            if ($earlyExit) {
+                # 进程立即退出,几乎肯定是 lock held(陷阱 #18) → retry 前给 OS 多时间释放
+                Add-LogLine "Gateway 早退,等待 5 秒后再重试..."
+                Start-Sleep -Seconds 5
+                $needsRetry = $true
+            } else {
+                # 进程活着,等 connect 完所有 platform 再读 log 比对
+                Start-Sleep -Seconds 5
+                if (-not (Test-GatewayConnectedPlatformsMatchEnv)) {
+                    $needsRetry = $true
+                }
+            }
+            if ($needsRetry) {
+                Add-LogLine "Gateway 验证未通过,自动重试 1 次..."
+                Restart-HermesGateway -RetryCount 1
+                return
+            }
         }
     } catch {
         Add-LogLine ("Gateway 自动重启失败：{0}" -f $_.Exception.Message)
@@ -1684,6 +1718,74 @@ function Test-GatewayConfigStale {
         return ($envInfo.LastWriteTimeUtc -gt $lockInfo.LastWriteTimeUtc)
     } catch {
         return $false
+    }
+}
+
+function Test-GatewayConnectedPlatformsMatchEnv {
+    <#
+    .SYNOPSIS
+    任务 014 Bug E/F (v2026.05.04.8):验证 gateway 实际 connect 的平台数
+    跟 .env 配置的 messaging platforms 数是否一致。
+    返回 $true  = 一致(健康) / 无法判定(放行,不阻塞)
+    返回 $false = mismatch(需要再次 Restart)
+
+    应用场景:Restart-HermesGateway 之后 post-verify。
+    - Stop-ExistingGateway 杀进程失败 → 新 gateway 启动失败 lock held → 仍是旧 platform 数 → mismatch
+    - Install-GatewayPlatformDeps 装包失败 → 新 gateway import 失败 silent skip → platform 数少 → mismatch
+    - 任何 race / 网络瞬时问题 → 最终结果不对 → 这里捕获
+
+    实现:解析 .env 配置的 messaging platforms,读 gateway.log 最新一行
+         "Gateway running with N platform(s)",对比 N - 1(api_server) 跟配置数。
+
+    见陷阱 #45。
+    #>
+    try {
+        $envFile = Join-Path $env:USERPROFILE '.hermes\.env'
+        if (-not (Test-Path -LiteralPath $envFile)) { return $true }  # 没 .env 不判定
+
+        # 解析 .env 配置的 messaging platforms
+        $envLines = Get-Content $envFile -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '^\s*[A-Z]' }
+        # 关键变量 → platform name (HashSet 去重,避免一个平台多个变量重复计数)
+        $platformVarMap = @(
+            @{ Var = 'TELEGRAM_BOT_TOKEN';   Name = 'telegram' }
+            @{ Var = 'WEIXIN_TOKEN';         Name = 'weixin'   }
+            @{ Var = 'WEIXIN_ACCOUNT_ID';    Name = 'weixin'   }
+            @{ Var = 'FEISHU_APP_ID';        Name = 'feishu'   }
+            @{ Var = 'SLACK_BOT_TOKEN';      Name = 'slack'    }
+            @{ Var = 'DINGTALK_CLIENT_ID';   Name = 'dingtalk' }
+            @{ Var = 'DISCORD_BOT_TOKEN';    Name = 'discord'  }
+            @{ Var = 'WECOM_BOT_ID';         Name = 'wecom'    }
+        )
+        $configuredSet = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($pc in $platformVarMap) {
+            $line = $envLines | Where-Object { $_ -match "^\s*$($pc.Var)\s*=\s*\S" }
+            if ($line) { [void]$configuredSet.Add($pc.Name) }
+        }
+        $configuredCount = $configuredSet.Count
+        if ($configuredCount -eq 0) { return $true }  # 没配置 messaging,不判定
+
+        # 读 gateway.log 最新一行 "Gateway running with N platform(s)"
+        $gatewayLog = Join-Path $env:USERPROFILE '.hermes\logs\gateway.log'
+        if (-not (Test-Path -LiteralPath $gatewayLog)) { return $true }
+        $logTail = Get-Content $gatewayLog -Tail 100 -ErrorAction SilentlyContinue
+        $lastRunningCount = -1
+        foreach ($line in $logTail) {
+            if ($line -match 'Gateway running with (\d+) platform') {
+                $lastRunningCount = [int]$matches[1]
+            }
+        }
+        if ($lastRunningCount -lt 0) { return $true }  # 没找到不判定
+
+        # gateway 实际连 = api_server (1) + messaging platforms (N)
+        $expected = 1 + $configuredCount
+        if ($lastRunningCount -lt $expected) {
+            Add-LogLine ("Gateway 实际 connect {0} 个平台, .env 配置 {1} 个 messaging 平台 (期望 {2}), 不匹配" -f $lastRunningCount, $configuredCount, $expected)
+            return $false
+        }
+        return $true
+    } catch {
+        return $true  # 出错放行,不阻塞 launcher 主流程
     }
 }
 

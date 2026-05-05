@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.7.zip`: versioned Windows download linked by `index.html` (任务 014 Bug D 修复:用户在 webui 配新平台(微信/钉钉等)→ webui 写 .env → mtime 更新,但 launcher 当时不在跑(没人 watch),gateway 一直跑着旧 .env,新平台永远不上线。修复:fast path 加 Test-GatewayConfigStale 检测——.env mtime > gateway.lock mtime 即触发 Restart。陷阱 #44。)
+- `Hermes-Windows-Launcher-v2026.05.04.8.zip`: versioned Windows download linked by `index.html` (任务 014 Bug E/F 修复:.env watcher 触发 Restart 时 Stop-ExistingGateway race(进程没杀干净 / lock held)或 Install 装包 race 导致 gateway 实际 connect 的 platform 数比 .env 配置少,新增平台永远连不上。修复:Restart-HermesGateway 加 post-verify(`Test-GatewayConnectedPlatformsMatchEnv` 对比 .env 配置数 vs gateway.log 最新 "Gateway running with N platform(s)"),mismatch 自动重试 1 次。陷阱 #45。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

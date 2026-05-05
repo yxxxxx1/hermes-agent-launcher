@@ -959,6 +959,37 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #45 Restart-HermesGateway 完成 ≠ Gateway 真的 connect 上 .env 中所有 platform
+
+**触发条件**：用户在 webui 配新平台 → .env 改 → launcher .env watcher 触发 `Restart-HermesGateway`。Restart 流程内任何一步 race / 失败:
+- `Stop-ExistingGateway` 没杀干净 → 新 gateway 抢锁失败立即退出(陷阱 #18 / #39 复发)
+- `Install-GatewayPlatformDeps` 装新平台 Python 包失败(网络瞬时 / cache 锁等)→ 新 gateway 启动后 import 失败 silent skip
+- 其它 race(webui 分两次写 .env / debounce 时机错位等)
+
+但 **launcher 没法知道哪一步失败了**——Restart 函数 happily 返回,只看进程"还活着"就以为 OK。
+
+**坑的表现**：
+- launcher 日志:`Gateway 进程运行正常`(假阳性)
+- gateway.log:`Gateway running with N platform(s)`,N 比 .env 配置数少 1
+- webui 显示"已配置 [新平台]",但发消息无回应
+- 微信修好后再加飞书 → 飞书踩 → 飞书修好后再加钉钉可能再踩。**每加一个新平台都可能复发**
+
+**预防动作**：
+- Restart-HermesGateway 完成后 **post-verify**:解析 .env 配置 messaging platforms 数,读 gateway.log 最新 "Gateway running with N platform(s)",对比 N - 1(api_server) vs 配置数
+- 不匹配 → 自动重试 Restart 一次(限 1 次防无限循环)
+- 早退场景(进程 3 秒内退出)直接判失败,等 5 秒让 OS 释放 lock 后重试
+- 重试逻辑必须有终止条件(`-RetryCount` 参数 + 比较 < 1),递归调用必须传递 retry count
+- 不要假设"杀进程命令发出 = 进程死了" / "uv install exit 0 = 包装上了" — 看**最终结果**(gateway 实际 connect 数)
+
+**自检盲区**：
+- 单独测试 Stop-ExistingGateway / Install-GatewayPlatformDeps 都能跑成功
+- 但**真机 .env watcher 触发的实战路径**包含多个 race window,从单元测试反映不出
+- 整合测试需要"配置新平台 → 验证消息真的能收发"才能覆盖,纯日志/SelfTest 不够
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。
