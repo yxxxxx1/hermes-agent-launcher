@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.19'
+$script:LauncherVersion = 'Windows v2026.05.04.20'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3848,6 +3848,92 @@ $defaults = Get-HermesDefaults
                                 </StackPanel>
                             </Border>
 
+                            <!-- 任务 014 Bug N (v2026.05.04.20):网络阻塞独立 hero 状态(见 mockup 10) -->
+                            <!-- 替代普通 task card,在 preflight.IsNetworkBlocked 时显示 -->
+                            <Border x:Name="InstallNetworkBlockedBorder" Margin="0,0,0,0"
+                                    Padding="28,32" CornerRadius="18"
+                                    Background="{StaticResource SurfacePrimaryBrush}"
+                                    BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                    Visibility="Collapsed">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <!-- Hero icon: 暖橙圆 + 感叹号(中性,不用红色避免焦虑) -->
+                                    <Border Width="66" Height="66" CornerRadius="33"
+                                            HorizontalAlignment="Center" Margin="0,4,0,14">
+                                        <Border.Background>
+                                            <RadialGradientBrush GradientOrigin="0.38,0.35" Center="0.5,0.5" RadiusX="0.55" RadiusY="0.55">
+                                                <GradientStop Color="#FFE7C4" Offset="0"/>
+                                                <GradientStop Color="#F5C285" Offset="0.55"/>
+                                                <GradientStop Color="#E59B4E" Offset="1"/>
+                                            </RadialGradientBrush>
+                                        </Border.Background>
+                                        <Border.Effect>
+                                            <DropShadowEffect Color="#A85420" Opacity="0.22" BlurRadius="22" ShadowDepth="6"/>
+                                        </Border.Effect>
+                                        <TextBlock Text="!" FontFamily="{StaticResource UiFont}"
+                                                   FontSize="36" FontWeight="Bold"
+                                                   Foreground="{StaticResource TextOnAccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <!-- Tag -->
+                                    <Border HorizontalAlignment="Center" Padding="12,4" CornerRadius="999"
+                                            Background="#24D9772B" Margin="0,0,0,12">
+                                        <TextBlock Text="网络无法访问" FontSize="11.5" FontWeight="Bold"
+                                                   Foreground="{StaticResource AccentDeepBrush}"/>
+                                    </Border>
+                                    <!-- 大标题 -->
+                                    <TextBlock Text="暂时无法访问安装资源" FontSize="24" FontWeight="Bold"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               HorizontalAlignment="Center" Margin="0,0,0,10"
+                                               TextAlignment="Center" TextWrapping="Wrap"/>
+                                    <!-- 副标 -->
+                                    <TextBlock FontSize="13" LineHeight="20"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               HorizontalAlignment="Center" MaxWidth="500"
+                                               TextAlignment="Center" TextWrapping="Wrap"
+                                               Margin="0,0,0,16">
+                                        <Run Text="我们尝试连接了 GitHub 与所有国内镜像源，目前都没能连上。"/>
+                                        <LineBreak/>
+                                        <Run Text="这通常是临时网络问题，稍后再试就行。"/>
+                                    </TextBlock>
+                                    <!-- 检测结果列表 -->
+                                    <Border Background="{StaticResource SurfaceSecondaryBrush}"
+                                            BorderBrush="{StaticResource LineSofterBrush}" BorderThickness="1"
+                                            CornerRadius="12" Padding="14,11" MaxWidth="460"
+                                            HorizontalAlignment="Center" Margin="0,0,0,18">
+                                        <StackPanel>
+                                            <DockPanel Margin="0,0,0,5">
+                                                <TextBlock DockPanel.Dock="Right" Text="未连接"
+                                                           FontSize="11.5"
+                                                           Foreground="{StaticResource TextTertiaryBrush}"/>
+                                                <TextBlock Text="官方源 · github.com" FontSize="12.5" FontWeight="Medium"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,0,5">
+                                                <TextBlock DockPanel.Dock="Right" Text="未连接"
+                                                           FontSize="11.5"
+                                                           Foreground="{StaticResource TextTertiaryBrush}"/>
+                                                <TextBlock Text="自建镜像 · hermes.aisuper.win" FontSize="12.5" FontWeight="Medium"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            </DockPanel>
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" Text="全部未连接"
+                                                           FontSize="11.5"
+                                                           Foreground="{StaticResource TextTertiaryBrush}"/>
+                                                <TextBlock Text="5 个社区镜像" FontSize="12.5" FontWeight="Medium"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            </DockPanel>
+                                        </StackPanel>
+                                    </Border>
+                                    <!-- 按钮组 -->
+                                    <WrapPanel HorizontalAlignment="Center">
+                                        <Button x:Name="NetworkBlockedRetryButton" Margin="0,0,12,0"
+                                                Style="{StaticResource PrimaryButtonStyle}" Content="重新检测"/>
+                                        <Button x:Name="NetworkBlockedCloseButton"
+                                                Style="{StaticResource SecondaryButtonStyle}" Content="暂不安装"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+
                             <Border x:Name="OpenClawPostInstallBorder" Margin="0,16,0,0"
                                     Padding="22,20" CornerRadius="16"
                                     Background="{StaticResource SurfacePrimaryBrush}"
@@ -4254,6 +4340,7 @@ $controls = @{}
 foreach ($name in @(
     # 模式容器 + Install Mode 主结构
     'InstallModePanel','HomeModePanel','InstallPathCardBorder','InstallTaskCardBorder','InstallProgressCardBorder','InstallProgressTitleText','OpenClawPostInstallBorder','OpenClawPostInstallText','OpenClawImportButton','OpenClawSkipButton','InstallPathSummaryText','InstallLocationNoticeText','InstallSettingsEditorBorder',
+    'InstallNetworkBlockedBorder','NetworkBlockedRetryButton','NetworkBlockedCloseButton',
     'ChangeInstallLocationButton','ConfirmInstallLocationButton','SaveInstallSettingsButton','ResetInstallSettingsButton',
     'InstallTaskTitleText','InstallTaskBodyText','StartInstallPageButton','InstallRequirementsButton','InstallRefreshButton',
     'InstallProgressText','InstallFailureSummaryText','StatusHeadlineText','StatusBodyText','RecommendationText','RecommendationHintText',
@@ -6220,15 +6307,21 @@ function Test-InstallPreflight {
             $passed.Add(("官方源不可访问，但 {0}镜像可用 ({1})。安装将自动切换。" -f $mirrorTag, $reachedMirror)) | Out-Null
             $networkOk = $true
             $networkEnvResult = 'china'
-            # 任务 014 Bug M v3 (v2026.05.04.19):国内网络警告作为 Warning 直接显示在
-            # preflight 主区域,不再用弹窗。让"环境检测"步骤把所有风险一次性告诉用户,
-            # 避免主标题"环境没问题"+弹窗"可能失败"的相互矛盾信号。
-            $warnings.Add('当前为国内网络。Hermes Agent 安装会从 GitHub、PyPI、npm 等海外资源下载组件，可能因网络波动失败，我们正在持续改进。失败时启动器会显示具体错误。') | Out-Null
+            # 任务 014 Bug M v4 (v2026.05.04.20):撤回 china warning 附加逻辑(判定不可靠 + UX 反复)。
+            # 网络警告改成只在"全部源都不可达"时通过 IsNetworkBlocked=true 触发独立 hero 状态(见 mockup 10)。
         } else {
-            # 任务 014 Bug H (v2026.05.04.12):阻塞文案改友好,给具体下一步
-            $blocking.Add('GitHub 官方源和全部国内镜像源都不可达。可能原因:1) 网络断开 2) 防火墙/杀毒软件拦截 3) 公司/校园网限制 GitHub。建议:换用手机热点重试,或加交流群求助(见「关于」按钮)。') | Out-Null
+            # 任务 014 Bug N (v2026.05.04.20):全部源都不可达 → 由独立 hero 状态显示(见 mockup 10)。
+            # 这条 blocking 文案不再直接显示给用户,只用作 telemetry / 日志。文案中性,不引导加群/手机热点/VPN。
+            $blocking.Add('网络无法访问安装资源。GitHub 与所有国内镜像源都未能连接。') | Out-Null
         }
     }
+
+    # 任务 014 Bug N (v2026.05.04.20):IsNetworkBlocked 标志:
+    # 仅在网络阻塞场景为 true(NetworkOk=false 且 networkEnvResult='unknown'),
+    # 触发独立 hero 状态(mockup 10)。其他 blocking(Git 没装/目录不可写) 用普通 task card。
+    $isNetworkBlocked = (-not $networkOk) -and ($blocking.Count -gt 0) -and (
+        ($blocking | Where-Object { $_ -like '*网络无法访问*' -or $_ -like '*GitHub*镜像*' }).Count -gt 0
+    )
 
     $result = [pscustomobject]@{
         Passed   = @($passed.ToArray())
@@ -6238,6 +6331,7 @@ function Test-InstallPreflight {
         HasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
         NetworkOk = $networkOk
         NetworkEnv = $networkEnvResult
+        IsNetworkBlocked = [bool]$isNetworkBlocked
         CanInstall = ($blocking.Count -eq 0)
     }
 
@@ -6954,6 +7048,8 @@ function Refresh-Status {
         }
 
         $controls.OpenClawPostInstallBorder.Visibility = 'Collapsed'
+        # 任务 014 Bug N (v2026.05.04.20):网络阻塞 hero 状态默认隐藏
+        if ($controls.InstallNetworkBlockedBorder) { $controls.InstallNetworkBlockedBorder.Visibility = 'Collapsed' }
         $controls.InstallTaskCardBorder.Visibility = 'Visible'
         $controls.InstallProgressCardBorder.Visibility = 'Visible'
         $controls.InstallPathCardBorder.Visibility = 'Collapsed'
@@ -6969,7 +7065,19 @@ function Refresh-Status {
             $controls.InstallFailureLogPreviewBorder.Visibility = 'Collapsed'
         } catch { }
 
-        if ($pendingOpenClaw) {
+        # 任务 014 Bug N (v2026.05.04.20):网络阻塞独立 hero 状态(见 mockup 10)
+        # 整个 install path 用 hero 中央布局替代 task card,文案中性,不引导加群/手机热点/VPN
+        if ($preflight.IsNetworkBlocked -and -not $installRunning) {
+            $controls.InstallTaskCardBorder.Visibility = 'Collapsed'
+            $controls.InstallProgressCardBorder.Visibility = 'Collapsed'
+            $controls.InstallPathCardBorder.Visibility = 'Collapsed'
+            if ($controls.InstallNetworkBlockedBorder) { $controls.InstallNetworkBlockedBorder.Visibility = 'Visible' }
+            # 步骤指示器:全部 pending(还没真开始)
+            Set-InstallStepCardState -StepIndex 1 -State 'pending'
+            Set-InstallStepCardState -StepIndex 2 -State 'pending'
+            Set-InstallStepCardState -StepIndex 3 -State 'pending'
+            if ($controls.InstallStepProgressTitle) { $controls.InstallStepProgressTitle.Text = '总进度 · 0 / 3' }
+        } elseif ($pendingOpenClaw) {
             $controls.InstallTaskCardBorder.Visibility = 'Collapsed'
             $controls.InstallProgressCardBorder.Visibility = 'Collapsed'
             $controls.InstallPathCardBorder.Visibility = 'Collapsed'
@@ -7020,13 +7128,7 @@ function Refresh-Status {
             $controls.InstallTaskStepTagText.Text = '环境检测'
             $controls.InstallProgressTitleText.Text = '检测结果'
             if ($preflight.CanInstall) {
-                # 任务 014 Bug M v3 (v2026.05.04.19):有 warning(如国内网络)时主标题中性,
-                # 避免"环境没问题"+ 警告同时存在的矛盾感
-                if ($preflight.Warnings.Count -gt 0) {
-                    $controls.InstallTaskTitleText.Text = '环境检测通过，请阅读下方提示再继续'
-                } else {
-                    $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
-                }
+                $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
             } else {
                 $controls.InstallTaskTitleText.Text = '环境检测发现需要先解决的问题'
             }
@@ -7057,10 +7159,7 @@ function Refresh-Status {
             if ($preflight.CanInstall) {
                 $controls.InstallFailureSummaryText.Visibility = if ($preflight.Warnings.Count -gt 0) { 'Visible' } else { 'Collapsed' }
                 $controls.InstallFailureSummaryText.Text = if ($preflight.Warnings.Count -gt 0) { "提示：`n• " + ($preflight.Warnings -join "`n• ") } else { '' }
-                # 任务 014 Bug M v3 (v2026.05.04.19):有 warning 时按钮文字改"我了解风险,继续"(中性,
-                # 让用户每次按这个按钮都意识到接受了风险);删 secondary "查看安装说明"(URL 是 placeholder,无效入口)
-                $primaryLabelInstall = if ($preflight.Warnings.Count -gt 0) { '我了解风险，继续' } else { '环境没问题，继续' }
-                Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel $primaryLabelInstall -PrimaryEnabled $true -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
+                Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel '环境没问题，继续' -PrimaryEnabled $true -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
             } else {
                 $controls.InstallFailureSummaryText.Visibility = 'Visible'
                 $hasDirBlocking = (@($preflight.Blocking | Where-Object { $_ -like '目录不可写*' })).Count -gt 0
@@ -7543,6 +7642,13 @@ $controls.StageModelButton.Add_Click({ Invoke-AppAction 'launch' })
 $controls.StageAdvancedButton.Add_Click({ Show-AdvancedPanel })
 $controls.OpenClawImportButton.Add_Click({ Invoke-AppAction 'openclaw-migrate' })
 $controls.OpenClawSkipButton.Add_Click({ Invoke-AppAction 'openclaw-skip' })
+# 任务 014 Bug N (v2026.05.04.20):网络阻塞 hero 状态的两个按钮
+if ($controls.NetworkBlockedRetryButton) {
+    $controls.NetworkBlockedRetryButton.Add_Click({ Invoke-AppAction 'refresh' })
+}
+if ($controls.NetworkBlockedCloseButton) {
+    $controls.NetworkBlockedCloseButton.Add_Click({ try { $window.Close() } catch { } })
+}
 # 任务 014 Bug B：Home Mode 内的 OpenClaw 迁移按钮（用户已装机器，不应进 Install Mode）
 $controls.HomeOpenClawImportButton.Add_Click({ Invoke-AppAction 'openclaw-migrate' })
 $controls.HomeOpenClawSkipButton.Add_Click({ Invoke-AppAction 'openclaw-skip' })
