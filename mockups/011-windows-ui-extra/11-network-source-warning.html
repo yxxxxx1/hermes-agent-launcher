@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<title>Hermes 启动器 · 环境检测有源警告</title>
+<style>
+  :root {
+    --bg-app: #F2F0E8;
+    --bg-app-secondary: #EBE8E0;
+    --bg-glow: #F4C98A;
+    --surface-primary: #FAF8F2;
+    --surface-secondary: #F4F0E8;
+    --surface-tertiary: #F0E8DE;
+    --text-primary: #262621;
+    --text-secondary: #5E594F;
+    --text-tertiary: #897F75;
+    --text-on-accent: #FCFCF7;
+    --accent-primary: #D9772B;
+    --accent-soft: #F2B56B;
+    --accent-deep: #A85420;
+    --success: #4F8F7A;
+    --success-soft: #DBEDE5;
+    --warning: #C78A3A;
+    --warning-soft: #F4E8D2;
+    --danger: #C25E52;
+    --danger-soft: #F7E0D8;
+    --line-soft: rgba(0, 0, 0, 0.06);
+    --line-softer: rgba(0, 0, 0, 0.04);
+    --shadow-window: 0 24px 64px rgba(60, 40, 20, 0.18), 0 4px 12px rgba(60, 40, 20, 0.08);
+    --shadow-card: 0 6px 18px rgba(60, 40, 20, 0.06);
+    --shadow-button: 0 8px 20px rgba(217, 119, 43, 0.28), 0 2px 4px rgba(168, 84, 32, 0.18);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    font-family: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont,
+                 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    color: var(--text-primary);
+    background: radial-gradient(1200px 800px at 50% 30%, #EFEAE0 0%, #DCD5C7 60%, #C9C0B0 100%);
+    overflow: hidden;
+  }
+
+  .stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 32px; }
+  .frame-holder { --w: 920; --h: 560; --s: 1;
+    width: calc(var(--w) * 1px * var(--s));
+    height: calc(var(--h) * 1px * var(--s));
+    position: relative;
+  }
+  .window {
+    width: calc(var(--w) * 1px); height: calc(var(--h) * 1px);
+    transform: scale(var(--s)); transform-origin: top left;
+    border-radius: 12px; background: var(--bg-app);
+    box-shadow: var(--shadow-window); overflow: hidden;
+    display: flex; flex-direction: column; border: 1px solid var(--line-soft);
+  }
+
+  /* 标题栏 */
+  .title-bar {
+    height: 36px; background: var(--surface-primary);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 0 0 12px; user-select: none; flex-shrink: 0;
+  }
+  .title-left { display: flex; align-items: center; gap: 10px; }
+  .app-icon {
+    width: 18px; height: 18px; border-radius: 5px;
+    background: radial-gradient(circle at 30% 30%, var(--accent-soft), var(--accent-primary) 60%, var(--accent-deep) 100%);
+    box-shadow: 0 1px 2px rgba(168, 84, 32, 0.3); position: relative;
+  }
+  .app-icon::after {
+    content: ''; position: absolute; inset: 4px; border-radius: 2px;
+    border: 1.5px solid rgba(255, 255, 255, 0.65);
+    border-bottom-color: transparent; border-right-color: transparent;
+  }
+  .title-text { font-size: 12px; color: var(--text-secondary); }
+  .window-controls { display: flex; }
+  .window-controls button {
+    width: 46px; height: 36px; background: transparent; border: 0;
+    color: var(--text-tertiary); cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .window-controls button:hover { background: var(--surface-secondary); }
+  .window-controls .close:hover { background: var(--danger); color: #fff; }
+  .window-controls svg { width: 10px; height: 10px; }
+
+  /* Body */
+  .body {
+    flex: 1;
+    background:
+      radial-gradient(720px 520px at 50% 78%, rgba(244, 201, 138, 0.22) 0%, rgba(244, 201, 138, 0) 60%),
+      radial-gradient(420px 360px at 18% 22%, rgba(244, 201, 138, 0.16) 0%, rgba(244, 201, 138, 0) 60%),
+      var(--bg-app);
+    padding: 20px 28px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+  }
+
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; }
+  .brand-title { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; }
+  .brand-subtitle { font-size: 12px; color: var(--text-tertiary); margin-top: 3px; }
+  .btn-about {
+    height: 34px; padding: 0 14px; border-radius: 10px;
+    background: transparent; border: 1.5px solid rgba(168, 84, 32, 0.32);
+    color: var(--accent-deep); font-size: 13px; font-weight: 600;
+    font-family: inherit; cursor: pointer; transition: all 0.16s ease;
+  }
+  .btn-about:hover { background: rgba(217, 119, 43, 0.06); border-color: var(--accent-primary); }
+
+  /* 主网格:左 task card / 右 step indicator */
+  .main-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 16px;
+    min-height: 0;
+  }
+
+  /* === Task card (左) === */
+  .task-card {
+    background: var(--surface-primary);
+    border: 1px solid var(--line-softer);
+    border-radius: 16px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+  .task-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(420px 320px at 100% 100%, rgba(244, 201, 138, 0.18) 0%, rgba(244, 201, 138, 0) 60%);
+    pointer-events: none;
+  }
+  .task-card > * { position: relative; z-index: 1; }
+
+  .step-tag {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 4px 10px;
+    background: rgba(217, 119, 43, 0.14);
+    border-radius: 999px;
+    width: fit-content;
+  }
+  .step-tag-num {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent-primary); color: var(--text-on-accent);
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step-tag-text {
+    font-size: 11.5px; font-weight: 700;
+    color: var(--accent-deep);
+    letter-spacing: 0.04em;
+  }
+
+  .task-title {
+    font-size: 21px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.25;
+    color: var(--text-primary);
+  }
+
+  .task-body {
+    font-size: 12.5px; line-height: 1.55; color: var(--text-secondary);
+  }
+
+  /* 检测结果区域 */
+  .check-section {
+    background: var(--surface-secondary);
+    border: 1px solid var(--line-softer);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .check-group-title {
+    font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+  }
+
+  .check-list {
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .check-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px;
+  }
+  .check-item-name {
+    color: var(--text-primary);
+    flex: 1;
+  }
+  .check-item-detail {
+    color: var(--text-tertiary);
+    font-size: 11.5px;
+    margin-right: 8px;
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  .check-item-status {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11.5px; font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .check-item-status.ok {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .check-item-status.warn {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .check-item-status.fail {
+    background: rgba(199, 138, 58, 0.18);
+    color: var(--accent-deep);
+  }
+
+  /* 警告 banner */
+  .warning-banner {
+    background: linear-gradient(135deg, rgba(244, 201, 138, 0.32), rgba(217, 119, 43, 0.10));
+    border: 1px solid rgba(217, 119, 43, 0.32);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex; align-items: flex-start; gap: 10px;
+  }
+  .warning-banner-icon {
+    width: 20px; height: 20px; flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-on-accent);
+    font-size: 12px; font-weight: 700;
+    margin-top: 1px;
+  }
+  .warning-banner-text {
+    font-size: 12.5px; line-height: 1.55;
+    color: var(--text-primary);
+  }
+  .warning-banner-text strong {
+    color: var(--accent-deep); font-weight: 700;
+  }
+
+  /* 按钮组 */
+  .button-row {
+    display: flex; gap: 10px;
+    margin-top: auto;
+    padding-top: 8px;
+  }
+  .btn {
+    height: 42px; padding: 0 22px; border-radius: 11px;
+    font-size: 13.5px; font-weight: 600; font-family: inherit;
+    border: 0; cursor: pointer; transition: all 0.18s ease;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    letter-spacing: 0.02em;
+  }
+  .btn-primary {
+    background: linear-gradient(180deg, #E58236, var(--accent-primary) 60%, #C76819);
+    color: var(--text-on-accent);
+    box-shadow: var(--shadow-button);
+    min-width: 168px;
+  }
+  .btn-primary:hover { transform: translateY(-1px); }
+  .btn-secondary {
+    background: transparent; color: var(--accent-deep);
+    border: 1.5px solid var(--accent-deep);
+    min-width: 116px;
+  }
+  .btn-secondary:hover { background: rgba(217, 119, 43, 0.06); }
+
+  /* === Step indicator (右) === */
+  .step-card {
+    background: var(--surface-secondary);
+    border: 1px solid var(--line-softer);
+    border-radius: 16px;
+    padding: 18px 16px;
+    display: flex; flex-direction: column;
+  }
+  .step-progress-title {
+    font-size: 11px; font-weight: 700;
+    color: var(--text-tertiary);
+    letter-spacing: 0.06em;
+    margin-bottom: 12px;
+  }
+  .step-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 12px;
+    border-radius: 11px;
+    background: var(--surface-primary);
+    border: 1px solid var(--line-softer);
+    margin-bottom: 8px;
+  }
+  .step-row.active {
+    background: var(--surface-primary);
+    border-color: rgba(217, 119, 43, 0.32);
+    box-shadow: 0 0 0 3px rgba(217, 119, 43, 0.10);
+  }
+  .step-row-num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--surface-tertiary);
+    color: var(--text-tertiary);
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-row.active .step-row-num {
+    background: var(--accent-primary);
+    color: var(--text-on-accent);
+  }
+  .step-row-text {
+    flex: 1;
+    display: flex; flex-direction: column;
+    gap: 1px;
+  }
+  .step-row-name {
+    font-size: 12.5px; font-weight: 600;
+    color: var(--text-primary);
+  }
+  .step-row.active .step-row-name {
+    color: var(--accent-deep);
+  }
+  .step-row-desc {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+
+  .mockup-tag {
+    position: fixed; top: 12px; left: 12px;
+    background: rgba(38, 38, 33, 0.78); color: var(--text-on-accent);
+    padding: 6px 12px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.06em; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .mockup-note {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(38, 38, 33, 0.78); color: var(--text-on-accent);
+    padding: 6px 14px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.04em; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+
+  /* ============== Mobile auto-fit ============== */
+  @media (max-width: 960px) {
+    html, body {
+      height: auto !important;
+      overflow: visible !important;
+      overflow-x: hidden !important;
+      min-height: 100vh;
+    }
+    .stage {
+      position: static !important;
+      padding: 0 !important;
+      display: block !important;
+      height: auto !important;
+    }
+    .frame-holder {
+      width: 100vw !important;
+      height: calc(560 / 920 * 100vw) !important;
+    }
+    .window {
+      width: 920px !important;
+      height: 560px !important;
+      transform: scale(calc(100vw / 920)) !important;
+      transform-origin: top left !important;
+      border-radius: 0 !important;
+    }
+    .mockup-note {
+      position: static !important;
+      transform: none !important;
+      display: block !important;
+      width: fit-content;
+      margin: 8px auto 16px !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+  <span class="mockup-tag">Mockup 11 · 网络源警告 · 部分源不通</span>
+  <span class="mockup-note">↑ 在环境检测就标出哪些源会失败 · 用户可继续(强行)或重新检测</span>
+
+  <div class="stage">
+    <div class="frame-holder" id="holder">
+      <div class="window">
+
+        <div class="title-bar">
+          <div class="title-left">
+            <div class="app-icon"></div>
+            <span class="title-text">Hermes Agent 桌面控制台</span>
+          </div>
+          <div class="window-controls">
+            <button title="最小化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><line x1="0" y1="5" x2="10" y2="5"/></svg></button>
+            <button title="最大化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg></button>
+            <button class="close" title="关闭"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><line x1="0" y1="0" x2="10" y2="10"/><line x1="10" y1="0" x2="0" y2="10"/></svg></button>
+          </div>
+        </div>
+
+        <div class="body">
+
+          <div class="header">
+            <div>
+              <h1 class="brand-title">Hermes Agent</h1>
+              <span class="brand-subtitle">更聪明的个人 AI 助理 · Windows v2026.05.04.22</span>
+            </div>
+            <button class="btn-about">关于</button>
+          </div>
+
+          <div class="main-grid">
+
+            <!-- 左:任务卡 -->
+            <div class="task-card">
+              <div class="step-tag">
+                <span class="step-tag-num">1</span>
+                <span class="step-tag-text">环境检测</span>
+              </div>
+
+              <h2 class="task-title">环境基本就绪,但有源不通</h2>
+
+              <p class="task-body">
+                工具和权限都没问题,只是部分外部资源源访问异常。可以继续尝试安装,如果在某个阶段失败,日志会指向对应的源。
+              </p>
+
+              <!-- 检测结果:只展示网络源探测。
+                   替换原则(launcher 内部):优先官方,失败用镜像 — 不暴露给用户。
+                   展示给用户的只是"资源类别 · 用途 + 状态" -->
+              <div class="check-section">
+                <div>
+                  <div class="check-group-title">网络源探测</div>
+                  <div class="check-list" style="margin-top:6px">
+                    <div class="check-item">
+                      <span class="check-item-name">GitHub <span style="color:var(--text-tertiary);font-weight:normal">· 下载安装脚本和源代码</span></span>
+                      <span class="check-item-status ok">可达</span>
+                    </div>
+                    <div class="check-item">
+                      <span class="check-item-name">PyPI <span style="color:var(--text-tertiary);font-weight:normal">· 装 Python 依赖</span></span>
+                      <span class="check-item-status ok">可达</span>
+                    </div>
+                    <div class="check-item">
+                      <span class="check-item-name">npm <span style="color:var(--text-tertiary);font-weight:normal">· 装 hermes-web-ui</span></span>
+                      <span class="check-item-status fail">未连接</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 警告 banner -->
+              <div class="warning-banner">
+                <span class="warning-banner-icon">!</span>
+                <span class="warning-banner-text">
+                  <strong>npm 源未连接</strong> · 安装时会卡在装 hermes-web-ui 那步。<br>
+                  建议<strong>换个网络环境后点重新检测</strong>;或直接了解风险继续(失败时启动器会显示具体错误)。
+                </span>
+              </div>
+
+              <!-- 按钮组 -->
+              <div class="button-row">
+                <button class="btn btn-primary">我了解风险,继续</button>
+                <button class="btn btn-secondary">重新检测</button>
+              </div>
+            </div>
+
+            <!-- 右:步骤指示器 -->
+            <div class="step-card">
+              <div class="step-progress-title">总进度 · 0 / 3</div>
+              <div class="step-row active">
+                <div class="step-row-num">1</div>
+                <div class="step-row-text">
+                  <span class="step-row-name">环境检测</span>
+                  <span class="step-row-desc">检查 Git、写入权限、网络通达性</span>
+                </div>
+              </div>
+              <div class="step-row">
+                <div class="step-row-num">2</div>
+                <div class="step-row-text">
+                  <span class="step-row-name">位置确认</span>
+                  <span class="step-row-desc">确认数据目录和安装目录</span>
+                </div>
+              </div>
+              <div class="step-row">
+                <div class="step-row-num">3</div>
+                <div class="step-row-text">
+                  <span class="step-row-name">开始安装</span>
+                  <span class="step-row-desc">下载并安装 Hermes Agent</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const holder = document.getElementById('holder');
+      const W = 920, H = 560;
+      function scale() {
+        const padding = 32;
+        const availW = window.innerWidth - padding * 2;
+        const availH = window.innerHeight - padding * 2;
+        const s = Math.min(availW / W, availH / H, 1);
+        holder.style.setProperty('--s', s);
+      }
+      scale();
+      window.addEventListener('resize', scale);
+      window.addEventListener('orientationchange', scale);
+    })();
+  </script>
+</body>
+</html>

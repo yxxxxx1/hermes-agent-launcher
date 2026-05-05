@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.21.zip`: versioned Windows download linked by `index.html` (任务 014 Bug O:撤掉自建源 hermes.aisuper.win/mirror。理由:它只解决"下载 install.ps1"一步,后续 git clone/PyPI/npm 仍走原网络,整个流程稳定性没本质提升,徒增运维复杂度。launcher 现在 GitHubRaw 是 `官方 → 5 个国内镜像`(国内顺序:5 个国内镜像 → 官方兜底)。mirror/ 目录、_headers、deploy.sh 复制 mirror 都保留(部署到 CDN 没成本,以备将来)。)
+- `Hermes-Windows-Launcher-v2026.05.04.22.zip`: versioned Windows download linked by `index.html` (任务 014 Bug P:环境检测加 npm/PyPI 源探测。痛点:用户安装失败不知道哪个源出问题。修复:preflight 加 NetworkProbes 字段(github/pypi/npm 三态),按 NetworkEnv 选官方或国内镜像。Refresh-Status 把"自动处理项"换成"网络源探测"展示,任一源 fail 时显示 warn banner + 主按钮文字改"我了解风险,继续",建议用户换网络后重新检测。设计稿见 mockup 11。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

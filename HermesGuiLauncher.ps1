@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.21'
+$script:LauncherVersion = 'Windows v2026.05.04.22'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -6314,6 +6314,44 @@ function Test-InstallPreflight {
         ($blocking | Where-Object { $_ -like '*网络无法访问*' -or $_ -like '*GitHub*镜像*' }).Count -gt 0
     )
 
+    # 任务 014 Bug P (v2026.05.04.22):新增 PyPI / npm 源探测,让用户在环境检测就看到
+    # 所有 install 关键源的可达状态(不仅 GitHub)。复用现有 GitHub 探测结果作为 github 探测项。
+    # 替换原则:根据 networkEnvResult 选官方或国内镜像 — 不暴露给用户哪个源,只展示"可不可用"。
+    # 见 mockup 11。
+    $networkProbes = @{
+        github = if ($networkOk) { 'ok' } else { 'fail' }
+        pypi = 'unknown'
+        npm = 'unknown'
+    }
+    # GitHub 全部源都不通时(IsNetworkBlocked=true)就不再测 PyPI/npm,直接进 hero 状态。
+    if ($networkOk) {
+        # PyPI 源探测
+        $pypiUrl = if ($networkEnvResult -eq 'china') { 'https://mirrors.aliyun.com/pypi/simple/' } else { 'https://pypi.org/simple/' }
+        try {
+            $pypiResp = Invoke-WebRequest -UseBasicParsing -Uri $pypiUrl -Method Head -TimeoutSec 5
+            if ($pypiResp.StatusCode -ge 200 -and $pypiResp.StatusCode -lt 400) {
+                $networkProbes.pypi = 'ok'
+            } else {
+                $networkProbes.pypi = 'fail'
+            }
+        } catch {
+            $networkProbes.pypi = 'fail'
+        }
+
+        # npm 源探测
+        $npmUrl = if ($networkEnvResult -eq 'china') { 'https://registry.npmmirror.com/' } else { 'https://registry.npmjs.org/' }
+        try {
+            $npmResp = Invoke-WebRequest -UseBasicParsing -Uri $npmUrl -Method Head -TimeoutSec 5
+            if ($npmResp.StatusCode -ge 200 -and $npmResp.StatusCode -lt 400) {
+                $networkProbes.npm = 'ok'
+            } else {
+                $networkProbes.npm = 'fail'
+            }
+        } catch {
+            $networkProbes.npm = 'fail'
+        }
+    }
+
     $result = [pscustomobject]@{
         Passed   = @($passed.ToArray())
         Warnings = @($warnings.ToArray())
@@ -6323,6 +6361,7 @@ function Test-InstallPreflight {
         NetworkOk = $networkOk
         NetworkEnv = $networkEnvResult
         IsNetworkBlocked = [bool]$isNetworkBlocked
+        NetworkProbes = $networkProbes
         CanInstall = ($blocking.Count -eq 0)
     }
 
@@ -7115,30 +7154,50 @@ function Refresh-Status {
             Set-InstallActionButtons -PrimaryActionId 'refresh' -PrimaryLabel '安装进行中' -PrimaryEnabled $false -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '刷新状态' -TertiaryEnabled $true
         } elseif (-not $script:InstallPreflightConfirmed -or -not $preflight.CanInstall) {
             # 任务 012：状态 1 - 环境检测
+            # 任务 014 Bug P (v2026.05.04.22):删自动处理项(Git/Python/uv 理论无问题不展示),
+            # 改成展示"网络源探测"——用户能看到 GitHub/PyPI/npm 各自实测状态。见 mockup 11。
             $controls.InstallTaskStepTagNum.Text = '1'
             $controls.InstallTaskStepTagText.Text = '环境检测'
             $controls.InstallProgressTitleText.Text = '检测结果'
+
+            # 检查是否有网络源 fail(任一源 fail = 部分警告)
+            $hasNetworkSourceFail = $false
+            $failedSources = @()
+            if ($preflight.NetworkProbes) {
+                $probes = $preflight.NetworkProbes
+                if ($probes.github -eq 'fail') { $hasNetworkSourceFail = $true; $failedSources += 'GitHub' }
+                if ($probes.pypi -eq 'fail') { $hasNetworkSourceFail = $true; $failedSources += 'PyPI(装 Python 依赖)' }
+                if ($probes.npm -eq 'fail') { $hasNetworkSourceFail = $true; $failedSources += 'npm(装 hermes-web-ui)' }
+            }
+
+            # 主标题:全 ok / 部分源 fail / 阻塞 — 三种文案
             if ($preflight.CanInstall) {
-                $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
+                if ($hasNetworkSourceFail) {
+                    $controls.InstallTaskTitleText.Text = '环境基本就绪，但有源不通'
+                } else {
+                    $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
+                }
             } else {
                 $controls.InstallTaskTitleText.Text = '环境检测发现需要先解决的问题'
             }
-            $controls.InstallTaskBodyText.Text = '我们已经检查了你的电脑环境。Python、uv、Node 之类缺失时官方脚本会自动补齐；Git、网络和目录权限异常会直接卡死安装。'
+            $controls.InstallTaskBodyText.Text = '我们已经检查了你的电脑环境。Git、网络和目录权限异常会直接卡死安装；其他工具缺失时官方脚本会自动补齐。'
+
+            # 检测结果区:阻塞项(如有)+ 网络源探测
             $preflightLines = New-Object System.Collections.Generic.List[string]
             if ($preflight.Blocking.Count -gt 0) {
                 $preflightLines.Add('阻塞项：') | Out-Null
                 foreach ($item in $preflight.Blocking) { $preflightLines.Add("• $item") | Out-Null }
-            } else {
-                $preflightLines.Add('阻塞项：无') | Out-Null
-            }
-            $preflightLines.Add('') | Out-Null
-            $preflightLines.Add('自动处理项：') | Out-Null
-            $preflightLines.Add("• Python：$(if ((@($preflight.Passed | Where-Object { $_ -like '已检测到 Python*' })).Count -gt 0) { '已检测到' } else { '缺失时官方安装脚本会自动处理' })") | Out-Null
-            $preflightLines.Add("• uv：$(if ((@($preflight.Passed | Where-Object { $_ -eq '已检测到 uv。' })).Count -gt 0) { '已检测到' } else { '缺失时官方安装脚本会自动处理' })") | Out-Null
-            if ($preflight.Warnings.Count -gt 0) {
                 $preflightLines.Add('') | Out-Null
-                $preflightLines.Add('提示：') | Out-Null
-                foreach ($item in $preflight.Warnings) { $preflightLines.Add("• $item") | Out-Null }
+            }
+            # 网络源探测分类(替代原来的"自动处理项")
+            $preflightLines.Add('网络源探测：') | Out-Null
+            if ($preflight.NetworkProbes) {
+                $githubText = if ($preflight.NetworkProbes.github -eq 'ok') { '可达' } else { '未连接' }
+                $pypiText = if ($preflight.NetworkProbes.pypi -eq 'ok') { '可达' } elseif ($preflight.NetworkProbes.pypi -eq 'unknown') { '未测试' } else { '未连接' }
+                $npmText = if ($preflight.NetworkProbes.npm -eq 'ok') { '可达' } elseif ($preflight.NetworkProbes.npm -eq 'unknown') { '未测试' } else { '未连接' }
+                $preflightLines.Add("• GitHub · 下载安装脚本和源代码 · $githubText") | Out-Null
+                $preflightLines.Add("• PyPI · 装 Python 依赖 · $pypiText") | Out-Null
+                $preflightLines.Add("• npm · 装 hermes-web-ui · $npmText") | Out-Null
             }
             $controls.InstallProgressText.Text = ($preflightLines -join [Environment]::NewLine)
             # 步骤指示器: 1=active, 2=pending, 3=pending
@@ -7148,9 +7207,18 @@ function Refresh-Status {
             $controls.InstallStepProgressTitle.Text = '总进度 · 0 / 3'
 
             if ($preflight.CanInstall) {
-                $controls.InstallFailureSummaryText.Visibility = if ($preflight.Warnings.Count -gt 0) { 'Visible' } else { 'Collapsed' }
-                $controls.InstallFailureSummaryText.Text = if ($preflight.Warnings.Count -gt 0) { "提示：`n• " + ($preflight.Warnings -join "`n• ") } else { '' }
-                Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel '环境没问题，继续' -PrimaryEnabled $true -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
+                # 任务 014 Bug P (v2026.05.04.22):部分源 fail → warn banner + 按钮文字"我了解风险，继续"
+                if ($hasNetworkSourceFail) {
+                    $sourceListText = ($failedSources -join '、')
+                    $warnBanner = "$sourceListText 源未连接。建议换个网络环境后点重新检测；或直接了解风险继续(失败时启动器会显示具体错误)。"
+                    $controls.InstallFailureSummaryText.Text = $warnBanner
+                    $controls.InstallFailureSummaryText.Visibility = 'Visible'
+                    Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel '我了解风险，继续' -PrimaryEnabled $true -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
+                } else {
+                    $controls.InstallFailureSummaryText.Visibility = 'Collapsed'
+                    $controls.InstallFailureSummaryText.Text = ''
+                    Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel '环境没问题，继续' -PrimaryEnabled $true -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
+                }
             } else {
                 $controls.InstallFailureSummaryText.Visibility = 'Visible'
                 $hasDirBlocking = (@($preflight.Blocking | Where-Object { $_ -like '目录不可写*' })).Count -gt 0
