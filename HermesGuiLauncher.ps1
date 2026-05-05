@@ -22,12 +22,14 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.05.4'
+$script:LauncherVersion = 'Windows v2026.05.06.1'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
 $script:InstallSpinnerFrames = @()
 $script:InstallSpinnerIdx    = 0
+# 任务 015 Bug F (v2026.05.06.1):webui_session_kept_5min 用的 5min one-shot timer
+$script:WebUiKept5MinTimer   = $null
 
 # === UI 字体路径（任务 012：bundle Quicksand 圆体 + 中文走 Microsoft YaHei UI） ===
 # WPF FontFamily 多 family fallback 链：英文/数字走 Quicksand，中文走 YaHei UI；字体目录缺失时退回纯系统字体。
@@ -427,6 +429,29 @@ function Get-LauncherUptimeSeconds {
     try {
         return [int]([DateTime]::UtcNow - $script:LauncherStartTimeUtc).TotalSeconds
     } catch { return 0 }
+}
+
+# 任务 015 Bug F (v2026.05.06.1)：webui_started 后启动一个 5 分钟 one-shot timer。
+# 5 分钟到点 timer 还能 tick = launcher 进程还活着 = 用户没立刻关 = 视为有效使用。
+# 用户提前关启动器 → DispatcherTimer 一起死 → 事件不发。
+# 同会话只跑一次（已有 timer 时 noop）。陷阱 #47。
+function Start-WebUiKept5MinTimer {
+    if ($script:WebUiKept5MinTimer) { return }
+    try {
+        $t = New-Object System.Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromMinutes(5)
+        $t.Add_Tick({
+            try {
+                if ($script:WebUiKept5MinTimer) {
+                    try { $script:WebUiKept5MinTimer.Stop() } catch { }
+                    $script:WebUiKept5MinTimer = $null
+                }
+                Send-TelemetryOnce -EventName 'webui_session_kept_5min'
+            } catch { }
+        })
+        $script:WebUiKept5MinTimer = $t
+        $t.Start()
+    } catch { }
 }
 
 # === 匿名遥测结束 ===
@@ -4772,6 +4797,7 @@ function Start-LaunchAsync {
         Open-BrowserUrlSafe -Url $health.Url
         Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $health.Url) -Next '在浏览器中完成模型配置和对话'
         try { Send-TelemetryOnce -EventName 'webui_started' -Properties @{ path = 'fast' } } catch { }
+        try { Start-WebUiKept5MinTimer } catch { }
         $controls.PrimaryActionButton.IsEnabled = $true
         return
     }
@@ -5516,6 +5542,7 @@ function Step-LaunchSequence {
                     Open-BrowserUrlSafe -Url $url
                     Add-ActionLog -Action '开始使用' -Result ("已打开 hermes-web-ui：{0}" -f $url) -Next '在浏览器中完成模型配置和对话'
                     try { Send-TelemetryOnce -EventName 'webui_started' -Properties @{ path = 'slow' } } catch { }
+                    try { Start-WebUiKept5MinTimer } catch { }
                     Set-Footer ''
 
                     $hermesHome = Join-Path $env:USERPROFILE '.hermes'
@@ -6821,7 +6848,8 @@ function Show-AboutDialog {
                                         <Run Text="• 安装阶段进展"/><LineBreak/>
                                         <Run Text="• 启动器 / Windows 版本号"/><LineBreak/>
                                         <Run Text="• 失败事件的脱敏后错误类型"/><LineBreak/>
-                                        <Run Text="• 一次性匿名设备 ID"/>
+                                        <Run Text="• 一次性匿名设备 ID"/><LineBreak/>
+                                        <Run Text="• 基于 IP 推断的国家 / 省份"/>
                                     </TextBlock>
                                 </StackPanel>
                             </Border>

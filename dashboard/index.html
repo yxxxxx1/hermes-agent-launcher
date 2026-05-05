@@ -145,6 +145,11 @@
     </div>
 
     <div class="panel">
+      <h2>用户地区分布(基于 IP，国家 / 国内省份)</h2>
+      <div id="regionDist"></div>
+    </div>
+
+    <div class="panel">
       <h2>近 7 天趋势(独立用户 / 总事件数)</h2>
       <div id="trend"></div>
     </div>
@@ -168,7 +173,7 @@
     hermes_install_started: '开始安装 Hermes',
     hermes_install_completed: '安装完成',
     webui_started: '启动 WebUI 成功',
-    first_conversation: '首次对话',
+    webui_session_kept_5min: '5 分钟有效使用',
   };
 
   function getCfg() {
@@ -250,7 +255,7 @@
   }
 
   function renderFunnel(funnel) {
-    const order = ['launcher_opened', 'preflight_check', 'hermes_install_started', 'hermes_install_completed', 'webui_started', 'first_conversation'];
+    const order = ['launcher_opened', 'preflight_check', 'hermes_install_started', 'hermes_install_completed', 'webui_started', 'webui_session_kept_5min'];
     const top = Math.max.apply(null, order.map(function (k) { return funnel[k] || 0; }).concat([1]));
     const html = order.map(function (k, i) {
       const v = funnel[k] || 0;
@@ -308,6 +313,48 @@
     document.getElementById('trend').innerHTML = html;
   }
 
+  // 任务 015 Bug F (v2026.05.06.1):用户地区分布。国家粒度 + 国内省份 Top（陷阱 #47）
+  // ISO 国家码 → 中文映射，覆盖中国 + 主要海外
+  const COUNTRY_NAME = {
+    CN: '中国大陆', HK: '香港', MO: '澳门', TW: '台湾',
+    US: '美国', JP: '日本', KR: '韩国', SG: '新加坡',
+    GB: '英国', DE: '德国', FR: '法国', CA: '加拿大', AU: '澳大利亚',
+    MY: '马来西亚', TH: '泰国', VN: '越南', IN: '印度',
+    UNKNOWN: '未知'
+  };
+  function renderRegionDist(countries, regions) {
+    const c = countries || [];
+    const r = regions || [];
+    if (c.length === 0 && r.length === 0) {
+      document.getElementById('regionDist').innerHTML = '<div class="empty">暂无地区数据（v2026.05.06.1 之前的事件无 country/region）</div>';
+      return;
+    }
+    const totalUsers = c.reduce(function (s, x) { return s + (x.users || 0); }, 0);
+    const countryHtml = c.map(function (x) {
+      const name = COUNTRY_NAME[x.country] || x.country;
+      const pct = totalUsers > 0 ? Math.round((x.users / totalUsers) * 100) : 0;
+      return '<div class="trend-row">' +
+        '<div class="trend-day">' + escapeHtml(name) + '</div>' +
+        '<div class="trend-bar"><div class="trend-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="num">' + x.users + ' 人 · ' + pct + '%</div>' +
+        '</div>';
+    }).join('');
+    let regionHtml = '';
+    if (r.length > 0) {
+      const cnTotal = r.reduce(function (s, x) { return s + (x.users || 0); }, 0);
+      regionHtml = '<div style="margin-top:14px;font-size:13px;color:#888;">国内省份 Top（仅 country=CN）</div>' +
+        r.map(function (x) {
+          const pct = cnTotal > 0 ? Math.round((x.users / cnTotal) * 100) : 0;
+          return '<div class="trend-row">' +
+            '<div class="trend-day">' + escapeHtml(x.region || '未知') + '</div>' +
+            '<div class="trend-bar"><div class="trend-fill" style="width:' + pct + '%"></div></div>' +
+            '<div class="num">' + x.users + ' 人 · ' + pct + '%</div>' +
+            '</div>';
+        }).join('');
+    }
+    document.getElementById('regionDist').innerHTML = countryHtml + regionHtml;
+  }
+
   async function loadDashboard() {
     const cfg = ensureCfg();
     if (!cfg) return;
@@ -333,6 +380,7 @@
       renderEventsTable(data.events_by_name);
       renderReasonsTable(data.top_failure_reasons);
       renderTrend(data.daily_trend);
+      renderRegionDist(data.country_distribution, data.cn_region_distribution);
       setStatus('已更新 · ' + new Date().toLocaleString('zh-CN'));
     } catch (e) {
       setError('网络异常:' + (e && e.message ? e.message : String(e)));

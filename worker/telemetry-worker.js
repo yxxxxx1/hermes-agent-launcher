@@ -25,7 +25,8 @@ const VALID_EVENTS = new Set([
   'gateway_failed',
   'webui_started',
   'webui_failed',
-  'first_conversation',
+  'webui_session_kept_5min',
+  'first_conversation', // kept for backward-compat with old launcher versions, no longer in funnel
   'unexpected_error',
 ]);
 
@@ -116,12 +117,18 @@ async function handleTelemetry(request, env, headers) {
   const ip = request.headers.get('CF-Connecting-IP') || '';
   const ipHash = await hashIp(ip, env.IP_HASH_SALT);
 
+  // 任务 015 Bug F (v2026.05.06.1): country / region 来自 Cloudflare 边缘 IP geo,
+  // 不需要 launcher 上报。粒度到省份,不存城市。陷阱 #47。
+  const cf = request.cf || {};
+  const country = clampStr((cf.country || '').toString(), 8);
+  const region = clampStr((cf.region || '').toString(), 64);
+
   try {
     await env.DB.prepare(
-      `INSERT INTO events (event_name, anonymous_id, version, os_version, memory_category, ip_hash, client_timestamp, server_timestamp, properties)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO events (event_name, anonymous_id, version, os_version, memory_category, ip_hash, client_timestamp, server_timestamp, properties, server_country, server_region)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(eventName, anonId, version, osVersion, memCategory, ipHash, clientTs, serverTs, propsJson)
+      .bind(eventName, anonId, version, osVersion, memCategory, ipHash, clientTs, serverTs, propsJson, country, region)
       .run();
   } catch (e) {
     return new Response('db error', { status: 500, headers });
@@ -199,7 +206,7 @@ async function handleDashboard(request, env, headers) {
     'hermes_install_started',
     'hermes_install_completed',
     'webui_started',
-    'first_conversation',
+    'webui_session_kept_5min',
   ];
   const funnel = {};
   for (const step of funnelSteps) {
@@ -210,6 +217,26 @@ async function handleDashboard(request, env, headers) {
     funnel[step] = r ? r.count : 0;
   }
 
+  // 任务 015 Bug F (v2026.05.06.1):用户地区分布 — 国家粒度 + 国内省份 Top
+  const countryDist = await env.DB
+    .prepare(
+      `SELECT COALESCE(NULLIF(server_country, ''), 'UNKNOWN') AS country,
+              COUNT(DISTINCT anonymous_id) AS users
+       FROM events WHERE server_timestamp >= ?
+       GROUP BY country ORDER BY users DESC LIMIT 15`
+    )
+    .bind(sinceTs)
+    .all();
+  const cnRegionDist = await env.DB
+    .prepare(
+      `SELECT COALESCE(NULLIF(server_region, ''), 'UNKNOWN') AS region,
+              COUNT(DISTINCT anonymous_id) AS users
+       FROM events WHERE server_country = 'CN' AND server_timestamp >= ?
+       GROUP BY region ORDER BY users DESC LIMIT 10`
+    )
+    .bind(sinceTs)
+    .all();
+
   const data = {
     days,
     generated_at: new Date().toISOString(),
@@ -217,6 +244,8 @@ async function handleDashboard(request, env, headers) {
     unique_users: uniqUsers ? uniqUsers.count : 0,
     events_by_name: eventCounts.results || [],
     top_failure_reasons: topReasons,
+    country_distribution: countryDist.results || [],
+    cn_region_distribution: cnRegionDist.results || [],
     daily_trend: dailyTrend.results || [],
     funnel,
   };
