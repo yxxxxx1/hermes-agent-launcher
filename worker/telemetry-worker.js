@@ -188,6 +188,9 @@ async function handleDashboard(request, env, headers) {
     .slice(0, 10)
     .map(([reason, count]) => ({ reason, count }));
 
+  // 任务 015 Bug H (v2026.05.06.3):trend 查询之前硬编码 7 天，不跟着 days 下拉变
+  // 切换"最近 30 天"后这个区块还是只画 7 天柱子，PM 直觉以为整体看板没响应。
+  // 改用 sinceTs（与其他区块一致）。陷阱 #48。
   const dailyTrend = await env.DB
     .prepare(
       `SELECT date(server_timestamp, 'unixepoch') AS day,
@@ -197,7 +200,7 @@ async function handleDashboard(request, env, headers) {
        WHERE server_timestamp >= ?
        GROUP BY day ORDER BY day`
     )
-    .bind(Math.floor(Date.now() / 1000) - 7 * 86400)
+    .bind(sinceTs)
     .all();
 
   const funnelSteps = [

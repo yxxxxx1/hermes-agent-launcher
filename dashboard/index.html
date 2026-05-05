@@ -150,7 +150,7 @@
     </div>
 
     <div class="panel">
-      <h2>近 7 天趋势(独立用户 / 总事件数)</h2>
+      <h2 id="trendTitle">趋势(独立用户 / 总事件数)</h2>
       <div id="trend"></div>
     </div>
 
@@ -381,7 +381,12 @@
       renderReasonsTable(data.top_failure_reasons);
       renderTrend(data.daily_trend);
       renderRegionDist(data.country_distribution, data.cn_region_distribution);
-      setStatus('已更新 · ' + new Date().toLocaleString('zh-CN'));
+      // 任务 015 Bug H (v2026.05.06.3):趋势标题跟随 days 选择，PM 切窗口能看到反馈
+      const trendTitle = document.getElementById('trendTitle');
+      if (trendTitle) {
+        trendTitle.textContent = '近 ' + (data.days || days) + ' 天趋势(独立用户 / 总事件数)';
+      }
+      setStatus('已更新 · 窗口:近 ' + (data.days || days) + ' 天 · ' + new Date().toLocaleString('zh-CN'));
     } catch (e) {
       setError('网络异常:' + (e && e.message ? e.message : String(e)));
       setStatus('');
