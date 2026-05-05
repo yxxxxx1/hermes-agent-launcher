@@ -4661,6 +4661,7 @@ function Show-LaunchProgressCard {
                 $controls.LaunchSpinnerBorder.Background = $rgb
             }
             if ($controls.LaunchSpinnerGlyph) { $controls.LaunchSpinnerGlyph.Text = [char]0x27F3 }  # ⟳
+            if ($controls.LaunchSpinnerRotate) { $controls.LaunchSpinnerRotate.Angle = 0 }
             if ($controls.LaunchProgressEyebrow) {
                 $controls.LaunchProgressEyebrow.Text = '正在启动 WebUI'
                 $accentDeep = Get-PaletteBrush 'AccentDeepBrush'
@@ -4690,8 +4691,9 @@ function Set-LaunchProgressCardSuccess {
             $rgb.GradientStops.Add((New-Object System.Windows.Media.GradientStop ([System.Windows.Media.Color]::FromRgb(0x3F, 0x7A, 0x65)), 1))
             $controls.LaunchSpinnerBorder.Background = $rgb
         }
-        # glyph ⟳ → ✓
+        # glyph ⟳ → ✓ + 把 spinner 旋转角复位 0(否则 ✓ 会斜)
         if ($controls.LaunchSpinnerGlyph) { $controls.LaunchSpinnerGlyph.Text = [char]0x2713 }  # ✓
+        if ($controls.LaunchSpinnerRotate) { $controls.LaunchSpinnerRotate.Angle = 0 }
         # eyebrow 文案 + 颜色墨绿
         if ($controls.LaunchProgressEyebrow) {
             $controls.LaunchProgressEyebrow.Text = 'WebUI 已启动'
