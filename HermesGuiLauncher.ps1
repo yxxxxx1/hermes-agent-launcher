@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.05.2'
+$script:LauncherVersion = 'Windows v2026.05.05.3'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -4786,13 +4786,31 @@ function Stop-LaunchAsync {
             } catch { return $null }
         }
         try {
-            $stdoutTail = & $readTailSafely (Join-Path $env:TEMP 'hermes-webui-start.log') 1500
+            $stdoutTail = & $readTailSafely (Join-Path $env:TEMP 'hermes-webui-start.log') 1200
             if ($stdoutTail) { $extraProps['webui_stdout_tail'] = $stdoutTail }
-            $stderrTail = & $readTailSafely (Join-Path $env:TEMP 'hermes-webui-start-err.log') 1500
+            $stderrTail = & $readTailSafely (Join-Path $env:TEMP 'hermes-webui-start-err.log') 1200
             if ($stderrTail) { $extraProps['webui_stderr_tail'] = $stderrTail }
+            # 任务 015 Bug E (v2026.05.05.3):wrapper stdout 通常只有 "Starting..." 一行,
+            # webui 进程自己的运行日志在 ~/.hermes-web-ui/server.log。
+            # 用户机器 webui_stdout 显示 PID + port 但浏览器连不上 → webui 是空壳没真 listen。
+            # server.log 才有 webui 自己 throw 的错误(读 profile 失败 / 端口冲突 / GatewayManager 死循环 等)。陷阱 #45。
+            $webuiHome = Join-Path $env:USERPROFILE '.hermes-web-ui'
+            $serverLog = Join-Path $webuiHome 'server.log'
+            $serverTail = & $readTailSafely $serverLog 2500
+            if ($serverTail) { $extraProps['webui_server_log_tail'] = $serverTail }
             $gatewayLog = Join-Path (Join-Path $env:USERPROFILE '.hermes') 'logs\gateway.log'
-            $gatewayTail = & $readTailSafely $gatewayLog 1000
+            $gatewayTail = & $readTailSafely $gatewayLog 800
             if ($gatewayTail) { $extraProps['gateway_log_tail'] = $gatewayTail }
+            # 任务 015 Bug E:同时上报 webui PID 文件 + 端口 listen 状态,确认是端口没绑还是别的
+            $pidFile = Join-Path $webuiHome 'server.pid'
+            if (Test-Path -LiteralPath $pidFile) {
+                try { $extraProps['webui_pid_file'] = (Get-Content -LiteralPath $pidFile -Raw -ErrorAction SilentlyContinue).Trim() } catch { }
+            }
+            try {
+                $listening = (Get-NetTCPConnection -LocalPort 8648 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 3 |
+                    ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)/PID=$($_.OwningProcess)" }) -join ';'
+                if ($listening) { $extraProps['port_8648_listening'] = $listening } else { $extraProps['port_8648_listening'] = 'NONE' }
+            } catch { }
         } catch { }
         try { Send-Telemetry -EventName 'webui_failed' -FailureReason $ErrorMessage -Properties $extraProps } catch { }
         $message = @(

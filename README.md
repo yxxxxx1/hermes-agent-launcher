@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.05.2.zip`: versioned Windows download linked by `index.html` (任务 015 Bug D：webui_failed 仪表化升级。30 秒超时这条 reason 之前看不出卡在哪一步;现在上报带 last_phase + `%TEMP%\hermes-webui-start.log` 末尾 + `%TEMP%\hermes-webui-start-err.log` 末尾 + ~/.hermes/logs/gateway.log 末尾，下次 webui 失败可以从看板直接定位是 npm 启动挂还是 health check 起不来。陷阱 #44。)
+- `Hermes-Windows-Launcher-v2026.05.05.3.zip`: versioned Windows download linked by `index.html` (任务 015 Bug E：上轮 D 上报漏了 webui 真正的运行日志（webui 进程自己写在 `~/.hermes-web-ui/server.log`，wrapper 的 stdout 只有"Starting..."一行）。本轮把该 server.log 末尾、webui pid 文件、`Get-NetTCPConnection` 8648 端口 listen 状态都上报。陷阱 #45。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
