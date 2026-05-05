@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.22'
+$script:LauncherVersion = 'Windows v2026.05.04.23'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -6325,10 +6325,11 @@ function Test-InstallPreflight {
     }
     # GitHub 全部源都不通时(IsNetworkBlocked=true)就不再测 PyPI/npm,直接进 hero 状态。
     if ($networkOk) {
+        # 任务 014 Bug Q (v2026.05.04.23):超时从 5s 降到 3s,海外通常 200-500ms 足够
         # PyPI 源探测
         $pypiUrl = if ($networkEnvResult -eq 'china') { 'https://mirrors.aliyun.com/pypi/simple/' } else { 'https://pypi.org/simple/' }
         try {
-            $pypiResp = Invoke-WebRequest -UseBasicParsing -Uri $pypiUrl -Method Head -TimeoutSec 5
+            $pypiResp = Invoke-WebRequest -UseBasicParsing -Uri $pypiUrl -Method Head -TimeoutSec 3
             if ($pypiResp.StatusCode -ge 200 -and $pypiResp.StatusCode -lt 400) {
                 $networkProbes.pypi = 'ok'
             } else {
@@ -6341,7 +6342,7 @@ function Test-InstallPreflight {
         # npm 源探测
         $npmUrl = if ($networkEnvResult -eq 'china') { 'https://registry.npmmirror.com/' } else { 'https://registry.npmjs.org/' }
         try {
-            $npmResp = Invoke-WebRequest -UseBasicParsing -Uri $npmUrl -Method Head -TimeoutSec 5
+            $npmResp = Invoke-WebRequest -UseBasicParsing -Uri $npmUrl -Method Head -TimeoutSec 3
             if ($npmResp.StatusCode -ge 200 -and $npmResp.StatusCode -lt 400) {
                 $networkProbes.npm = 'ok'
             } else {
@@ -7424,7 +7425,10 @@ function Invoke-AppAction {
                 [System.Windows.MessageBox]::Show('请先确认安装位置，再开始安装。', 'Hermes 启动器')
                 return
             }
-            $preflight = Test-InstallPreflight -InstallDir $installDir -HermesHome $hermesHome
+            # 任务 014 Bug Q (v2026.05.04.23):用 Get-CachedPreflight 复用 cache,不再每次点
+            # 击都重跑全套 preflight。PyPI/npm 探测加进来后,重跑会让"开始安装"按钮响应慢
+            # 5-10 秒。用户主动点"重新检测"时已是 ForceRefresh,这里复用即可。
+            $preflight = Get-CachedPreflight -InstallDir $installDir -HermesHome $hermesHome
             if (-not $preflight.CanInstall) {
                 $controls.InstallFailureSummaryText.Visibility = 'Visible'
                 $controls.InstallFailureSummaryText.Text = "阻塞项：`n• " + ($preflight.Blocking -join "`n• ")

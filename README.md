@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.22.zip`: versioned Windows download linked by `index.html` (任务 014 Bug P:环境检测加 npm/PyPI 源探测。痛点:用户安装失败不知道哪个源出问题。修复:preflight 加 NetworkProbes 字段(github/pypi/npm 三态),按 NetworkEnv 选官方或国内镜像。Refresh-Status 把"自动处理项"换成"网络源探测"展示,任一源 fail 时显示 warn banner + 主按钮文字改"我了解风险,继续",建议用户换网络后重新检测。设计稿见 mockup 11。)
+- `Hermes-Windows-Launcher-v2026.05.04.23.zip`: versioned Windows download linked by `index.html` (任务 014 Bug Q:v2026.05.04.22 加 PyPI/npm 探测后,launcher 启动 / 点"开始安装"明显变慢。修复:1) install-external action 改用 Get-CachedPreflight,不再每次点击都重跑全套(原来调 Test-InstallPreflight 完全绕过 cache);2) PyPI/npm 探测超时 5 秒 → 3 秒(海外通常 200-500ms 已足够)。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
