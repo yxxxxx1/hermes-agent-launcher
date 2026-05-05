@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<title>Hermes 启动器 · 安装中断(简化版)</title>
+<style>
+  :root {
+    --bg-app: #F2F0E8;
+    --bg-app-secondary: #EBE8E0;
+    --bg-glow: #F4C98A;
+    --surface-primary: #FAF8F2;
+    --surface-secondary: #F4F0E8;
+    --surface-tertiary: #F0E8DE;
+    --text-primary: #262621;
+    --text-secondary: #5E594F;
+    --text-tertiary: #897F75;
+    --text-on-accent: #FCFCF7;
+    --accent-primary: #D9772B;
+    --accent-soft: #F2B56B;
+    --accent-deep: #A85420;
+    --success: #4F8F7A;
+    --success-soft: #DBEDE5;
+    --warning: #C78A3A;
+    --warning-soft: #F4E8D2;
+    --danger: #C25E52;
+    --danger-soft: #F7E0D8;
+    --line-soft: rgba(0, 0, 0, 0.06);
+    --line-softer: rgba(0, 0, 0, 0.04);
+    --shadow-window: 0 24px 64px rgba(60, 40, 20, 0.18), 0 4px 12px rgba(60, 40, 20, 0.08);
+    --shadow-card: 0 6px 18px rgba(60, 40, 20, 0.06);
+    --shadow-button: 0 8px 20px rgba(217, 119, 43, 0.28), 0 2px 4px rgba(168, 84, 32, 0.18);
+    --log-bg: #1f1d18;
+    --log-text: #d6d2c4;
+    --log-text-tertiary: #898378;
+    --log-warn: #e0a85a;
+    --log-err: #e07a6a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    font-family: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont,
+                 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    color: var(--text-primary);
+    background: radial-gradient(1200px 800px at 50% 30%, #EFEAE0 0%, #DCD5C7 60%, #C9C0B0 100%);
+    overflow: hidden;
+  }
+
+  .stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 32px; }
+  .frame-holder { --w: 920; --h: 560; --s: 1;
+    width: calc(var(--w) * 1px * var(--s));
+    height: calc(var(--h) * 1px * var(--s));
+    position: relative;
+  }
+  .window {
+    width: calc(var(--w) * 1px); height: calc(var(--h) * 1px);
+    transform: scale(var(--s)); transform-origin: top left;
+    border-radius: 12px; background: var(--bg-app);
+    box-shadow: var(--shadow-window); overflow: hidden;
+    display: flex; flex-direction: column; border: 1px solid var(--line-soft);
+  }
+
+  /* 标题栏 */
+  .title-bar {
+    height: 36px; background: var(--surface-primary);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 0 0 12px; user-select: none; flex-shrink: 0;
+  }
+  .title-left { display: flex; align-items: center; gap: 10px; }
+  .app-icon {
+    width: 18px; height: 18px; border-radius: 5px;
+    background: radial-gradient(circle at 30% 30%, var(--accent-soft), var(--accent-primary) 60%, var(--accent-deep) 100%);
+    box-shadow: 0 1px 2px rgba(168, 84, 32, 0.3); position: relative;
+  }
+  .app-icon::after {
+    content: ''; position: absolute; inset: 4px; border-radius: 2px;
+    border: 1.5px solid rgba(255, 255, 255, 0.65);
+    border-bottom-color: transparent; border-right-color: transparent;
+  }
+  .title-text { font-size: 12px; color: var(--text-secondary); }
+  .window-controls { display: flex; }
+  .window-controls button {
+    width: 46px; height: 36px; background: transparent; border: 0;
+    color: var(--text-tertiary); cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .window-controls button:hover { background: var(--surface-secondary); }
+  .window-controls .close:hover { background: var(--danger); color: #fff; }
+  .window-controls svg { width: 10px; height: 10px; }
+
+  /* Body */
+  .body {
+    flex: 1;
+    background:
+      radial-gradient(720px 520px at 50% 78%, rgba(244, 201, 138, 0.20) 0%, rgba(244, 201, 138, 0) 60%),
+      radial-gradient(420px 360px at 18% 22%, rgba(244, 201, 138, 0.16) 0%, rgba(244, 201, 138, 0) 60%),
+      var(--bg-app);
+    padding: 20px 28px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+  }
+
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; }
+  .brand-title { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; }
+  .brand-subtitle { font-size: 12px; color: var(--text-tertiary); margin-top: 3px; }
+  .btn-about {
+    height: 34px; padding: 0 14px; border-radius: 10px;
+    background: transparent; border: 1.5px solid rgba(168, 84, 32, 0.32);
+    color: var(--accent-deep); font-size: 13px; font-weight: 600;
+    font-family: inherit; cursor: pointer; transition: all 0.16s ease;
+  }
+  .btn-about:hover { background: rgba(217, 119, 43, 0.06); border-color: var(--accent-primary); }
+
+  /* 主网格:左失败卡 / 右步骤指示器 */
+  .main-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 16px;
+    min-height: 0;
+  }
+
+  /* === 失败卡(左) === */
+  .failure-card {
+    background: var(--surface-primary);
+    border: 1px solid var(--line-softer);
+    border-radius: 16px;
+    padding: 20px 22px;
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .failure-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(420px 320px at 100% 100%, rgba(244, 201, 138, 0.18) 0%, rgba(244, 201, 138, 0) 60%);
+    pointer-events: none;
+  }
+  .failure-card > * { position: relative; z-index: 1; }
+
+  /* 失败 head */
+  .failure-head {
+    display: flex; align-items: center; gap: 14px;
+  }
+  .failure-icon {
+    width: 50px; height: 50px; border-radius: 50%;
+    background:
+      radial-gradient(circle at 38% 35%, #FFE7C4 0%, #F5C285 55%, #E59B4E 100%);
+    box-shadow:
+      0 8px 22px rgba(217, 119, 43, 0.22),
+      inset 0 1px 1px rgba(255, 255, 255, 0.55);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .failure-icon-glyph {
+    color: var(--text-on-accent);
+    font-size: 28px; font-weight: 700;
+    line-height: 1;
+    text-shadow: 0 1px 1px rgba(168, 84, 32, 0.3);
+  }
+  .failure-title-block { flex: 1; }
+  .failure-tag {
+    display: inline-block;
+    padding: 3px 9px;
+    background: rgba(217, 119, 43, 0.16);
+    color: var(--accent-deep);
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.06em;
+    border-radius: 999px;
+    margin-bottom: 5px;
+  }
+  .failure-title {
+    font-size: 19px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.25;
+    color: var(--text-primary);
+  }
+
+  /* 简短摘要 */
+  .failure-summary {
+    background: var(--surface-secondary);
+    border: 1px solid var(--line-softer);
+    border-radius: 11px;
+    padding: 12px 14px;
+    font-size: 12.5px; line-height: 1.55;
+    color: var(--text-secondary);
+  }
+  .failure-summary strong {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .failure-summary-line {
+    margin-bottom: 6px;
+  }
+  .failure-summary-line:last-child { margin-bottom: 0; }
+
+  /* 日志预览 */
+  .log-preview {
+    background: var(--log-bg);
+    border-radius: 11px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .log-preview-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .log-preview-title {
+    font-size: 11px; font-weight: 600;
+    color: var(--log-text-tertiary);
+    letter-spacing: 0.04em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .log-preview-title::before {
+    content: '';
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent-primary);
+  }
+  .log-body {
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--log-text);
+    overflow: hidden;
+  }
+  .log-line .ts {
+    color: var(--log-text-tertiary);
+    margin-right: 8px;
+  }
+  .log-line.warn { color: var(--log-warn); }
+  .log-line.err { color: var(--log-err); }
+
+  /* 行动按钮组 */
+  .action-row {
+    display: flex; gap: 10px;
+    margin-top: auto;
+    flex-wrap: wrap;
+  }
+  .btn {
+    height: 42px; padding: 0 22px; border-radius: 11px;
+    font-size: 13.5px; font-weight: 600; font-family: inherit;
+    border: 0; cursor: pointer; transition: all 0.18s ease;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    letter-spacing: 0.02em;
+  }
+  .btn-primary {
+    background: linear-gradient(180deg, #E58236, var(--accent-primary) 60%, #C76819);
+    color: var(--text-on-accent);
+    box-shadow: var(--shadow-button);
+    min-width: 120px;
+  }
+  .btn-primary:hover { transform: translateY(-1px); }
+  .btn-secondary {
+    background: transparent; color: var(--accent-deep);
+    border: 1.5px solid var(--accent-deep);
+    min-width: 120px;
+  }
+  .btn-secondary:hover { background: rgba(217, 119, 43, 0.06); }
+  .btn-tertiary {
+    background: transparent; color: var(--text-secondary);
+    border: 1.5px solid var(--line-soft);
+    min-width: 120px;
+  }
+  .btn-tertiary:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+
+  /* === Step indicator (右) === */
+  .step-card {
+    background: var(--surface-secondary);
+    border: 1px solid var(--line-softer);
+    border-radius: 16px;
+    padding: 18px 16px;
+    display: flex; flex-direction: column;
+  }
+  .step-progress-title {
+    font-size: 11px; font-weight: 700;
+    color: var(--accent-deep);
+    letter-spacing: 0.06em;
+    margin-bottom: 12px;
+  }
+  .step-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 12px;
+    border-radius: 11px;
+    background: var(--surface-primary);
+    border: 1px solid var(--line-softer);
+    margin-bottom: 8px;
+  }
+  .step-row.done {
+    background: var(--success-soft);
+    border-color: rgba(79, 143, 122, 0.3);
+  }
+  .step-row.failed {
+    background: rgba(244, 201, 138, 0.20);
+    border-color: rgba(217, 119, 43, 0.42);
+  }
+  .step-row-num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--surface-tertiary);
+    color: var(--text-tertiary);
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-row.done .step-row-num {
+    background: var(--success);
+    color: var(--text-on-accent);
+  }
+  .step-row.failed .step-row-num {
+    background: var(--accent-primary);
+    color: var(--text-on-accent);
+  }
+  .step-row-text { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .step-row-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+  .step-row.done .step-row-name { color: var(--success); }
+  .step-row.failed .step-row-name { color: var(--accent-deep); }
+  .step-row-desc { font-size: 10.5px; color: var(--text-tertiary); }
+
+  /* footer (版本号) */
+  .footer-row {
+    margin-top: 8px;
+    text-align: right;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.04em;
+  }
+
+  .mockup-tag {
+    position: fixed; top: 12px; left: 12px;
+    background: rgba(38, 38, 33, 0.78); color: var(--text-on-accent);
+    padding: 6px 12px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.06em; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .mockup-note {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(38, 38, 33, 0.78); color: var(--text-on-accent);
+    padding: 6px 14px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.04em; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+
+  @media (max-width: 960px) {
+    html, body { height: auto !important; overflow: visible !important; overflow-x: hidden !important; min-height: 100vh; }
+    .stage { position: static !important; padding: 0 !important; display: block !important; height: auto !important; }
+    .frame-holder { width: 100vw !important; height: calc(560 / 920 * 100vw) !important; }
+    .window { width: 920px !important; height: 560px !important; transform: scale(calc(100vw / 920)) !important; transform-origin: top left !important; border-radius: 0 !important; }
+    .mockup-note { position: static !important; transform: none !important; display: block !important; width: fit-content; margin: 8px auto 16px !important; }
+  }
+</style>
+</head>
+<body>
+
+  <span class="mockup-tag">Mockup 12 · 安装失败简化版 · 一份日志够了</span>
+  <span class="mockup-note">↑ 主区域内嵌 8 行 LogPreview · 底部不再有完整 LogTextBox 黑框 · 唯一复制按钮叫"复制反馈信息"</span>
+
+  <div class="stage">
+    <div class="frame-holder" id="holder">
+      <div class="window">
+
+        <div class="title-bar">
+          <div class="title-left">
+            <div class="app-icon"></div>
+            <span class="title-text">Hermes Agent 桌面控制台</span>
+          </div>
+          <div class="window-controls">
+            <button title="最小化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><line x1="0" y1="5" x2="10" y2="5"/></svg></button>
+            <button title="最大化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg></button>
+            <button class="close" title="关闭"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><line x1="0" y1="0" x2="10" y2="10"/><line x1="10" y1="0" x2="0" y2="10"/></svg></button>
+          </div>
+        </div>
+
+        <div class="body">
+
+          <div class="header">
+            <div>
+              <h1 class="brand-title">Hermes Agent</h1>
+              <span class="brand-subtitle">更聪明的个人 AI 助理 · Windows v2026.05.04.24</span>
+            </div>
+            <button class="btn-about">关于</button>
+          </div>
+
+          <div class="main-grid">
+
+            <!-- 左:失败卡 -->
+            <div class="failure-card">
+
+              <div class="failure-head">
+                <div class="failure-icon">
+                  <span class="failure-icon-glyph">!</span>
+                </div>
+                <div class="failure-title-block">
+                  <span class="failure-tag">安装中断</span>
+                  <h2 class="failure-title">安装没能完成,我们来看看怎么解决</h2>
+                </div>
+              </div>
+
+              <div class="failure-summary">
+                <div class="failure-summary-line"><strong>退出码 1</strong> · 阶段:执行官方安装脚本</div>
+                <div class="failure-summary-line">可能的原因:网络断开 / GitHub 加速通道失败 / 杀毒软件拦截 git clone / 磁盘空间不足。</div>
+                <div class="failure-summary-line">大多数失败重新点"重新开始"就能过;还不行的话,点"复制反馈信息"发给开发者。</div>
+              </div>
+
+              <!-- 日志预览(失败时显示) -->
+              <div class="log-preview">
+                <div class="log-preview-head">
+                  <div class="log-preview-title">最近日志 · 末尾 8 行</div>
+                </div>
+                <div class="log-body">
+                  <div class="log-line"><span class="ts">19:08:08</span> Cloning into 'hermes-agent'...</div>
+                  <div class="log-line"><span class="ts">19:08:18</span> remote: Enumerating objects: 12421, done.</div>
+                  <div class="log-line"><span class="ts">19:08:21</span> remote: Counting objects: 100% (12421/12421), done.</div>
+                  <div class="log-line warn"><span class="ts">19:08:43</span> warning: Clone succeeded, but checkout failed.</div>
+                  <div class="log-line"><span class="ts">19:08:43</span> Installing python dependencies...</div>
+                  <div class="log-line err"><span class="ts">19:08:51</span> ERROR: Could not find a version that satisfies the requirement.</div>
+                  <div class="log-line err"><span class="ts">19:08:51</span> ERROR: No matching distribution found for mcp-shared==0.4.2</div>
+                  <div class="log-line err"><span class="ts">19:08:52</span> Installation aborted (exit code: 1)</div>
+                </div>
+              </div>
+
+              <!-- 行动按钮:重新开始 + 复制反馈信息(唯一的) + 暂不安装 -->
+              <div class="action-row">
+                <button class="btn btn-primary">重新开始</button>
+                <button class="btn btn-secondary">复制反馈信息</button>
+                <button class="btn btn-tertiary">暂不安装</button>
+              </div>
+            </div>
+
+            <!-- 右:步骤指示器 -->
+            <div class="step-card">
+              <div class="step-progress-title">总进度 · 第 3 步出错</div>
+              <div class="step-row done">
+                <div class="step-row-num">✓</div>
+                <div class="step-row-text">
+                  <span class="step-row-name">环境检测</span>
+                  <span class="step-row-desc">已通过</span>
+                </div>
+              </div>
+              <div class="step-row done">
+                <div class="step-row-num">✓</div>
+                <div class="step-row-text">
+                  <span class="step-row-name">位置确认</span>
+                  <span class="step-row-desc">已确认</span>
+                </div>
+              </div>
+              <div class="step-row failed">
+                <div class="step-row-num">!</div>
+                <div class="step-row-text">
+                  <span class="step-row-name">开始安装</span>
+                  <span class="step-row-desc">中断于安装阶段</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- 注意:这里没有底部完整 LogTextBox 黑色框了(简化关键) -->
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const holder = document.getElementById('holder');
+      const W = 920, H = 560;
+      function scale() {
+        const padding = 32;
+        const availW = window.innerWidth - padding * 2;
+        const availH = window.innerHeight - padding * 2;
+        const s = Math.min(availW / W, availH / H, 1);
+        holder.style.setProperty('--s', s);
+      }
+      scale();
+      window.addEventListener('resize', scale);
+      window.addEventListener('orientationchange', scale);
+    })();
+  </script>
+</body>
+</html>

@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.23'
+$script:LauncherVersion = 'Windows v2026.05.04.24'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -3825,7 +3825,7 @@ $defaults = Get-HermesDefaults
                                         <StackPanel>
                                             <DockPanel LastChildFill="True">
                                                 <Button x:Name="InstallFailureLogCopyButton" DockPanel.Dock="Right"
-                                                        Style="{StaticResource LogSubButtonStyle}" Content="复制错误"/>
+                                                        Style="{StaticResource LogSubButtonStyle}" Content="复制反馈信息"/>
                                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                                     <Ellipse Width="6" Height="6" Margin="0,0,8,0"
                                                              Fill="{StaticResource DangerBrush}"/>
@@ -7065,7 +7065,10 @@ function Refresh-Status {
         Set-LauncherWindowMode -Mode 'Install'
         $controls.InstallModePanel.Visibility = 'Visible'
         $controls.HomeModePanel.Visibility = 'Collapsed'
-        $controls.LogSectionBorder.Visibility = 'Visible'
+        # 任务 014 Bug R (v2026.05.04.24):底部黑色"安装日志"框在 install mode 也隐藏(简化)
+        # 失败时主区域 LogPreview + "复制反馈信息"按钮已经够用,底部完整 LogTextBox 是冗余。
+        # LogTextBox 仍存在 (用于 Get-InstallFeedbackText 读取完整日志反馈),只是 Visibility=Collapsed。
+        $controls.LogSectionBorder.Visibility = 'Collapsed'
         $controls.FooterBorder.Visibility = 'Visible'
 
         # 任务 012：Install Mode 时把 Home Mode 的启动卡藏掉，避免残留
@@ -7637,17 +7640,13 @@ $controls.CopyFeedbackButton.Add_Click({
     [System.Windows.Clipboard]::SetText((Get-InstallFeedbackText))
     Add-ActionLog -Action '复制反馈信息' -Result '已复制当前状态、安装检测结果和最近日志' -Next '直接发给开发者即可'
 })
-# 任务 012：失败摘要 LogPreview 的"复制错误"按钮
+# 任务 014 Bug R (v2026.05.04.24):主区域失败 LogPreview 的"复制反馈信息"按钮
+# 简化后唯一的复制入口,直接调 Get-InstallFeedbackText 拿完整反馈(版本+状态+完整日志)
 if ($controls.InstallFailureLogCopyButton) {
     $controls.InstallFailureLogCopyButton.Add_Click({
         try {
-            $logText = if ($controls.InstallFailureLogPreviewText -and $controls.InstallFailureLogPreviewText.Text) {
-                $controls.InstallFailureLogPreviewText.Text
-            } else {
-                Get-InstallFeedbackText
-            }
-            [System.Windows.Clipboard]::SetText($logText)
-            Add-ActionLog -Action '复制错误信息' -Result '已复制最近的安装日志' -Next '可粘到 GitHub Issue 或反馈群里'
+            [System.Windows.Clipboard]::SetText((Get-InstallFeedbackText))
+            Add-ActionLog -Action '复制反馈信息' -Result '已复制当前状态、安装检测结果和最近日志' -Next '直接发给开发者即可'
         } catch { }
     })
 }

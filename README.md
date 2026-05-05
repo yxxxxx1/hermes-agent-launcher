@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.23.zip`: versioned Windows download linked by `index.html` (任务 014 Bug Q:v2026.05.04.22 加 PyPI/npm 探测后,launcher 启动 / 点"开始安装"明显变慢。修复:1) install-external action 改用 Get-CachedPreflight,不再每次点击都重跑全套(原来调 Test-InstallPreflight 完全绕过 cache);2) PyPI/npm 探测超时 5 秒 → 3 秒(海外通常 200-500ms 已足够)。)
+- `Hermes-Windows-Launcher-v2026.05.04.24.zip`: versioned Windows download linked by `index.html` (任务 014 Bug R:install mode 显示简化。原来主区域有 LogPreview + 底部又有完整 LogTextBox 黑框,信息冗余。修复:底部 LogSectionBorder 在 install mode 也始终隐藏(LogTextBox 仍存在用于 Get-InstallFeedbackText 读取),失败状态 LogPreview 上的"复制错误"按钮升级为"复制反馈信息"(复用同款逻辑,复制完整反馈含日志/版本/状态)。设计稿见 mockup 12 / 13。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
