@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.10'
+$script:LauncherVersion = 'Windows v2026.05.04.11'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -4215,7 +4215,7 @@ $defaults = Get-HermesDefaults
 
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
-$window.Title = "Hermes Agent 桌面控制台 - $($script:LauncherVersion)"
+$window.Title = "Hermes Agent 桌面控制台"
 
 $controls = @{}
 foreach ($name in @(

@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.10.zip`: versioned Windows download linked by `index.html` (副标题文案优化:`为中文用户准备的图形启动器` → `更聪明的个人 AI 助理`,去掉跟标题栏 `Hermes Agent 桌面控制台` 的重复,文案更直接。)
+- `Hermes-Windows-Launcher-v2026.05.04.11.zip`: versioned Windows download linked by `index.html` (窗口标题栏去掉版本号,版本号只在副标题保留一处,避免视觉重复。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
