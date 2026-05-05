@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.05.3'
+$script:LauncherVersion = 'Windows v2026.05.05.4'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -645,6 +645,72 @@ function Install-HermesWebUi {
     } catch {
         return [pscustomobject]@{ Installed = $false; Changed = $false; Message = ("hermes-web-ui {0}失败：{1}" -f $action, $_.Exception.Message) }
     }
+}
+
+# 任务 015 Bug A (v2026.05.05.4):杀残留 webui node 进程（命令行带 hermes-web-ui 的 node.exe）。
+# 复用陷阱 #39 套路:venv stub launcher 干扰 Get-Process.Path,必须用 CIM CommandLine。
+# 上次 webui 异常退出留下 zombie node.exe → 仍持有 hermes-web-ui.db 文件锁 →
+# 新 webui 启动时 SQLite auto-recovery 删坏库失败 EBUSY → 永远初始化不完。陷阱 #46。
+function Stop-ExistingWebUi {
+    $webuiPathHint = (Join-Path $env:LOCALAPPDATA 'hermes\npm-global').ToLowerInvariant()
+    $killed = 0
+    try {
+        Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+            $cmdLine = ([string]$_.CommandLine).ToLowerInvariant()
+            if ($cmdLine -and ($cmdLine.Contains('hermes-web-ui') -or $cmdLine.Contains($webuiPathHint))) {
+                try {
+                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                    $killed++
+                } catch { }
+            }
+        }
+    } catch { }
+    if ($killed -gt 0) {
+        # OS 释放文件句柄需要时间,慢盘上 500ms 不够（参考陷阱 #39 的 1500ms 经验）
+        Start-Sleep -Milliseconds 1500
+    }
+    return $killed
+}
+
+# 任务 015 Bug B (v2026.05.05.4):坏 SQLite db 自愈。webui 自己的 auto-recovery 路径
+# 因为残留 webui 进程持锁(EBUSY)删不掉旧 db,卡死。我们抢在 webui 启动前 rename 走,
+# webui 见无 db 自然建新库。条件:存在残留 .corrupted.* 兄弟(上次 recovery 半成品)
+# 或 db 无法以独占方式打开(说明被锁)。陷阱 #46。
+function Repair-WebUiDatabase {
+    $webuiHome = Join-Path $env:USERPROFILE '.hermes-web-ui'
+    if (-not (Test-Path -LiteralPath $webuiHome)) { return $false }
+    $dbPath = Join-Path $webuiHome 'hermes-web-ui.db'
+    if (-not (Test-Path -LiteralPath $dbPath)) { return $false }
+
+    # Smoking gun:上次 webui auto-recovery 留下的备份兄弟,说明这条路径走过且没走完
+    $corruptedSiblings = @()
+    try {
+        $corruptedSiblings = @(Get-ChildItem -LiteralPath $webuiHome -Filter 'hermes-web-ui.db.corrupted.*' -ErrorAction SilentlyContinue)
+    } catch { }
+
+    # 独占打开测试 — 能开 = 没人锁 + 文件本身 IO 没坏(库内容是否合法另说,交给 webui 判断)
+    $canOpenExclusive = $false
+    try {
+        $fs = [System.IO.File]::Open($dbPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $fs.Close()
+        $fs.Dispose()
+        $canOpenExclusive = $true
+    } catch { }
+
+    # 触发 reset 的两个条件之一:
+    if ($corruptedSiblings.Count -eq 0 -and $canOpenExclusive) { return $false }
+
+    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+    $newPath = $dbPath + '.corrupted.' + $stamp
+    for ($i = 0; $i -lt 4; $i++) {
+        try {
+            Move-Item -LiteralPath $dbPath -Destination $newPath -Force -ErrorAction Stop
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    return $false
 }
 
 function Test-HermesWebUiHealth {
@@ -1963,6 +2029,12 @@ function Start-HermesWebUiRuntime {
         if (-not $env:SHELL) { $env:SHELL = 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' }
     }
 
+    # 任务 015 Bug A+B (v2026.05.05.4):启动 webui 之前清理上次残留 + 修坏库,陷阱 #46
+    try {
+        $killed = Stop-ExistingWebUi
+        if ($killed -gt 0) { Add-LogLine ("已杀掉 {0} 个 webui 残留进程" -f $killed) }
+        if (Repair-WebUiDatabase) { Add-LogLine 'webui 数据库异常已重置（旧库自动备份）' }
+    } catch { }
     # Launch the start command without -Wait (it can hang with -RedirectStandardOutput)
     Start-Process -FilePath $webUi.WebUiCmd -ArgumentList @('start', $webUi.Port) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-webui-start.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-webui-start-err.log')
 
@@ -5410,6 +5482,12 @@ function Step-LaunchSequence {
                 if (-not (Test-Path $webUi.WebUiCmd)) {
                     throw ("hermes-web-ui 命令文件不存在：{0}" -f $webUi.WebUiCmd)
                 }
+                # 任务 015 Bug A+B (v2026.05.05.4):状态机 start-webui phase 也加同款清理,陷阱 #46
+                try {
+                    $killed = Stop-ExistingWebUi
+                    if ($killed -gt 0) { Add-LogLine ("已杀掉 {0} 个 webui 残留进程" -f $killed) }
+                    if (Repair-WebUiDatabase) { Add-LogLine 'webui 数据库异常已重置（旧库自动备份）' }
+                } catch { }
                 try {
                     Start-Process -FilePath $webUi.WebUiCmd -ArgumentList @('start', $webUi.Port) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'hermes-webui-start.log') -RedirectStandardError (Join-Path $env:TEMP 'hermes-webui-start-err.log')
                 } catch {
