@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.16'
+$script:LauncherVersion = 'Windows v2026.05.04.17'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -4309,6 +4309,9 @@ $controls.SkipSetupCheckBox.IsChecked = $true
 $script:CrashLogPath = Join-Path $env:TEMP 'HermesGuiLauncher-crash.log'
 $script:InstallLocationConfirmed = $false
 $script:InstallPreflightConfirmed = $false
+# 任务 014 Bug M (v2026.05.04.17):国内网络环境警告 ack 标志
+# 用户在 NetworkEnv='china' 第一次点"开始安装"时弹一次警告,同一 launcher 会话不再重复弹
+$script:ChinaNetworkAcknowledged = $false
 $script:LauncherWindowMode = $null
 
 function Write-CrashLog {
@@ -7257,6 +7260,31 @@ function Invoke-AppAction {
                 Add-ActionLog -Action '开始安装' -Result '安装前检测未通过' -Next ($preflight.Blocking -join '；')
                 Refresh-Status
                 return
+            }
+            # 任务 014 Bug M (v2026.05.04.17):国内网络环境警告
+            # 同一 launcher 会话只弹一次。用户暂不安装则 return,继续尝试则进入安装。
+            if ($preflight.NetworkEnv -eq 'china' -and -not $script:ChinaNetworkAcknowledged) {
+                $chinaMsg = @(
+                    '检测到你在国内网络环境。'
+                    ''
+                    'Hermes Agent 安装会从 GitHub、PyPI、npm 等多个海外资源下载组件。当前国内网络下安装可能因网络波动失败,我们正在持续改进。'
+                    ''
+                    '【是】继续尝试 - 失败时启动器会显示具体错误'
+                    '【否】暂不安装 - 等后续版本改进'
+                ) -join [Environment]::NewLine
+                $chinaResult = [System.Windows.MessageBox]::Show(
+                    $chinaMsg,
+                    'Hermes 启动器',
+                    [System.Windows.MessageBoxButton]::YesNo,
+                    [System.Windows.MessageBoxImage]::Information
+                )
+                $userChoice = if ($chinaResult -eq [System.Windows.MessageBoxResult]::Yes) { 'continue' } else { 'cancel' }
+                try { Send-Telemetry -EventName 'china_network_warning_shown' -Properties @{ user_choice = $userChoice } } catch { }
+                if ($chinaResult -ne [System.Windows.MessageBoxResult]::Yes) {
+                    Add-ActionLog -Action '开始安装' -Result '用户暂不安装' -Next '网络稳定后可重新点击"开始安装"'
+                    return
+                }
+                $script:ChinaNetworkAcknowledged = $true
             }
             try {
                 if (-not (Confirm-TerminalAction -ActionTitle '安装 / 更新 Hermes' -UserSteps @('等待官方安装脚本执行完成。', '安装成功时终端会自动关闭。', '如果终端停住并显示报错，请保留终端，把报错和日志反馈出来。') -SuccessHint '安装结束后，启动器会自动刷新状态。' -FailureHint '失败时终端会保留，日志文件路径也会写入右侧日志区。')) {

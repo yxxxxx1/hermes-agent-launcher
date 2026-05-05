@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.16.zip`: versioned Windows download linked by `index.html` (任务 014 Bug L 修复:install.ps1 跑完终端关闭 + exit 0,但 hermes.exe 没生成 → launcher 卡在"3 正在安装"。Root cause:上游 `Install-Dependencies` 用 `2>&1 | Out-Null` 吞 uv pip install 错误,native command 失败也不抛 .NET 异常,catch 接不到 → silent fail 假装成功。修复:1) launcher Monitor 兜底 verify hermes.exe 真的存在,silent fail 时显示明确失败 UI;2) mirror env 加 UV_EXTRA_INDEX_URL 清华源 fallback,让阿里源没的包能从清华源拿。陷阱 #50。)
+- `Hermes-Windows-Launcher-v2026.05.04.17.zip`: versioned Windows download linked by `index.html` (任务 014 Bug M 产品决策:国内裸网下整个 install/webui 流程依赖 5+ 海外资源(GitHub/PyPI/npm/...),稳定性差,每修一个 bug 暴露下一个。改成主动管预期——preflight 检测到 NetworkEnv='china' 时,在用户点"开始安装"前弹一次警告对话框,告知"国内网络下安装可能因网络波动失败,我们正在持续改进",让用户主动选择继续 / 暂不安装。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
