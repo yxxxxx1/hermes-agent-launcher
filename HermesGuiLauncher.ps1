@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.18'
+$script:LauncherVersion = 'Windows v2026.05.04.19'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -4309,9 +4309,6 @@ $controls.SkipSetupCheckBox.IsChecked = $true
 $script:CrashLogPath = Join-Path $env:TEMP 'HermesGuiLauncher-crash.log'
 $script:InstallLocationConfirmed = $false
 $script:InstallPreflightConfirmed = $false
-# 任务 014 Bug M (v2026.05.04.17):国内网络环境警告 ack 标志
-# 用户在 NetworkEnv='china' 第一次点"开始安装"时弹一次警告,同一 launcher 会话不再重复弹
-$script:ChinaNetworkAcknowledged = $false
 $script:LauncherWindowMode = $null
 
 function Write-CrashLog {
@@ -6223,6 +6220,10 @@ function Test-InstallPreflight {
             $passed.Add(("官方源不可访问，但 {0}镜像可用 ({1})。安装将自动切换。" -f $mirrorTag, $reachedMirror)) | Out-Null
             $networkOk = $true
             $networkEnvResult = 'china'
+            # 任务 014 Bug M v3 (v2026.05.04.19):国内网络警告作为 Warning 直接显示在
+            # preflight 主区域,不再用弹窗。让"环境检测"步骤把所有风险一次性告诉用户,
+            # 避免主标题"环境没问题"+弹窗"可能失败"的相互矛盾信号。
+            $warnings.Add('当前为国内网络。Hermes Agent 安装会从 GitHub、PyPI、npm 等海外资源下载组件，可能因网络波动失败，我们正在持续改进。失败时启动器会显示具体错误。') | Out-Null
         } else {
             # 任务 014 Bug H (v2026.05.04.12):阻塞文案改友好,给具体下一步
             $blocking.Add('GitHub 官方源和全部国内镜像源都不可达。可能原因:1) 网络断开 2) 防火墙/杀毒软件拦截 3) 公司/校园网限制 GitHub。建议:换用手机热点重试,或加交流群求助(见「关于」按钮)。') | Out-Null
@@ -7019,7 +7020,13 @@ function Refresh-Status {
             $controls.InstallTaskStepTagText.Text = '环境检测'
             $controls.InstallProgressTitleText.Text = '检测结果'
             if ($preflight.CanInstall) {
-                $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
+                # 任务 014 Bug M v3 (v2026.05.04.19):有 warning(如国内网络)时主标题中性,
+                # 避免"环境没问题"+ 警告同时存在的矛盾感
+                if ($preflight.Warnings.Count -gt 0) {
+                    $controls.InstallTaskTitleText.Text = '环境检测通过，请阅读下方提示再继续'
+                } else {
+                    $controls.InstallTaskTitleText.Text = '环境没问题，一起把 Hermes 装上吧'
+                }
             } else {
                 $controls.InstallTaskTitleText.Text = '环境检测发现需要先解决的问题'
             }
@@ -7050,7 +7057,10 @@ function Refresh-Status {
             if ($preflight.CanInstall) {
                 $controls.InstallFailureSummaryText.Visibility = if ($preflight.Warnings.Count -gt 0) { 'Visible' } else { 'Collapsed' }
                 $controls.InstallFailureSummaryText.Text = if ($preflight.Warnings.Count -gt 0) { "提示：`n• " + ($preflight.Warnings -join "`n• ") } else { '' }
-                Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel '环境没问题，继续' -PrimaryEnabled $true -SecondaryActionId 'open-docs' -SecondaryLabel '查看安装说明' -SecondaryEnabled $true -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
+                # 任务 014 Bug M v3 (v2026.05.04.19):有 warning 时按钮文字改"我了解风险,继续"(中性,
+                # 让用户每次按这个按钮都意识到接受了风险);删 secondary "查看安装说明"(URL 是 placeholder,无效入口)
+                $primaryLabelInstall = if ($preflight.Warnings.Count -gt 0) { '我了解风险，继续' } else { '环境没问题，继续' }
+                Set-InstallActionButtons -PrimaryActionId 'preflight-confirm' -PrimaryLabel $primaryLabelInstall -PrimaryEnabled $true -SecondaryActionId '' -SecondaryLabel '' -SecondaryEnabled $false -TertiaryActionId 'refresh' -TertiaryLabel '重新检测' -TertiaryEnabled $true
             } else {
                 $controls.InstallFailureSummaryText.Visibility = 'Visible'
                 $hasDirBlocking = (@($preflight.Blocking | Where-Object { $_ -like '目录不可写*' })).Count -gt 0
@@ -7212,34 +7222,9 @@ function Invoke-AppAction {
                 Refresh-Status
                 return
             }
-            # 任务 014 Bug M (v2026.05.04.18):国内网络警告
-            # 用户点"环境没问题,继续"按钮的瞬间弹一次,让"环境检测"步骤承担所有风险告知职责。
-            # 同一 launcher 会话只弹一次。
-            # - 用户选"是"→ ack=true,InstallPreflightConfirmed=true,进入下一步(位置确认)
-            # - 用户选"否"→ ack 不变(下次重新检测后还会弹),不前进,留在环境检测屏幕
-            if ($preflight.NetworkEnv -eq 'china' -and -not $script:ChinaNetworkAcknowledged) {
-                $chinaMsg = @(
-                    '检测到你在国内网络环境。'
-                    ''
-                    'Hermes Agent 安装会从 GitHub、PyPI、npm 等多个海外资源下载组件。当前国内网络下安装可能因网络波动失败,我们正在持续改进。'
-                    ''
-                    '【是】继续尝试 - 失败时启动器会显示具体错误'
-                    '【否】暂不安装 - 等后续版本改进'
-                ) -join [Environment]::NewLine
-                $chinaResult = [System.Windows.MessageBox]::Show(
-                    $chinaMsg,
-                    'Hermes 启动器',
-                    [System.Windows.MessageBoxButton]::YesNo,
-                    [System.Windows.MessageBoxImage]::Information
-                )
-                $userChoice = if ($chinaResult -eq [System.Windows.MessageBoxResult]::Yes) { 'continue' } else { 'cancel' }
-                try { Send-Telemetry -EventName 'china_network_warning_shown' -Properties @{ user_choice = $userChoice } } catch { }
-                if ($chinaResult -ne [System.Windows.MessageBoxResult]::Yes) {
-                    Add-ActionLog -Action '确认环境检测' -Result '用户暂不安装(国内网络警告未确认)' -Next '可重新点击"重新检测",再决定是否继续'
-                    return
-                }
-                $script:ChinaNetworkAcknowledged = $true
-            }
+            # 任务 014 Bug M v3 (v2026.05.04.19):国内网络警告改成主区域 Warning 直接显示,
+            # 不再弹对话框。用户在环境检测主区域已经看到警告(由 Test-InstallPreflight 加进 Warnings),
+            # 点"环境没问题,继续"或"继续(国内网络可能失败)" = 默认已了解风险接受。
             $script:InstallPreflightConfirmed = $true
             Add-ActionLog -Action '确认环境检测' -Result '当前环境满足安装条件' -Next '继续确认安装位置'
             Refresh-Status

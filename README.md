@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.18.zip`: versioned Windows download linked by `index.html` (任务 014 Bug M v2 调整:国内网络警告对话框从"开始安装"按钮入口挪到"环境检测"步骤的"环境没问题,继续"按钮——让"环境检测"步骤承担所有风险告知职责,符合 PM 对该步骤的功能定位。同一 launcher 会话只弹一次,用户选"否"则不前进留在环境检测页。)
+- `Hermes-Windows-Launcher-v2026.05.04.19.zip`: versioned Windows download linked by `index.html` (任务 014 Bug M v3 调整:取消弹窗,改成在主区域 Warning 直接显示。原来"环境没问题"标题 + 弹窗"可能失败"自相矛盾。现在国内网络警告作为 preflight Warnings 一项,在主区域"提示"区显示;有 warning 时主标题改"环境检测通过,请阅读下方提示再继续",按钮文字改"我了解风险,继续"。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
