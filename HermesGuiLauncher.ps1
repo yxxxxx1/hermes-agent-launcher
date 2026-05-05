@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.04.11'
+$script:LauncherVersion = 'Windows v2026.05.04.12'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -2941,14 +2941,21 @@ function Test-NetworkEnvironment {
 
 function Get-MirrorConfig {
     # 返回各下载源的镜像配置（写死优先级：阿里>清华>中科大/豆瓣，ghproxy>其他）
+    # 任务 014 Bug H (v2026.05.04.12):
+    # - 把 hermes.aisuper.win 自建镜像放在第 0 位（国内 Cloudflare 可达性 ~99%,远超社区镜像）
+    # - 加 ghfast.top / gh-proxy.com 等 2026 仍活跃的社区镜像,提升兜底覆盖率
+    # 见陷阱 #47。
     [pscustomobject]@{
         # GitHub raw 文件镜像：用于下载 install.ps1
-        # 格式：直接替换 raw.githubusercontent.com
+        # 格式：直接替换 raw.githubusercontent.com 或拼接代理前缀
         GitHubRaw = @(
+            'https://hermes.aisuper.win/mirror',           # 自建镜像（国内首选,启动器自己控制）
             'https://raw.githubusercontent.com',           # 官方（overseas 首选）
             'https://raw.gitmirror.com',                   # gitmirror
             'https://gh.api.99988866.xyz/https://raw.githubusercontent.com',  # 99988866 代理
-            'https://ghproxy.cn/https://raw.githubusercontent.com'            # ghproxy.cn
+            'https://ghproxy.cn/https://raw.githubusercontent.com',           # ghproxy.cn
+            'https://ghfast.top/https://raw.githubusercontent.com',           # ghfast (2026 活跃)
+            'https://gh-proxy.com/https://raw.githubusercontent.com'          # gh-proxy.com
         )
         # GitHub 仓库镜像：用于 git clone（注入到安装脚本 env）
         GitHubRepo = @(
@@ -3051,8 +3058,9 @@ function New-TempScriptFromUrl {
                 }
             }
         }
-        # 国内网络：从第二个开始（跳过官方），官方放最后兜底
-        $orderedUrls = @($candidateUrls[1..($candidateUrls.Count - 1)]) + @($candidateUrls[0])
+        # 任务 014 Bug H (v2026.05.04.12): GitHubRaw[0] 现在是自建 hermes.aisuper.win,
+        # GitHubRaw[1] 是 raw.githubusercontent.com 官方。国内网络: 自建[0] → 社区[2..n] → 官方[1] 兜底
+        $orderedUrls = @($candidateUrls[0]) + @($candidateUrls[2..($candidateUrls.Count - 1)]) + @($candidateUrls[1])
     } else {
         # 海外网络：直接用官方 URL
         $orderedUrls = @($Url)
@@ -6111,25 +6119,37 @@ function Test-InstallPreflight {
         }
     } catch {
         # 官方源不通 → 检测是否为国内网络（会用镜像源），不硬性阻塞
+        # 任务 014 Bug H (v2026.05.04.12):测全部镜像（之前 [1..2] 漏测后两个）
         $mirrorCfg = Get-MirrorConfig
         $mirrorReachable = $false
-        foreach ($mirrorBase in $mirrorCfg.GitHubRaw[1..2]) {
+        $reachedMirror = $null
+        # 测全部除了 [1] 官方源以外的镜像([0] 是自建,[2..] 是社区镜像)
+        $mirrorsToProbe = @($mirrorCfg.GitHubRaw[0]) + @($mirrorCfg.GitHubRaw[2..($mirrorCfg.GitHubRaw.Count - 1)])
+        foreach ($mirrorBase in $mirrorsToProbe) {
             try {
-                $mirrorUrl = $defaults.OfficialInstallUrl -replace 'https://raw\.githubusercontent\.com', $mirrorBase
-                if ($mirrorBase -match '/https?://$') { $mirrorUrl = $mirrorBase + $defaults.OfficialInstallUrl }
+                if ($mirrorBase -match '/https?://') {
+                    # 代理拼接型: 'https://xxx/https://raw.githubusercontent.com'
+                    $mirrorUrl = $mirrorBase + ($defaults.OfficialInstallUrl -replace '^https://raw\.githubusercontent\.com', '')
+                } else {
+                    # 域名替换型: 'https://hermes.aisuper.win/mirror' / 'https://raw.gitmirror.com'
+                    $mirrorUrl = $defaults.OfficialInstallUrl -replace '^https://raw\.githubusercontent\.com', $mirrorBase
+                }
                 $mResp = Invoke-WebRequest -UseBasicParsing -Uri $mirrorUrl -Method Head -TimeoutSec 6
                 if ($mResp.StatusCode -ge 200 -and $mResp.StatusCode -lt 400) {
                     $mirrorReachable = $true
+                    $reachedMirror = $mirrorBase
                     break
                 }
             } catch { }
         }
         if ($mirrorReachable) {
-            $passed.Add('官方安装脚本地址不可访问，但国内镜像源可用。安装将自动切换到国内镜像。') | Out-Null
+            $mirrorTag = if ($reachedMirror -like '*hermes.aisuper.win*') { '自建' } else { '社区' }
+            $passed.Add(("官方源不可访问，但 {0}镜像可用 ({1})。安装将自动切换。" -f $mirrorTag, $reachedMirror)) | Out-Null
             $networkOk = $true
             $networkEnvResult = 'china'
         } else {
-            $blocking.Add('访问官方安装脚本及所有镜像源均失败。请检查网络连接后重试。') | Out-Null
+            # 任务 014 Bug H (v2026.05.04.12):阻塞文案改友好,给具体下一步
+            $blocking.Add('GitHub 官方源和全部国内镜像源都不可达。可能原因:1) 网络断开 2) 防火墙/杀毒软件拦截 3) 公司/校园网限制 GitHub。建议:换用手机热点重试,或加交流群求助(见「关于」按钮)。') | Out-Null
         }
     }
 

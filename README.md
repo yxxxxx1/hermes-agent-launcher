@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.04.11.zip`: versioned Windows download linked by `index.html` (窗口标题栏去掉版本号,版本号只在副标题保留一处,避免视觉重复。)
+- `Hermes-Windows-Launcher-v2026.05.04.12.zip`: versioned Windows download linked by `index.html` (任务 014 Bug H 修复:国内裸网用户 preflight 检测全失败被卡住——旧代码 [1..2] 漏测后两个镜像、社区镜像挂的概率高。修复:新增自建镜像 hermes.aisuper.win/mirror/install.ps1(Cloudflare 国内可达性 ~99%),作为国内首选;补 ghfast.top/gh-proxy.com 等 2026 仍活跃的社区镜像;preflight 测全部镜像;阻塞文案改友好。陷阱 #47。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

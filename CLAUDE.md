@@ -1022,6 +1022,41 @@ for name, w in {'Regular':400,'SemiBold':600,'Bold':700}.items():
 
 ---
 
+### #47 国内裸网用户 preflight 多源检测全部失败被卡住
+
+**触发条件**：国内用户(无 VPN / 公司或校园网拦截 GitHub / 防火墙等)首次安装 launcher。preflight 检测尝试访问 install.ps1 的官方源 + 社区镜像。
+
+**坑的表现**：
+- preflight 阻塞:`访问官方安装脚本及所有镜像源均失败。请检查网络连接后重试。`
+- 用户(目标受众恰好是国内不懂命令行的小白)看到这条无解 — 网络明明能上其他网站,为啥告诉我"检查网络"
+- 实际上这是 launcher 核心目标用户群,**这条 bug 让产品对绝大多数目标用户不可用**
+
+**Root cause**:
+1. **代码 bug**:`foreach ($mirrorBase in $mirrorCfg.GitHubRaw[1..2])` 只测前两个社区镜像,第三、第四个镜像没测就直接判失败
+2. **社区镜像生命周期短**:gitmirror / 99988866 / ghproxy.cn 等社区维护的镜像稳定性差,经常 503 / 跑路 / 限流
+3. **没有自建镜像兜底**:产品方完全依赖第三方镜像,失去对可达性的控制
+
+**预防动作**：
+- 新增**自建镜像**:把 install.ps1 commit 到 launcher 仓库 `mirror/NousResearch/hermes-agent/main/scripts/install.ps1`,deploy.sh 部署到 `hermes.aisuper.win/mirror/...`。Cloudflare 国内可达性 ~99%,远超社区镜像
+- 镜像列表`GitHubRaw[0]` 设为自建,优先级最高;官方源 `[1]` 海外用户用;社区镜像 `[2..n]` 兜底
+- `Test-InstallPreflight` 测**所有**镜像,不能 `[1..2]` hardcode 漏测
+- 加更多 2026 仍活跃的社区镜像(`ghfast.top`、`gh-proxy.com`)
+- 阻塞文案给具体下一步行动:`换用手机热点重试 / 加交流群求助`,而不是只说"检查网络"
+
+**自建镜像 sync 流程**:
+- 工程师手动从 PM 真机 `~/AppData/Local/hermes/hermes-agent/scripts/install.ps1` 拷贝到本仓库 mirror/
+- commit 进 git,跟 launcher 版本绑定(避免上游 install.ps1 偷偷改了破坏 launcher 假设)
+- deploy.sh 自动 cp mirror/ → Cloudflare Pages
+
+**自检盲区**:
+- 工程师本地有 VPN,测试时 raw.githubusercontent.com 通,从未触发"全镜像失败"路径
+- 全镜像失败的概率取决于工程师所处网络环境,工程师跟用户的网络环境差异巨大
+- preflight 在工程师机器上 "Passed: 已检测到官方安装脚本下载地址可访问",看不到目标用户视角的失败
+
+**踩过日期**：2026-05-05
+
+---
+
 ## 上游本地补丁清单（Upstream Local Patches）
 
 > hermes-agent 更新后这些补丁会被覆盖，需要重新应用。

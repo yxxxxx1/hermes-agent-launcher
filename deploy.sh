@@ -70,6 +70,22 @@ mkdir -p "$DEPLOY_DIR/downloads"
 cp downloads/*.zip "$DEPLOY_DIR/downloads/" 2>/dev/null || true
 cp downloads/*.tar.gz "$DEPLOY_DIR/downloads/" 2>/dev/null || true
 
+# 任务 014 Bug H (v2026.05.04.12): 部署 install.ps1 自建镜像
+# launcher 优先访问 hermes.aisuper.win/mirror/... (Cloudflare 国内可达性 ~99%,
+# 远超 GitHub raw + 社区镜像的 ~30%),解决国内裸网用户 preflight 卡死问题。
+# 见陷阱 #47。
+if [ -d "mirror" ]; then
+  cp -r mirror "$DEPLOY_DIR/mirror"
+  # 校验关键文件存在 + 大小合理(install.ps1 约 36KB,< 1KB 必失效)
+  EXPECTED_INSTALL_PS1="$DEPLOY_DIR/mirror/NousResearch/hermes-agent/main/scripts/install.ps1"
+  if [ ! -s "$EXPECTED_INSTALL_PS1" ] || [ "$(wc -c < "$EXPECTED_INSTALL_PS1")" -lt 1024 ]; then
+    echo "ERROR: $EXPECTED_INSTALL_PS1 missing or too small (mirror broken)" >&2
+    rm -rf "$DEPLOY_DIR"
+    exit 1
+  fi
+  echo "OK: mirror/install.ps1 ready ($(wc -c < "$EXPECTED_INSTALL_PS1") bytes)"
+fi
+
 # Copy macos-app if exists
 if [ -d "macos-app" ]; then
   cp -r macos-app "$DEPLOY_DIR/macos-app"
