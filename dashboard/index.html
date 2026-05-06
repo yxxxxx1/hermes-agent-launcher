@@ -240,12 +240,18 @@
   function renderStats(data) {
     const total = data.total_events || 0;
     const users = data.unique_users || 0;
-    const ratio = total > 0 ? (total / Math.max(users, 1)).toFixed(1) : '0';
+    // 任务 015 Bug I (v2026.05.06.4):换两张顶部卡 — PM 不需要"人均事件"和"失败事件",
+    // 想看"安装成功率"和"对话率"两个真正的产品指标。陷阱 #48。
+    const funnel = data.funnel || {};
+    const installed = funnel.hermes_install_completed || 0;
+    const kept5min = funnel.webui_session_kept_5min || 0;
+    const installRate = users > 0 ? Math.round(installed / users * 100) + '%' : '—';
+    const chatRate = installed > 0 ? Math.round(kept5min / installed * 100) + '%' : '—';
     const html = [
       ['独立用户', users, '范围内的去重 anonymous_id'],
       ['总事件数', total, '所有事件求和'],
-      ['人均事件', ratio, '总事件 ÷ 独立用户'],
-      ['失败事件', (data.events_by_name || []).filter(function (e) { return /failed$|^unexpected_error$/.test(e.event_name); }).reduce(function (s, e) { return s + e.count; }, 0), '*_failed + unexpected_error'],
+      ['安装成功率', installRate, installed + ' / ' + users + ' · 成功安装 ÷ 独立用户'],
+      ['对话率', chatRate, kept5min + ' / ' + installed + ' · 5 分钟有效使用 ÷ 成功安装'],
     ].map(function (row) {
       return '<div class="stat-card"><div class="stat-label">' + escapeHtml(row[0]) +
         '</div><div class="stat-value">' + escapeHtml(row[1]) +
