@@ -800,21 +800,7 @@ private struct AboutSheet: View {
                         aboutRow(label: "©", value: "2026 · MIT License")
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("隐私与数据")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(LauncherPalette.textSecondary)
-                        Text("[ 文案占位 — 详细公示由 macos-launcher-telemetry 提案设计；本期仅占视觉位置，不留开关交互。等数据上报方案落地后再补 ]")
-                            .font(.system(size: 11, design: .rounded))
-                            .foregroundStyle(LauncherPalette.textTertiary)
-                            .lineSpacing(2)
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(LauncherPalette.lineSoft, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                    )
+                    PrivacySection()
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 18)
@@ -878,6 +864,65 @@ private struct AboutSheet: View {
                 .font(.system(size: 11, design: .rounded))
                 .foregroundStyle(LauncherPalette.textSecondary)
         }
+    }
+}
+
+// MARK: - About: privacy & telemetry section
+
+private struct PrivacySection: View {
+    @State private var telemetryEnabled: Bool = TelemetryClient.shared.isEnabled
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("匿名使用数据上报")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LauncherPalette.textPrimary)
+                    Text(telemetryEnabled ? "已开启 — 帮助改进产品" : "已关闭 — 不上报任何数据")
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(telemetryEnabled ? LauncherPalette.success : LauncherPalette.textTertiary)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: $telemetryEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .onChange(of: telemetryEnabled) { newValue in
+                        TelemetryClient.shared.isEnabled = newValue
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("我们收集")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                Text("匿名 ID（一台机一组随机字符）· 程序事件名（如 webui_started）· 错误原因（已脱敏：移除 sk-/Bearer/api_key/token/password、用户名、邮箱、IP、文件路径里的真实用户名）· 启动器版本 · macOS 大版本 · 内存档位")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textTertiary)
+                    .lineSpacing(2)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("我们不收集")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                Text("对话内容 · 模型 API key · token / password / secret · 文件路径里的用户名 · 邮箱 · 原始 IP（边缘加盐 SHA256 截断后只存 ip_hash 用于按机去重，原始 IP 不入库）")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textTertiary)
+                    .lineSpacing(2)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(LauncherPalette.surfaceSecondary.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(LauncherPalette.lineSoft, lineWidth: 1)
+        )
     }
 }
 

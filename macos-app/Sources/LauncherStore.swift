@@ -16,16 +16,36 @@ final class LauncherStore: ObservableObject {
     private var stdoutBuffer: String = ""
     private var pendingFields: [String: String] = [:]
     private var elapsedTimer: Timer?
+    private var sessionKept5MinTimer: Timer?
+    /// Track installed-state transitions so we only fire `hermes_install_completed` on the
+    /// transition `false → true`, not on every refresh that happens to see installed=true.
+    private var lastSeenInstalled: Bool? = nil
+    /// Capture the final `LAST_RESULT` value we've already reported, so we don't re-fire
+    /// hermes_install_failed on every refresh while LAST_STAGE=install LAST_RESULT=failed sits in state.env.
+    private var reportedInstallResult: String? = nil
 
     init(projectRoot: URL = LauncherStore.resolveProjectRoot()) {
         self.projectRoot = projectRoot
         self.launcherScript = projectRoot.appendingPathComponent("HermesMacGuiLauncher.command")
+        // Telemetry: record that the launcher window/app came up. Sent at most once per session.
+        TelemetryClient.shared.sendOnce(.launcherOpened)
+        // Telemetry: record program shutdown. NSApplication.willTerminate fires before exit.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                TelemetryClient.shared.send(.launcherClosed)
+            }
+        }
         refresh()
     }
 
     deinit {
         refreshTimer?.invalidate()
         elapsedTimer?.invalidate()
+        sessionKept5MinTimer?.invalidate()
     }
 
     nonisolated private static func resolveProjectRoot() -> URL {
@@ -69,6 +89,24 @@ final class LauncherStore: ObservableObject {
         let webuiInstalled = fields["webui_installed"] == "true"
         let webuiRunning = fields["webui_running"] == "true"
         let lastResult = fields["last_result"] ?? "idle"
+        let lastStage = fields["last_stage"] ?? ""
+
+        // Telemetry — Hermes-install transition events.
+        // hermes_install_completed: fire on the false→true transition of `installed`.
+        if let prior = lastSeenInstalled, !prior, installed {
+            TelemetryClient.shared.send(.hermesInstallCompleted)
+        }
+        lastSeenInstalled = installed
+        // hermes_install_failed: fire when the most recent terminal action was install + failed,
+        // de-duplicated by stage+result tuple so we don't re-fire on every refresh.
+        if lastStage == "install" && lastResult == "failed" && reportedInstallResult != "install:failed" {
+            reportedInstallResult = "install:failed"
+            TelemetryClient.shared.send(.hermesInstallFailed,
+                                        failureReason: fields["last_log_path"] ?? "")
+        }
+        if lastStage == "install" && lastResult == "success" && reportedInstallResult != "install:success" {
+            reportedInstallResult = "install:success"
+        }
 
         var snap = LauncherSnapshot()
         snap.dataDirectory = NSHomeDirectory() + "/.hermes"
@@ -190,6 +228,8 @@ final class LauncherStore: ObservableObject {
     // MARK: - Install (Stage-1 install Hermes via Terminal flow)
 
     private func startInstall() {
+        // Telemetry: install kicked off.
+        TelemetryClient.shared.send(.hermesInstallStarted)
         runLauncher(arguments: ["--dispatch-action", "install"], updateBusy: true) { [weak self] _ in
             self?.refresh()
         }
@@ -200,12 +240,20 @@ final class LauncherStore: ObservableObject {
     func launch() {
         guard launchProcess == nil else { return }
 
+        // Telemetry: preflight starts each time the user presses launch. Reset once-flags so
+        // webui_started / 5min-kept can fire again for this new session.
+        TelemetryClient.shared.clearOnceFlags()
+        TelemetryClient.shared.send(.preflightCheck)
+
         // Clear any persisted mismatch from a previous run; it'll be re-set if the new launch
         // also fails verification.
         snapshot.platformMismatch = nil
         snapshot.launchProgress = makeInitialLaunchProgress()
         snapshot.heroState = .inProgress
         snapshot.webuiStatus = "正在启动"
+        // Cancel any prior 5-min timer; a fresh launch resets the proxy clock.
+        sessionKept5MinTimer?.invalidate()
+        sessionKept5MinTimer = nil
         startElapsedTimer()
 
         let process = Process()
@@ -342,6 +390,17 @@ final class LauncherStore: ObservableObject {
              "verify_platforms", "gateway_allow_all_users":
             applyPlatformEvent(phaseToken: phaseToken, status: statusRaw, pairs: pairs)
             return
+        case "restart_gateway":
+            // Telemetry: bash auto-restarts the gateway after installing new messaging deps.
+            switch statusRaw {
+            case "ok":
+                TelemetryClient.shared.send(.gatewayStarted, properties: ["trigger": "post_install"])
+            case "failed":
+                TelemetryClient.shared.send(.gatewayFailed,
+                                            failureReason: pairs["REASON"] ?? "")
+            default: break
+            }
+            return
         default: break
         }
 
@@ -379,11 +438,28 @@ final class LauncherStore: ObservableObject {
                 if progress.rowStatus[2] == .pending { progress.rowStatus[2] = .skipped }
                 progress.rowDetail[2] = "已使用缓存"
             }
+            // Telemetry: webui_started fires when the daemon's /health responds.
+            // wait_healthy ok = the explicit "daemon is up" signal from bash;
+            // start_webui ok DETAIL=already_running = same daemon was healthy on launch entry.
+            if phase == .waitHealthy ||
+                (phase == .startWebUI && detail.hasPrefix("already_running")) {
+                TelemetryClient.shared.sendOnce(.webuiStarted, properties: [
+                    "node_runtime_kind": snapshot.nodeRuntimeKind,
+                    "webui_version": snapshot.webuiVersion,
+                ])
+                schedule5MinKeepAliveTelemetry()
+            }
         case "failed":
             progress.rowStatus[row] = .failed
             progress.failureReason = pairs["REASON"]
             if !detail.isEmpty {
                 progress.rowDetail[row] = displayDetail(for: phase, raw: detail)
+            }
+            // Telemetry: webui_failed when start_webui or wait_healthy fails.
+            if phase == .startWebUI || phase == .waitHealthy {
+                TelemetryClient.shared.send(.webuiFailed,
+                                            properties: ["phase": phase.rawValue],
+                                            failureReason: pairs["REASON"] ?? "unknown")
             }
         default:
             break
@@ -522,6 +598,22 @@ final class LauncherStore: ObservableObject {
         }
     }
 
+    /// Schedule the 5-minute keep-alive event. After webui_started, if `/health` still responds
+    /// 5 minutes later, fire `webui_session_kept_5min` once. This is the "did the user actually
+    /// use the WebUI" proxy event — the launcher can't observe browser activity.
+    private func schedule5MinKeepAliveTelemetry() {
+        sessionKept5MinTimer?.invalidate()
+        sessionKept5MinTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                // Only fire if WebUI is still actually running (defensive).
+                if self.snapshot.heroState == .running {
+                    TelemetryClient.shared.sendOnce(.webuiSessionKept5Min)
+                }
+            }
+        }
+    }
+
     private func finishLaunch(exitCode: Int32) {
         stdoutBuffer = ""
         launchProcess = nil
@@ -540,6 +632,13 @@ final class LauncherStore: ObservableObject {
             snapshot.launchProgress = progress
             let reason = progress?.failureReason ?? "exit_\(exitCode)"
             snapshot.heroState = .error(reason: reason, message: humanMessage(forReason: reason))
+            // Telemetry: catch-all fail event when we don't have a more specific webui_failed.
+            // (Specific phase failures already reported in applyStageEvent.)
+            if !["health_timeout", "bin_exit_1", "bin_missing"].contains(where: reason.contains) {
+                TelemetryClient.shared.send(.unexpectedError,
+                                            properties: ["context": "finish_launch"],
+                                            failureReason: reason)
+            }
             return
         }
 
