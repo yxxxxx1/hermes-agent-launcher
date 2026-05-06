@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.06.2.zip`: versioned Windows download linked by `index.html` (任务 015 Bug G：项目开源准备。关于对话框 Hero 之后加「开源项目 · MIT 协议」卡片,显示 GitHub 仓库地址 `https://github.com/yxxxxx1/hermes-agent-launcher`,点击 Hyperlink 调 Open-BrowserUrlSafe 打开浏览器。)
+- `Hermes-Windows-Launcher-v2026.05.06.3.zip`: versioned Windows download linked by `index.html` (Hotfix v2026.05.06.2 关于对话框打不开。新加的 GitHub 卡片用了 `{StaticResource AccentBrush}`,但该对话框 Window.Resources 里只定义了 `AccentPrimaryBrush` / `AccentDeepBrush`,没 AccentBrush → XamlReader.Load 抛 ResourceReferenceKeyNotFoundException → 关于按钮无响应。改成 AccentPrimaryBrush 修复。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 
