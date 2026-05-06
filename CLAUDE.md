@@ -1412,6 +1412,7 @@ Select-String -Path "$hermesDir\tools\browser_tool.py" -Pattern 'agent-browser.c
 - 中文显示是否乱码
 - 高 DPI 屏幕的缩放表现
 - 暗色/浅色主题切换
+- **Lazy-loaded 二级 XAML 弹窗(关于对话框 / 二级 MessageBox / 自定义对话框)** — SelfTest 只 Load 主窗口 XAML,二级弹窗在用户点按钮时才 Load,新加 `{StaticResource X}` 引用时 SelfTest 看不到错。预防:改完二级弹窗 XAML 必须 grep StaticResource 引用 vs 该弹窗 Window.Resources 的 x:Key,差集为空才能发版
 
 ### 环境类盲区
 - 真实 Windows 环境的进程行为
