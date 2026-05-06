@@ -118,7 +118,7 @@ The first version binds WebUI to `127.0.0.1` only. It does not expose WebUI on t
 Current downloadable artifacts live in `downloads/`:
 
 - `Hermes-Windows-Launcher.zip`: stable Windows download link used as the fallback link on `index.html`
-- `Hermes-Windows-Launcher-v2026.05.06.3.zip`: versioned Windows download linked by `index.html` (Hotfix v2026.05.06.2 关于对话框打不开。新加的 GitHub 卡片用了 `{StaticResource AccentBrush}`,但该对话框 Window.Resources 里只定义了 `AccentPrimaryBrush` / `AccentDeepBrush`,没 AccentBrush → XamlReader.Load 抛 ResourceReferenceKeyNotFoundException → 关于按钮无响应。改成 AccentPrimaryBrush 修复。)
+- `Hermes-Windows-Launcher-v2026.05.06.4.zip`: versioned Windows download linked by `index.html` (PM 反馈 v2026.05.06.3 关于对话框「我们收集」列写"基于 IP 推断的国家/省份",同时「我们不收集」列写"IP 地址 / 邮箱",用户读起来矛盾。本版采用 B 方案:「我们收集」改成"从 IP 推断的国家 / 省份(原始 IP 不存储)";「我们不收集」改成"原始 IP 地址 / 邮箱"。技术真相是 Worker 边缘 SHA256+加盐+截断 8 字节存 ip_hash 用于按机去重,原始 IP 完全不入库,country/region 是 CF 边缘从 IP 算出后给我们的字符串。)
 - `Hermes-macOS-Launcher.tar.gz`: primary macOS download linked by `index.html`
 - `Hermes-macOS-Launcher.zip`: alternate macOS archive
 

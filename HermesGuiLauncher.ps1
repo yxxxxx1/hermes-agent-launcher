@@ -22,7 +22,7 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:LauncherVersion = 'Windows v2026.05.06.3'
+$script:LauncherVersion = 'Windows v2026.05.06.4'
 
 # P1-2-LITE fix: strict mode 下必须预初始化，否则 Stop-InstallSpinner 读未设置变量会抛
 $script:InstallSpinnerTimer  = $null
@@ -6874,7 +6874,7 @@ function Show-AboutDialog {
                                         <Run Text="• 启动器 / Windows 版本号"/><LineBreak/>
                                         <Run Text="• 失败事件的脱敏后错误类型"/><LineBreak/>
                                         <Run Text="• 一次性匿名设备 ID"/><LineBreak/>
-                                        <Run Text="• 基于 IP 推断的国家 / 省份"/>
+                                        <Run Text="• 从 IP 推断的国家 / 省份(原始 IP 不存储)"/>
                                     </TextBlock>
                                 </StackPanel>
                             </Border>
@@ -6899,7 +6899,7 @@ function Show-AboutDialog {
                                         <Run Text="• API key / token / 密码"/><LineBreak/>
                                         <Run Text="• 对话内容 / 聊天记录"/><LineBreak/>
                                         <Run Text="• 用户名 / 机器名 / 路径"/><LineBreak/>
-                                        <Run Text="• IP 地址 / 邮箱"/>
+                                        <Run Text="• 原始 IP 地址 / 邮箱"/>
                                     </TextBlock>
                                 </StackPanel>
                             </Border>
