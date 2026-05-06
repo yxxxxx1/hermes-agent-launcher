@@ -3,29 +3,86 @@
 set -euo pipefail
 
 APP_TITLE="Hermes Agent macOS 轻量启动器"
-LAUNCHER_VERSION="macOS v2026.04.19.2"
+LAUNCHER_VERSION="macOS v2026.05.06.5"
 OFFICIAL_INSTALL_URL="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 OFFICIAL_REPO_URL="https://github.com/NousResearch/hermes-agent"
 OFFICIAL_DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
-WEBUI_REPO_URL="https://github.com/nesquena/hermes-webui.git"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 SELF_PATH="$SELF_DIR/$(basename "$0")"
 
 DEFAULT_HERMES_HOME="$HOME/.hermes"
 DEFAULT_INSTALL_DIR="$DEFAULT_HERMES_HOME/hermes-agent"
-DEFAULT_WEBUI_DIR="$DEFAULT_HERMES_HOME/hermes-webui"
-DEFAULT_WEBUI_STATE_DIR="$DEFAULT_HERMES_HOME/webui"
 
 HERMES_HOME="${HERMES_HOME:-$DEFAULT_HERMES_HOME}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-WEBUI_DIR="${HERMES_WEBUI_DIR:-$DEFAULT_WEBUI_DIR}"
-WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-$DEFAULT_WEBUI_STATE_DIR}"
+
+# Hermes Agent install branch (used by launch_install for the official installer + manual fallback).
+BRANCH="main"
+
+# Track D: pin hermes-agent to a known-good commit. "HEAD" means follow the branch (no checkout).
+# Bump this string after smoke-testing each upgrade. The "检查更新" footer entry shows newer commits.
+HERMES_AGENT_PINNED_COMMIT="HEAD"
+
+# Track A: messaging-platform → pip-package mapping.
+# Each row is "ENV_VAR_KEY:python_module:pip_packages_space_separated".
+# `WEIXIN_*` and `WECOM_*` rows have an empty pip-package field — they are zero-dep (D3) and only
+# verify env-var presence. Empty pip field === skip the install step.
+GATEWAY_PLATFORM_MAP=(
+    "TELEGRAM_BOT_TOKEN:telegram:python-telegram-bot[webhooks]"
+    "FEISHU_APP_ID:lark_oapi:lark-oapi"
+    "DISCORD_BOT_TOKEN:discord:discord.py[voice]"
+    "SLACK_BOT_TOKEN:slack_bolt:slack-bolt slack-sdk"
+    "DINGTALK_CLIENT_ID:dingtalk_stream:dingtalk-stream alibabacloud-dingtalk"
+    "WEIXIN_ACCOUNT_ID::"
+    "WEIXIN_TOKEN::"
+    "WECOM_BOT_ID::"
+)
+
+# Friendly Chinese names for STAGE events / UI fallback when only the env-var key is known.
+GATEWAY_PLATFORM_LABELS=(
+    "TELEGRAM_BOT_TOKEN:Telegram"
+    "FEISHU_APP_ID:飞书"
+    "DISCORD_BOT_TOKEN:Discord"
+    "SLACK_BOT_TOKEN:Slack"
+    "DINGTALK_CLIENT_ID:钉钉"
+    "WEIXIN_ACCOUNT_ID:微信"
+    "WEIXIN_TOKEN:微信"
+    "WECOM_BOT_ID:企业微信"
+)
+
+# --- Node.js runtime (M1, M2) ---
+NODE_REQUIRED_MAJOR=23
+NODE_PORTABLE_VERSION="v23.11.0"
+NODE_DIST_BASE="https://nodejs.org/dist/${NODE_PORTABLE_VERSION}"
+LAUNCHER_RUNTIME_DIR="$HERMES_HOME/launcher-runtime"
+NODE_INSTALL_DIR="$LAUNCHER_RUNTIME_DIR/node"
+NPM_PREFIX="$LAUNCHER_RUNTIME_DIR/npm-prefix"
+RUNTIME_CACHE_DIR="$LAUNCHER_RUNTIME_DIR/cache"
+RUNTIME_INSTALL_LOG="$LAUNCHER_RUNTIME_DIR/install.log"
+# From https://nodejs.org/dist/v23.11.0/SHASUMS256.txt
+NODE_SHA256_DARWIN_ARM64="635990b46610238e3c008cd01480c296e0c2bfe7ec59ea9a8cd789d5ac621bb0"
+NODE_SHA256_DARWIN_X64="a5782655748d4602c1ee1ee62732e0a16d29d3e4faac844db395b0fbb1c9dab8"
+
+# --- Hermes WebUI npm package (M3, M4, M5) ---
+WEBUI_NPM_PACKAGE="hermes-web-ui"
+WEBUI_NPM_VERSION="0.5.9"
 WEBUI_HOST="${HERMES_WEBUI_HOST:-127.0.0.1}"
-WEBUI_PORT="${HERMES_WEBUI_PORT:-8787}"
-WEBUI_LANGUAGE="${HERMES_WEBUI_LANGUAGE:-zh}"
+WEBUI_PORT="${HERMES_WEBUI_PORT:-8648}"
 WEBUI_URL="http://localhost:$WEBUI_PORT"
 WEBUI_HEALTH_URL="http://$WEBUI_HOST:$WEBUI_PORT/health"
-BRANCH="main"
+WEBUI_BIN="$NPM_PREFIX/bin/hermes-web-ui"
+WEBUI_HOME_DIR="$HOME/.hermes-web-ui"
+WEBUI_TOKEN_FILE="$WEBUI_HOME_DIR/.token"
+WEBUI_PID_FILE="$WEBUI_HOME_DIR/server.pid"
+WEBUI_SERVER_LOG="$WEBUI_HOME_DIR/server.log"
+
+# Resolved at runtime by detect_node_runtime / download_portable_node / select_npm_registry.
+NODE_BIN=""
+NPM_BIN=""
+NODE_RUNTIME_KIND="missing"
+NODE_RUNTIME_VERSION=""
+NPM_REGISTRY=""
+
 LAUNCHER_LOG_DIR="$HERMES_HOME/logs/launcher"
 LAUNCHER_STATE_FILE="$LAUNCHER_LOG_DIR/state.env"
 LAST_ACTION_SUMMARY="启动器已就绪"
@@ -257,29 +314,23 @@ html_escape() {
 
 ui_primary_copy() {
     local state="$1"
-    local installed model_ready
+    local installed
     installed="$(state_get installed "$state")"
-    model_ready="$(state_get model_ready "$state")"
 
     if [[ "$installed" != "true" ]]; then
         printf '继续安装\n'
-    elif [[ "$model_ready" != "true" ]]; then
-        printf '继续配置模型\n'
     else
-        printf '开始第一次对话\n'
+        printf '启动浏览器对话\n'
     fi
 }
 
 next_primary_key() {
     local state="$1"
-    local installed model_ready
+    local installed
     installed="$(state_get installed "$state")"
-    model_ready="$(state_get model_ready "$state")"
 
     if [[ "$installed" != "true" ]]; then
         printf 'install\n'
-    elif [[ "$model_ready" != "true" ]]; then
-        printf 'model\n'
     else
         printf 'chat\n'
     fi
@@ -287,8 +338,8 @@ next_primary_key() {
 
 ui_status_class() {
     case "$1" in
-        "已完成") printf 'complete\n' ;;
-        "进行中"|"待完成"|"可以开始") printf 'active\n' ;;
+        "已完成"|"已在运行") printf 'complete\n' ;;
+        "进行中"|"待完成"|"可以启动"|"待安装") printf 'active\n' ;;
         *) printf 'muted\n' ;;
     esac
 }
@@ -297,20 +348,20 @@ write_native_ui_html() {
     local state="$1"
     local primary_key="$2"
     local html_path="$3"
-    local installed model_ready gateway_configured gateway_running
-    local install_line model_line chat_line gateway_line support_line current_step primary_copy
-    local install_class model_class chat_class
+    local installed webui_installed webui_running webui_url node_runtime_kind webui_version
+    local install_line launch_line current_step primary_copy
+    local install_class launch_class
 
     installed="$(state_get installed "$state")"
-    model_ready="$(state_get model_ready "$state")"
-    gateway_configured="$(state_get gateway_configured "$state")"
-    gateway_running="$(state_get gateway_running "$state")"
+    webui_installed="$(state_get webui_installed "$state")"
+    webui_running="$(state_get webui_running "$state")"
+    webui_url="$(state_get webui_url "$state")"
+    node_runtime_kind="$(state_get node_runtime_kind "$state")"
+    webui_version="$(state_get webui_version "$state")"
+    [[ -z "$webui_url" ]] && webui_url="$WEBUI_URL"
 
     install_line="未开始"
-    model_line="等待安装完成"
-    chat_line="尚不可用"
-    gateway_line="暂未配置"
-    support_line="日常使用暂不需要"
+    launch_line="尚不可用"
     current_step="继续安装"
     primary_copy="$(ui_primary_copy "$state")"
 
@@ -320,35 +371,34 @@ write_native_ui_html() {
         install_line="已完成"
     fi
 
-    if [[ "$installed" == "true" && "$model_ready" == "false" ]]; then
-        model_line="待完成"
-    fi
-    if [[ "$LAST_STAGE" == "model" && "$LAST_RESULT" == "running" ]]; then
-        model_line="进行中"
-    elif [[ "$model_ready" == "true" ]]; then
-        model_line="已完成"
-        chat_line="可以开始"
-    fi
-
-    if [[ "$gateway_configured" == "true" ]]; then
-        gateway_line="已配置"
-        if [[ "$gateway_running" == "true" ]]; then
-            gateway_line="已配置，当前在线"
+    if [[ "$installed" == "true" ]]; then
+        if [[ "$webui_running" == "true" ]]; then
+            launch_line="已在运行"
+            current_step="打开浏览器对话"
+        elif [[ "$webui_installed" == "true" ]]; then
+            launch_line="可以启动"
+            current_step="启动浏览器对话"
+        else
+            launch_line="待安装"
+            current_step="启动浏览器对话"
         fi
     fi
 
-    if [[ "$installed" != "true" ]]; then
-        current_step="继续安装"
-    elif [[ "$model_ready" != "true" ]]; then
-        current_step="继续配置模型"
-    else
-        current_step="开始第一次对话"
-        support_line="可选，用于维护与消息渠道"
+    if [[ "$LAST_STAGE" == "chat" && "$LAST_RESULT" == "running" ]]; then
+        launch_line="进行中"
     fi
 
     install_class="$(ui_status_class "$install_line")"
-    model_class="$(ui_status_class "$model_line")"
-    chat_class="$(ui_status_class "$chat_line")"
+    launch_class="$(ui_status_class "$launch_line")"
+
+    local runtime_label="未检测"
+    case "$node_runtime_kind" in
+        system) runtime_label="系统 Node" ;;
+        portable) runtime_label="便携 Node" ;;
+        missing) runtime_label="未检测" ;;
+        *) runtime_label="${node_runtime_kind:-未检测}" ;;
+    esac
+    local webui_version_label="${webui_version:-未安装}"
 
     cat >"$html_path" <<EOF
 <!doctype html>
@@ -505,7 +555,7 @@ write_native_ui_html() {
     .dashboard {
       padding: 22px;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 14px;
     }
     .stage {
@@ -650,23 +700,15 @@ write_native_ui_html() {
           <span class="pill $install_class">$(html_escape "$install_line")</span>
         </div>
         <h2>安装 Hermes</h2>
-        <p>把运行环境和命令入口准备好。完成后，启动器会自动引导你进入模型配置。</p>
+        <p>把运行环境和命令入口准备好。完成后，启动器会自动准备浏览器对话。</p>
       </article>
       <article class="stage">
         <div class="stage-top">
           <span class="stage-index">Stage 02</span>
-          <span class="pill $model_class">$(html_escape "$model_line")</span>
+          <span class="pill $launch_class">$(html_escape "$launch_line")</span>
         </div>
-        <h2>配置模型</h2>
-        <p>选择 provider 和默认模型。只要配置完成，后面的浏览器对话就可以直接开始。</p>
-      </article>
-      <article class="stage">
-        <div class="stage-top">
-          <span class="stage-index">Stage 03</span>
-          <span class="pill $chat_class">$(html_escape "$chat_line")</span>
-        </div>
-        <h2>开始第一次对话</h2>
-        <p>打开浏览器里的 Hermes WebUI。看到对话入口，就表示这套环境已经可以用了。</p>
+        <h2>启动浏览器对话</h2>
+        <p>打开 Hermes WebUI。模型与渠道配置都在浏览器里完成，启动器只负责把它拉起来。</p>
       </article>
     </section>
 
@@ -675,12 +717,16 @@ write_native_ui_html() {
         <h3>当前状态</h3>
         <div class="list">
           <div class="row">
-            <div class="row-label">消息渠道</div>
-            <div class="row-value">$(html_escape "$gateway_line")</div>
+            <div class="row-label">浏览器对话</div>
+            <div class="row-value">$(html_escape "$webui_url")</div>
           </div>
           <div class="row">
-            <div class="row-label">维护入口</div>
-            <div class="row-value">$(html_escape "$support_line")</div>
+            <div class="row-label">Node 运行时</div>
+            <div class="row-value">$(html_escape "$runtime_label")</div>
+          </div>
+          <div class="row">
+            <div class="row-label">WebUI 版本</div>
+            <div class="row-value">$(html_escape "$webui_version_label")</div>
           </div>
           <div class="row">
             <div class="row-label">数据目录</div>
@@ -696,15 +742,15 @@ write_native_ui_html() {
       <section class="panel surface maintenance">
         <div>
           <h3>维护与高级选项</h3>
-          <p class="fineprint">这些动作留给维护、排查和消息渠道配置。首次使用时，一般不需要先进入这里。</p>
+          <p class="fineprint">这些动作留给维护与排查。首次使用时一般不需要先进入这里；模型与渠道配置都在浏览器对话里完成。</p>
         </div>
         <div class="maintenance-grid">
           <button data-action="doctor">诊断问题</button>
           <button data-action="update">更新 Hermes</button>
           <button data-action="setup">重新执行完整设置</button>
           <button data-action="tools">配置 tools</button>
-          <button data-action="gateway_setup">配置消息渠道</button>
-          <button data-action="gateway_run">打开消息网关</button>
+          <button data-action="stop_webui">停止浏览器对话</button>
+          <button data-action="restart_webui">重启浏览器对话</button>
           <button data-action="open_config">打开 config.yaml</button>
           <button data-action="open_env">打开 .env</button>
           <button data-action="open_logs">打开日志目录</button>
@@ -865,173 +911,303 @@ is_installed() {
     [[ -n "${1:-}" ]]
 }
 
-test_model_ready() {
-    local config_path="$HERMES_HOME/config.yaml"
-    local env_path="$HERMES_HOME/.env"
-    local auth_path="$HERMES_HOME/auth.json"
-    local has_model="false"
-    local has_api="false"
-
-    if [[ -f "$config_path" ]]; then
-        if grep -Eq '^[[:space:]]*model[[:space:]]*:' "$config_path" && grep -Eq '^[[:space:]]+default[[:space:]]*:[[:space:]]*\S+' "$config_path"; then
-            has_model="true"
-        elif grep -Eq '^[[:space:]]+model[[:space:]]*:[[:space:]]*\S+' "$config_path"; then
-            has_model="true"
-        fi
-    fi
-
-    if [[ -f "$env_path" ]] && grep -Eq '^[[:space:]]*[A-Z0-9_]*API_KEY[[:space:]]*=[[:space:]]*[^#[:space:]]+' "$env_path"; then
-        has_api="true"
-    fi
-
-    if [[ "$has_api" != "true" && -f "$auth_path" ]] && command -v python3 >/dev/null 2>&1; then
-        if python3 - "$auth_path" <<'PY'
-import json, sys
-path = sys.argv[1]
-try:
-    data = json.load(open(path, 'r', encoding='utf-8'))
-    provider = data.get('active_provider')
-    entry = (data.get('providers') or {}).get(provider or '', {})
-    ok = any(entry.get(k) for k in ('access_token', 'agent_key', 'api_key', 'refresh_token'))
-    sys.exit(0 if ok else 1)
-except Exception:
-    sys.exit(1)
-PY
-        then
-            has_api="true"
-        fi
-    fi
-
-    if [[ "$has_model" == "true" && "$has_api" == "true" ]]; then
-        printf 'true\n'
-    else
-        printf 'false\n'
-    fi
-}
-
-detect_gateway_configured() {
-    local env_path="$HERMES_HOME/.env"
-    if [[ ! -f "$env_path" ]]; then
-        printf 'false\n'
-        return
-    fi
-
-    if grep -Eq '^[[:space:]]*(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN|SLACK_BOT_TOKEN|WEIXIN_ACCOUNT_ID|WHATSAPP_ENABLED|MATRIX_HOMESERVER_URL|DINGTALK_CLIENT_ID|FEISHU_APP_ID|WECOM_BOT_ID|BLUEBUBBLES_SERVER_URL)[[:space:]]*=' "$env_path"; then
-        printf 'true\n'
-    else
-        printf 'false\n'
-    fi
-}
-
-detect_gateway_running() {
-    if pgrep -af 'hermes.*gateway|venv/bin/python.*gateway|python.*gateway.run' >/dev/null 2>&1; then
-        printf 'true\n'
-    else
-        printf 'false\n'
-    fi
-}
-
-detect_webui_installed() {
-    if [[ -f "$WEBUI_DIR/bootstrap.py" && -f "$WEBUI_DIR/server.py" ]]; then
-        printf 'true\n'
-    else
-        printf 'false\n'
-    fi
-}
-
-find_webui_python() {
-    if [[ -n "${HERMES_WEBUI_PYTHON:-}" && -x "${HERMES_WEBUI_PYTHON:-}" ]]; then
-        printf '%s\n' "$HERMES_WEBUI_PYTHON"
-        return 0
-    fi
-
-    local candidates=(
-        "$INSTALL_DIR/venv/bin/python"
-        "$WEBUI_DIR/.venv/bin/python"
-        "$WEBUI_DIR/venv/bin/python"
-    )
-    local candidate=""
-    for candidate in "${candidates[@]}"; do
-        if [[ -x "$candidate" ]]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
+emit_stage() {
+    # STAGE:<phase> STATUS=<s> [DETAIL=...] [PROGRESS=N] [URL=...] [REASON=...]
+    local phase="$1"
+    local status="$2"
+    shift 2
+    local extras=""
+    local kv=""
+    for kv in "$@"; do
+        [[ -z "$kv" ]] && continue
+        extras+=" $kv"
     done
-
-    if command -v python3 >/dev/null 2>&1; then
-        command -v python3
-        return 0
-    fi
-
-    if command -v python >/dev/null 2>&1; then
-        command -v python
-        return 0
-    fi
-
-    return 1
+    printf 'STAGE:%s STATUS=%s%s\n' "$phase" "$status" "$extras"
 }
 
-webui_health_check() {
-    local python_cmd=""
-    python_cmd="$(find_webui_python 2>/dev/null || true)"
-    if [[ -z "$python_cmd" ]]; then
+# --- Node.js runtime detection (M1) ---
+detect_node_runtime() {
+    NODE_BIN=""
+    NPM_BIN=""
+    NODE_RUNTIME_KIND="missing"
+    NODE_RUNTIME_VERSION=""
+
+    local sys_node=""
+    sys_node="$(command -v node 2>/dev/null || true)"
+    if [[ -z "$sys_node" || ! -x "$sys_node" ]]; then
         return 1
     fi
 
-    "$python_cmd" - "$WEBUI_HEALTH_URL" <<'PY'
-import sys
-import urllib.request
+    local version_string=""
+    version_string="$("$sys_node" -v 2>/dev/null || true)"
+    if [[ -z "$version_string" ]]; then
+        return 1
+    fi
 
-url = sys.argv[1]
-try:
-    with urllib.request.urlopen(url, timeout=1.5) as response:
-        body = response.read()
-    raise SystemExit(0 if b'"status": "ok"' in body else 1)
-except Exception:
-    raise SystemExit(1)
-PY
-}
+    local major="${version_string#v}"
+    major="${major%%.*}"
+    if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if (( major < NODE_REQUIRED_MAJOR )); then
+        return 1
+    fi
 
-is_webui_port_listening() {
-    lsof -nP -iTCP:"$WEBUI_PORT" -sTCP:LISTEN >/dev/null 2>&1
-}
-
-set_webui_port() {
-    WEBUI_PORT="$1"
-    WEBUI_URL="http://localhost:$WEBUI_PORT"
-    WEBUI_HEALTH_URL="http://$WEBUI_HOST:$WEBUI_PORT/health"
-}
-
-select_webui_port_for_launch() {
-    local log_path="$1"
-    local base_port="$WEBUI_PORT"
-    local candidate=""
-
-    for candidate in $(seq "$base_port" $((base_port + 9))); do
-        set_webui_port "$candidate"
-        if webui_health_check; then
-            if [[ "$(detect_webui_installed)" == "true" ]]; then
-                echo "发现可用的 Hermes 对话服务：$WEBUI_URL" >>"$log_path"
-                return 0
-            fi
-            echo "端口 $WEBUI_PORT 已有服务响应，但不是启动器管理的对话界面，尝试下一个端口。" >>"$log_path"
-            continue
+    local node_dir
+    node_dir="$(dirname "$sys_node")"
+    local sys_npm="$node_dir/npm"
+    if [[ ! -x "$sys_npm" ]]; then
+        sys_npm="$(command -v npm 2>/dev/null || true)"
+        if [[ -z "$sys_npm" || ! -x "$sys_npm" ]]; then
+            return 1
         fi
-        if is_webui_port_listening; then
-            echo "端口 $WEBUI_PORT 已被其他服务占用，尝试下一个端口。" >>"$log_path"
-            continue
+        if [[ "$(dirname "$sys_npm")" != "$node_dir" ]]; then
+            return 1
         fi
-        echo "选择端口 $WEBUI_PORT 启动 Hermes 对话服务。" >>"$log_path"
+    fi
+
+    NODE_BIN="$sys_node"
+    NPM_BIN="$sys_npm"
+    NODE_RUNTIME_KIND="system"
+    NODE_RUNTIME_VERSION="$version_string"
+    return 0
+}
+
+# --- Node.js portable download (M2) ---
+download_portable_node() {
+    local arch_tag=""
+    local expected_sha=""
+    case "$(uname -m)" in
+        arm64)
+            arch_tag="darwin-arm64"
+            expected_sha="$NODE_SHA256_DARWIN_ARM64"
+            ;;
+        x86_64)
+            arch_tag="darwin-x64"
+            expected_sha="$NODE_SHA256_DARWIN_X64"
+            ;;
+        *)
+            emit_stage download_node failed "REASON=unsupported_arch_$(uname -m)"
+            return 1
+            ;;
+    esac
+
+    local tarball="node-${NODE_PORTABLE_VERSION}-${arch_tag}.tar.gz"
+    local url="${NODE_DIST_BASE}/${tarball}"
+    local cache_path="$RUNTIME_CACHE_DIR/$tarball"
+    local extract_root="$NODE_INSTALL_DIR/${NODE_PORTABLE_VERSION}-${arch_tag}"
+
+    mkdir -p "$RUNTIME_CACHE_DIR" "$NODE_INSTALL_DIR"
+
+    if [[ -x "$extract_root/bin/node" && -x "$extract_root/bin/npm" ]]; then
+        NODE_BIN="$extract_root/bin/node"
+        NPM_BIN="$extract_root/bin/npm"
+        NODE_RUNTIME_KIND="portable"
+        NODE_RUNTIME_VERSION="$NODE_PORTABLE_VERSION"
+        emit_stage download_node ok "DETAIL=cached_${arch_tag}"
         return 0
-    done
+    fi
 
-    set_webui_port "$base_port"
-    echo "端口 $base_port-$((base_port + 9)) 都不可用，无法启动 Hermes 对话服务。" >>"$log_path"
-    return 1
+    emit_stage download_node running "DETAIL=$arch_tag"
+    if ! curl -fL --retry 3 --retry-delay 2 --max-time 600 -o "$cache_path" "$url" >>"$RUNTIME_INSTALL_LOG" 2>&1; then
+        local curl_exit=$?
+        rm -f "$cache_path"
+        emit_stage download_node failed "REASON=curl_${curl_exit}"
+        return 1
+    fi
+
+    if [[ "$expected_sha" == TODO_SHA256_PLACEHOLDER* ]]; then
+        echo "[$(timestamp_now)] WARNING: SHA256 verification skipped (placeholder constant). Tarball: $tarball" >>"$RUNTIME_INSTALL_LOG"
+    else
+        local got_sha=""
+        got_sha="$(shasum -a 256 "$cache_path" 2>/dev/null | awk '{print $1}')"
+        if [[ "$got_sha" != "$expected_sha" ]]; then
+            rm -f "$cache_path"
+            emit_stage download_node failed "REASON=sha256_mismatch"
+            return 1
+        fi
+    fi
+    emit_stage download_node ok "DETAIL=$arch_tag"
+
+    emit_stage extract_node running
+    rm -rf "$extract_root.partial"
+    mkdir -p "$extract_root.partial"
+    if ! tar -xzf "$cache_path" -C "$extract_root.partial" --strip-components=1 >>"$RUNTIME_INSTALL_LOG" 2>&1; then
+        local tar_exit=$?
+        rm -rf "$extract_root.partial"
+        emit_stage extract_node failed "REASON=tar_${tar_exit}"
+        return 1
+    fi
+
+    rm -rf "$extract_root"
+    mv "$extract_root.partial" "$extract_root"
+
+    if command -v xattr >/dev/null 2>&1; then
+        xattr -dr com.apple.quarantine "$extract_root" >/dev/null 2>&1 || true
+    fi
+
+    if [[ ! -x "$extract_root/bin/node" || ! -x "$extract_root/bin/npm" ]]; then
+        emit_stage extract_node failed "REASON=missing_binaries"
+        return 1
+    fi
+
+    NODE_BIN="$extract_root/bin/node"
+    NPM_BIN="$extract_root/bin/npm"
+    NODE_RUNTIME_KIND="portable"
+    NODE_RUNTIME_VERSION="$NODE_PORTABLE_VERSION"
+    emit_stage extract_node ok "DETAIL=$arch_tag"
+    return 0
+}
+
+ensure_node_runtime() {
+    mkdir -p "$LAUNCHER_RUNTIME_DIR" "$RUNTIME_CACHE_DIR" "$NODE_INSTALL_DIR"
+    : >>"$RUNTIME_INSTALL_LOG"
+
+    emit_stage check_node running
+    if detect_node_runtime; then
+        if "$NODE_BIN" -v >/dev/null 2>&1 && "$NPM_BIN" -v >/dev/null 2>&1; then
+            emit_stage check_node ok "DETAIL=system_${NODE_RUNTIME_VERSION}"
+            return 0
+        fi
+        # System Node looked usable but its binaries failed to exec — fall back to portable.
+        emit_stage check_node failed "REASON=system_node_broken"
+        NODE_BIN=""
+        NPM_BIN=""
+        NODE_RUNTIME_KIND="missing"
+        NODE_RUNTIME_VERSION=""
+    else
+        emit_stage check_node ok "DETAIL=missing"
+    fi
+
+    if ! download_portable_node; then
+        return 1
+    fi
+
+    if ! "$NODE_BIN" -v >/dev/null 2>&1 || ! "$NPM_BIN" -v >/dev/null 2>&1; then
+        rm -rf "$NODE_INSTALL_DIR"
+        emit_stage check_node failed "REASON=portable_node_broken"
+        return 1
+    fi
+    return 0
+}
+
+# --- npm registry + isolated install shim (M3) ---
+select_npm_registry() {
+    if [[ -n "$NPM_REGISTRY" ]]; then
+        return 0
+    fi
+    if curl -fsS --max-time 4 "https://registry.npmjs.org/-/ping?write=true" >/dev/null 2>&1; then
+        NPM_REGISTRY="https://registry.npmjs.org/"
+    else
+        NPM_REGISTRY="https://registry.npmmirror.com/"
+    fi
+    return 0
+}
+
+npm_isolated() {
+    # The portable npm/npx are symlinks to *.js files with `#!/usr/bin/env node` shebangs,
+    # so without PATH prepending the kernel resolves `node` from the user's PATH (which may
+    # be a too-old version). Prepend the portable bin dir so all child node invocations
+    # — including npm postinstall hooks — use the portable runtime.
+    PATH="$(dirname "$NODE_BIN"):$PATH" "$NPM_BIN" --prefix "$NPM_PREFIX" --registry "$NPM_REGISTRY" "$@"
+}
+
+webui_node_path() {
+    # Path prefix for invoking the hermes-web-ui CLI: prepend whichever Node bin dir we
+    # resolved (portable or system) so the `#!/usr/bin/env node` shebang resolves to it.
+    if [[ -n "$NODE_BIN" ]]; then
+        printf '%s:' "$(dirname "$NODE_BIN")"
+        return 0
+    fi
+    # Fall back to a portable install if it's already on disk (e.g. compute_app_state
+    # before ensure_node_runtime has run).
+    local fallback=""
+    fallback="$NODE_INSTALL_DIR/${NODE_PORTABLE_VERSION}-darwin-arm64/bin"
+    [[ -x "$fallback/node" ]] && { printf '%s:' "$fallback"; return 0; }
+    fallback="$NODE_INSTALL_DIR/${NODE_PORTABLE_VERSION}-darwin-x64/bin"
+    [[ -x "$fallback/node" ]] && { printf '%s:' "$fallback"; return 0; }
+}
+
+webui_bin_invoke() {
+    PATH="$(webui_node_path)$PATH" "$WEBUI_BIN" "$@"
+}
+
+webui_installed_version() {
+    [[ -x "$WEBUI_BIN" ]] || return 1
+    local raw=""
+    raw="$(webui_bin_invoke --version 2>/dev/null || true)"
+    [[ -z "$raw" ]] && return 1
+    raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
+    raw="${raw#hermes-web-ui}"
+    raw="${raw#@}"
+    raw="${raw#v}"
+    printf '%s' "$raw"
+}
+
+ensure_hermes_web_ui_installed() {
+    mkdir -p "$NPM_PREFIX" "$RUNTIME_CACHE_DIR"
+    : >>"$RUNTIME_INSTALL_LOG"
+
+    if [[ -x "$WEBUI_BIN" ]]; then
+        local installed_ver=""
+        installed_ver="$(webui_installed_version || true)"
+        if [[ "$installed_ver" == "$WEBUI_NPM_VERSION" ]]; then
+            emit_stage install_webui ok "DETAIL=v$installed_ver"
+            return 0
+        fi
+    fi
+
+    if [[ -z "$NODE_BIN" || -z "$NPM_BIN" ]]; then
+        emit_stage install_webui failed "REASON=node_not_resolved"
+        return 1
+    fi
+
+    select_npm_registry
+    emit_stage install_webui running "DETAIL=v$WEBUI_NPM_VERSION"
+
+    {
+        echo
+        echo "[$(timestamp_now)] npm install ${WEBUI_NPM_PACKAGE}@${WEBUI_NPM_VERSION} (registry=$NPM_REGISTRY)"
+    } >>"$RUNTIME_INSTALL_LOG"
+
+    if ! npm_isolated install -g "${WEBUI_NPM_PACKAGE}@${WEBUI_NPM_VERSION}" >>"$RUNTIME_INSTALL_LOG" 2>&1; then
+        local npm_exit=$?
+        emit_stage install_webui failed "REASON=npm_install_failed_${npm_exit}"
+        return 1
+    fi
+
+    if [[ ! -x "$WEBUI_BIN" ]]; then
+        emit_stage install_webui failed "REASON=bin_missing"
+        return 1
+    fi
+    chmod +x "$WEBUI_BIN" 2>/dev/null || true
+
+    local got_version=""
+    got_version="$(webui_installed_version || true)"
+    if [[ "$got_version" != "$WEBUI_NPM_VERSION" ]]; then
+        emit_stage install_webui failed "REASON=version_mismatch_${got_version:-unknown}"
+        return 1
+    fi
+
+    emit_stage install_webui ok "DETAIL=v$WEBUI_NPM_VERSION"
+    return 0
+}
+
+# --- WebUI lifecycle (M4, M5) ---
+detect_webui_installed() {
+    if [[ -x "$WEBUI_BIN" ]]; then
+        printf 'true\n'
+    else
+        printf 'false\n'
+    fi
+}
+
+webui_health_check() {
+    curl -fsS --max-time 3 "$WEBUI_HEALTH_URL" >/dev/null 2>&1
 }
 
 wait_for_webui_health() {
-    local timeout="${1:-45}"
+    local timeout="${1:-30}"
     local deadline=$((SECONDS + timeout))
     while (( SECONDS < deadline )); do
         if webui_health_check; then
@@ -1050,60 +1226,469 @@ detect_webui_running() {
     fi
 }
 
+read_webui_token() {
+    [[ -f "$WEBUI_TOKEN_FILE" ]] || return 1
+    tr -d '[:space:]' <"$WEBUI_TOKEN_FILE"
+}
+
+read_webui_pid() {
+    [[ -f "$WEBUI_PID_FILE" ]] || return 1
+    tr -d '[:space:]' <"$WEBUI_PID_FILE"
+}
+
+start_hermes_web_ui() {
+    local log_path="${1:-}"
+    if [[ ! -x "$WEBUI_BIN" ]]; then
+        emit_stage start_webui failed "REASON=bin_missing"
+        return 1
+    fi
+
+    # Short-circuit: if the daemon is already healthy, skip the start call. The bin script
+    # responds with "✗ hermes-web-ui is already running" and exit 1 in this case, which we'd
+    # otherwise mis-translate into a hero error state — even though the WebUI is fine.
+    if webui_health_check; then
+        emit_stage start_webui ok "DETAIL=already_running"
+        emit_stage wait_healthy ok "URL=$WEBUI_URL"
+        return 0
+    fi
+
+    emit_stage start_webui running
+
+    local tmp_log
+    tmp_log="$(mktemp -t hermes-web-ui-start.XXXXXX 2>/dev/null || mktemp /tmp/hermes-web-ui-start.XXXXXX)"
+
+    # The hermes-web-ui bin is a `#!/usr/bin/env node` symlink, and the daemon it forks
+    # also relies on PATH-resolved `node`. webui_bin_invoke prepends the resolved Node
+    # bin dir so both this invocation and the daemonized child use it.
+    HERMES_HOME="$HERMES_HOME" \
+    GATEWAY_ALLOW_ALL_USERS=true \
+    API_SERVER_PORT=8642 \
+    PORT="$WEBUI_PORT" \
+        webui_bin_invoke start "$WEBUI_PORT" >"$tmp_log" 2>&1
+    local bin_exit=$?
+
+    if [[ -n "$log_path" ]]; then
+        cat "$tmp_log" >>"$log_path" || true
+    fi
+    cat "$tmp_log" >>"$RUNTIME_INSTALL_LOG" || true
+    rm -f "$tmp_log"
+
+    if (( bin_exit != 0 )); then
+        # Defensive double-check: the bin script may return non-zero even when the daemon
+        # is alive (e.g. another process won a race and the bin printed "already running").
+        # If `/health` responds now, treat as success.
+        if webui_health_check; then
+            emit_stage start_webui ok "DETAIL=already_running_post_check"
+            emit_stage wait_healthy ok "URL=$WEBUI_URL"
+            return 0
+        fi
+        emit_stage start_webui failed "REASON=bin_exit_${bin_exit}"
+        return 1
+    fi
+    emit_stage start_webui ok
+
+    emit_stage wait_healthy running
+    if ! wait_for_webui_health 30; then
+        emit_stage wait_healthy failed "REASON=health_timeout"
+        return 1
+    fi
+    emit_stage wait_healthy ok "URL=$WEBUI_URL"
+    return 0
+}
+
+stop_hermes_web_ui() {
+    if [[ ! -x "$WEBUI_BIN" ]]; then
+        emit_stage stop_webui ok "DETAIL=not_installed"
+        return 0
+    fi
+    if webui_bin_invoke stop >>"$RUNTIME_INSTALL_LOG" 2>&1; then
+        emit_stage stop_webui ok
+    else
+        # bin script returns non-zero when nothing was running — treat as benign.
+        emit_stage stop_webui ok "DETAIL=not_running"
+    fi
+    return 0
+}
+
+status_hermes_web_ui() {
+    [[ -x "$WEBUI_BIN" ]] || return 1
+    webui_bin_invoke status 2>/dev/null
+}
+
+# --- Track A: messaging-platform deps (port of Windows Install-GatewayPlatformDeps) ---
+
+# Resolve the venv python; install_dir/venv/bin/python is the install.sh-created path.
+agent_venv_python() {
+    local cand="$INSTALL_DIR/venv/bin/python"
+    [[ -x "$cand" ]] || cand="$INSTALL_DIR/venv/bin/python3"
+    [[ -x "$cand" ]] || return 1
+    printf '%s' "$cand"
+}
+
+# Echo the pretty Chinese label for a platform env-var key.
+gateway_platform_label() {
+    local key="$1"
+    local pair label
+    for pair in "${GATEWAY_PLATFORM_LABELS[@]}"; do
+        if [[ "${pair%%:*}" == "$key" ]]; then
+            label="${pair#*:}"
+            printf '%s' "$label"
+            return 0
+        fi
+    done
+    printf '%s' "$key"
+}
+
+# Read a single env-var value out of ~/.hermes/.env (skipping commented / empty lines).
+# Returns empty if not set or value is empty.
+read_env_value() {
+    local key="$1"
+    local env_file="$HERMES_HOME/.env"
+    [[ -f "$env_file" ]] || return 0
+    awk -F= -v key="$key" '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+            if ($1 == key) {
+                v = substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+                gsub(/^"|"$|^'\''|'\''$/, "", v)
+                print v
+                exit
+            }
+        }
+    ' "$env_file"
+}
+
+# Strict-verify that a Python module imports AND its __file__ lives inside the venv site-packages.
+# Returns 0 if OK, non-zero otherwise. Stdout: "OK" / "IMPORT_ERROR:..." / "PATH_MISMATCH:..."
+gateway_strict_verify_module() {
+    local module="$1"
+    local py
+    py="$(agent_venv_python)" || return 2
+    local site_packages="$INSTALL_DIR/venv/lib"
+    "$py" - "$module" "$site_packages" <<'PY' 2>&1
+import sys
+mod, expected = sys.argv[1], sys.argv[2]
+try:
+    m = __import__(mod)
+    p = (getattr(m, '__file__', '') or '').lower()
+    if p and expected.lower() in p:
+        print('OK')
+    else:
+        print('PATH_MISMATCH:' + p)
+        sys.exit(2)
+except ImportError as e:
+    print('IMPORT_ERROR:' + str(e))
+    sys.exit(1)
+except Exception as e:
+    print('UNEXPECTED:' + str(e))
+    sys.exit(3)
+PY
+}
+
+# Resolve the `uv` binary path. The Hermes installer typically installs uv to ~/.local/bin.
+agent_uv_command() {
+    local cand
+    for cand in "$HOME/.local/bin/uv" "$INSTALL_DIR/venv/bin/uv" "/opt/homebrew/bin/uv" "/usr/local/bin/uv"; do
+        if [[ -x "$cand" ]]; then
+            printf '%s' "$cand"
+            return 0
+        fi
+    done
+    if command -v uv >/dev/null 2>&1; then
+        command -v uv
+        return 0
+    fi
+    return 1
+}
+
+# pip install <pkgs> into the agent venv. Prefers `uv pip install --python <venv-python>` because
+# venvs created via `uv venv` don't ship with pip itself by default. Falls back to ensurepip + pip.
+# Captures stdout/stderr to RUNTIME_INSTALL_LOG.
+agent_pip_install() {
+    local py
+    py="$(agent_venv_python)" || return 2
+    {
+        echo
+        echo "[$(timestamp_now)] agent pip install $*"
+    } >>"$RUNTIME_INSTALL_LOG"
+
+    local uv
+    if uv="$(agent_uv_command)"; then
+        "$uv" pip install --python "$py" "$@" >>"$RUNTIME_INSTALL_LOG" 2>&1
+        return $?
+    fi
+
+    # Fallback: bootstrap pip into the venv if needed, then use it.
+    if ! "$py" -m pip --version >/dev/null 2>&1; then
+        echo "[$(timestamp_now)] bootstrapping pip via ensurepip" >>"$RUNTIME_INSTALL_LOG"
+        "$py" -m ensurepip --upgrade >>"$RUNTIME_INSTALL_LOG" 2>&1 || return 4
+    fi
+    "$py" -m pip install "$@" >>"$RUNTIME_INSTALL_LOG" 2>&1
+}
+
+# Append GATEWAY_ALLOW_ALL_USERS=true to .env if any platform is configured but flag missing.
+ensure_gateway_allow_all_users() {
+    local env_file="$HERMES_HOME/.env"
+    [[ -f "$env_file" ]] || return 0
+    if grep -Eq '^[[:space:]]*GATEWAY_ALLOW_ALL_USERS[[:space:]]*=[[:space:]]*true' "$env_file"; then
+        return 0
+    fi
+    {
+        echo
+        echo "GATEWAY_ALLOW_ALL_USERS=true"
+    } >>"$env_file"
+    emit_stage gateway_allow_all_users ok "DETAIL=appended"
+}
+
+# Track A entry point. Pure on-demand: scan .env and install only configured platforms.
+ensure_gateway_platform_deps() {
+    local env_file="$HERMES_HOME/.env"
+    if [[ ! -f "$env_file" ]]; then
+        emit_stage install_platform_deps skipped "DETAIL=no_env"
+        return 0
+    fi
+    local py
+    if ! py="$(agent_venv_python)"; then
+        emit_stage install_platform_deps skipped "DETAIL=no_agent_venv"
+        return 0
+    fi
+
+    : >>"$RUNTIME_INSTALL_LOG"
+
+    # Configured-platform set: pretty labels for the Swift-side aggregator.
+    local configured_labels=()
+    local row key module pkgs val label
+    local any_failure=0
+    local any_configured=0
+    local any_new_install=0
+    local seen_keys=":"
+
+    for row in "${GATEWAY_PLATFORM_MAP[@]}"; do
+        key="${row%%:*}"
+        module="$(printf '%s' "$row" | cut -d: -f2)"
+        pkgs="$(printf '%s' "$row" | cut -d: -f3-)"
+        val="$(read_env_value "$key")"
+        [[ -z "$val" ]] && continue
+
+        any_configured=1
+        label="$(gateway_platform_label "$key")"
+
+        # Dedup labels (e.g. WEIXIN_TOKEN + WEIXIN_ACCOUNT_ID both map to 微信).
+        if [[ "$seen_keys" != *":${label}:"* ]]; then
+            seen_keys+="${label}:"
+            configured_labels+=("$label")
+        fi
+
+        # Zero-dep platforms (weixin / wecom): just verify and continue.
+        if [[ -z "$pkgs" ]]; then
+            emit_stage platform_dep ok "PLATFORM=${label}" "DETAIL=zero_dep"
+            continue
+        fi
+
+        # Strict pre-verify.
+        emit_stage platform_dep running "PLATFORM=${label}" "DETAIL=verifying"
+        local verify_out=""
+        verify_out="$(gateway_strict_verify_module "$module" 2>&1 || true)"
+        if [[ "$verify_out" == *"OK"* ]]; then
+            emit_stage platform_dep ok "PLATFORM=${label}" "DETAIL=already_installed"
+            continue
+        fi
+
+        # Missing — install.
+        emit_stage platform_dep running "PLATFORM=${label}" "DETAIL=installing"
+        # shellcheck disable=SC2086 — pkgs is intentionally word-split so multi-pkg rows install together.
+        agent_pip_install $pkgs
+        local pip_exit=$?
+        if (( pip_exit != 0 )); then
+            emit_stage platform_dep failed "PLATFORM=${label}" "REASON=pip_install_${pip_exit}"
+            any_failure=1
+            continue
+        fi
+
+        # Post-verify.
+        verify_out="$(gateway_strict_verify_module "$module" 2>&1 || true)"
+        if [[ "$verify_out" == *"OK"* ]]; then
+            emit_stage platform_dep ok "PLATFORM=${label}" "DETAIL=installed"
+            any_new_install=1
+        else
+            emit_stage platform_dep failed "PLATFORM=${label}" "REASON=post_verify_failed"
+            any_failure=1
+        fi
+    done
+
+    if (( any_configured == 0 )); then
+        emit_stage install_platform_deps skipped "DETAIL=no_channels"
+        return 0
+    fi
+
+    ensure_gateway_allow_all_users
+
+    # Emit the ordered configured-platform list so the Swift store can render the simplified
+    # stage-2 row's detail string ("正在配置：飞书、Telegram").
+    local joined=""
+    local i
+    for ((i = 0; i < ${#configured_labels[@]}; i++)); do
+        if (( i > 0 )); then joined+="、"; fi
+        joined+="${configured_labels[$i]}"
+    done
+    emit_stage install_platform_deps_summary ok "COUNT=${#configured_labels[@]}" "PLATFORMS=${joined}"
+
+    if (( any_failure != 0 )); then
+        emit_stage install_platform_deps failed "DETAIL=${joined}"
+        return 1
+    fi
+    emit_stage install_platform_deps ok "DETAIL=${joined}"
+
+    # If we just installed at least one new pip package, the running gateway can't see it
+    # (Python imports are cached at process start). Restart the gateway so the new adapter
+    # actually loads. Without this, users who configure Telegram/Feishu/etc. in WebUI see
+    # "no response" until they manually restart — see chat #N+5.
+    if (( any_new_install != 0 )); then
+        restart_gateway_for_new_deps
+    fi
+    return 0
+}
+
+# Restart the hermes-agent gateway so it picks up newly-installed messaging deps.
+# Best-effort: emits STAGE events for UI feedback but never fails the parent flow.
+restart_gateway_for_new_deps() {
+    emit_stage restart_gateway running "DETAIL=picking_up_new_deps"
+    local hermes_cmd="$INSTALL_DIR/venv/bin/hermes"
+    if [[ ! -x "$hermes_cmd" ]]; then
+        # Fallback: try the user's PATH-resolved hermes.
+        hermes_cmd="$(command -v hermes 2>/dev/null || true)"
+    fi
+    if [[ -z "$hermes_cmd" || ! -x "$hermes_cmd" ]]; then
+        emit_stage restart_gateway skipped "DETAIL=hermes_cli_missing"
+        return 0
+    fi
+    if "$hermes_cmd" gateway restart >>"$RUNTIME_INSTALL_LOG" 2>&1; then
+        emit_stage restart_gateway ok
+    else
+        local exit_code=$?
+        emit_stage restart_gateway failed "REASON=gateway_restart_${exit_code}"
+    fi
+    return 0
+}
+
+# --- Track B: post-verify gateway connected platforms == configured ---
+
+# Count messaging platforms in .env (deduped: WEIXIN_TOKEN + WEIXIN_ACCOUNT_ID = 1).
+count_configured_platforms() {
+    local env_file="$HERMES_HOME/.env"
+    [[ -f "$env_file" ]] || { printf '0'; return; }
+    local row key val seen=":"
+    local count=0
+    for row in "${GATEWAY_PLATFORM_MAP[@]}"; do
+        key="${row%%:*}"
+        val="$(read_env_value "$key")"
+        [[ -z "$val" ]] && continue
+        # Map the env-var key back to its platform label for dedup.
+        local label
+        label="$(gateway_platform_label "$key")"
+        if [[ "$seen" != *":${label}:"* ]]; then
+            seen+="${label}:"
+            ((count++))
+        fi
+    done
+    printf '%d' "$count"
+}
+
+# Read most recent "Gateway running with N platform(s)" from gateway.log.
+# Echoes integer N (ACTUAL platform count incl. api_server), or empty on no-info.
+read_gateway_running_count() {
+    local gw_log="$HERMES_HOME/logs/gateway.log"
+    [[ -f "$gw_log" ]] || return 0
+    tail -n 200 "$gw_log" 2>/dev/null \
+        | grep -E 'Gateway running with [0-9]+ platform' \
+        | tail -n 1 \
+        | sed -E 's/.*Gateway running with ([0-9]+) platform.*/\1/'
+}
+
+# Track B entry point. Returns 0 if matched (or no info / no config), non-zero on persistent mismatch.
+verify_gateway_platforms_match_env() {
+    local configured actual expected
+    configured="$(count_configured_platforms)"
+    if [[ "$configured" -eq 0 ]]; then
+        emit_stage verify_platforms ok "DETAIL=no_channels"
+        return 0
+    fi
+    expected=$((configured + 1))  # +1 for api_server
+    sleep 5  # let laggy adapters finish connecting
+    actual="$(read_gateway_running_count || true)"
+    if [[ -z "$actual" ]]; then
+        emit_stage verify_platforms ok "DETAIL=no_log"
+        return 0
+    fi
+    if [[ "$actual" -ge "$expected" ]]; then
+        emit_stage verify_platforms ok "ACTUAL=${actual}" "EXPECTED=${expected}"
+        return 0
+    fi
+    # Mismatch — 1 retry attempt with 5s sleep, mirroring Windows.
+    emit_stage verify_platforms running "DETAIL=mismatch_retry" "ACTUAL=${actual}" "EXPECTED=${expected}"
+    sleep 5
+    actual="$(read_gateway_running_count || true)"
+    if [[ -n "$actual" && "$actual" -ge "$expected" ]]; then
+        emit_stage verify_platforms ok "ACTUAL=${actual}" "EXPECTED=${expected}"
+        return 0
+    fi
+    emit_stage verify_platforms mismatch_persistent "ACTUAL=${actual:-0}" "EXPECTED=${expected}" "CONFIGURED=${configured}"
+    return 1
+}
+
 compute_app_state() {
     local hermes_cmd="$1"
     local installed="false"
-    local model_ready="false"
-    local gateway_configured="false"
-    local gateway_running="false"
     local webui_installed="false"
     local webui_running="false"
+    local webui_pid=""
+    local webui_version=""
 
     if is_installed "$hermes_cmd"; then
         installed="true"
         ensure_config_scaffold
-        if [[ "$(test_model_ready)" == "true" ]]; then
-            model_ready="true"
-        fi
-        if [[ "$(detect_gateway_configured)" == "true" ]]; then
-            gateway_configured="true"
-        fi
-        if [[ "$(detect_gateway_running)" == "true" ]]; then
-            gateway_running="true"
-        fi
-        if [[ "$(detect_webui_installed)" == "true" ]]; then
-            webui_installed="true"
-        fi
-        if [[ "$(detect_webui_running)" == "true" ]]; then
-            webui_running="true"
-        fi
+    fi
+
+    if [[ "$(detect_webui_installed)" == "true" ]]; then
+        webui_installed="true"
+        webui_version="$(webui_installed_version 2>/dev/null || true)"
+    fi
+    if webui_health_check; then
+        webui_running="true"
+    fi
+    webui_pid="$(read_webui_pid 2>/dev/null || true)"
+
+    if [[ -z "$NODE_RUNTIME_KIND" || "$NODE_RUNTIME_KIND" == "missing" ]]; then
+        # Cheap probe: try to detect a system Node. Never download here — that belongs to the launch flow.
+        detect_node_runtime >/dev/null 2>&1 || true
     fi
 
     cat <<EOF
 installed=$installed
-model_ready=$model_ready
-gateway_configured=$gateway_configured
-gateway_running=$gateway_running
 webui_installed=$webui_installed
 webui_running=$webui_running
 webui_url=$WEBUI_URL
+webui_version=$webui_version
+webui_pid=$webui_pid
+node_runtime_kind=$NODE_RUNTIME_KIND
+node_runtime_version=$NODE_RUNTIME_VERSION
 EOF
 }
 
 build_dashboard_prompt() {
+    # TODO(macos-webui-migration UI follow-up): finalize 2-line summary copy alongside design mockup approval.
     local state="$1"
-    local installed model_ready gateway_configured gateway_running
+    local installed webui_installed webui_running
     installed="$(state_get installed "$state")"
-    model_ready="$(state_get model_ready "$state")"
-    gateway_configured="$(state_get gateway_configured "$state")"
-    gateway_running="$(state_get gateway_running "$state")"
+    webui_installed="$(state_get webui_installed "$state")"
+    webui_running="$(state_get webui_running "$state")"
 
     local install_line="未开始"
-    local model_line="等待安装完成"
-    local chat_line="尚不可用"
-    local gateway_line="暂未配置"
+    local launch_line="尚不可用"
     local current_step="继续安装"
-    local support_line="日常使用暂不需要"
 
     if [[ "$LAST_STAGE" == "install" && "$LAST_RESULT" == "running" ]]; then
         install_line="进行中"
@@ -1111,30 +1696,20 @@ build_dashboard_prompt() {
         install_line="已完成"
     fi
 
-    if [[ "$installed" == "true" && "$model_ready" == "false" ]]; then
-        model_line="待完成"
-    fi
-    if [[ "$LAST_STAGE" == "model" && "$LAST_RESULT" == "running" ]]; then
-        model_line="进行中"
-    elif [[ "$model_ready" == "true" ]]; then
-        model_line="已完成"
-        chat_line="可以开始"
-    fi
-
-    if [[ "$gateway_configured" == "true" ]]; then
-        gateway_line="已配置"
-        if [[ "$gateway_running" == "true" ]]; then
-            gateway_line="已配置，当前在线"
+    if [[ "$installed" == "true" ]]; then
+        if [[ "$webui_running" == "true" ]]; then
+            launch_line="已在运行"
+            current_step="打开浏览器对话"
+        elif [[ "$webui_installed" == "true" ]]; then
+            launch_line="可以启动"
+            current_step="启动浏览器对话"
+        else
+            launch_line="待安装"
+            current_step="启动浏览器对话"
         fi
     fi
-
-    if [[ "$installed" != "true" ]]; then
-        current_step="继续安装"
-    elif [[ "$model_ready" != "true" ]]; then
-        current_step="继续配置模型"
-    else
-        current_step="开始第一次对话"
-        support_line="可选，用于维护与消息渠道"
+    if [[ "$LAST_STAGE" == "chat" && "$LAST_RESULT" == "running" ]]; then
+        launch_line="进行中"
     fi
 
     cat <<EOF
@@ -1144,12 +1719,8 @@ Hermes macOS 启动器
 版本：$LAUNCHER_VERSION
 
 阶段总览
-1. 安装 Hermes     $install_line
-2. 配置模型        $model_line
-3. 开始第一次对话  $chat_line
-
-消息渠道：$gateway_line
-维护入口：$support_line
+1. 安装 Hermes        $install_line
+2. 启动浏览器对话     $launch_line
 
 数据目录：$HERMES_HOME
 最近操作：$LAST_ACTION_SUMMARY
@@ -1160,16 +1731,13 @@ EOF
 
 next_primary_action() {
     local state="$1"
-    local installed model_ready
+    local installed
     installed="$(state_get installed "$state")"
-    model_ready="$(state_get model_ready "$state")"
 
     if [[ "$installed" != "true" ]]; then
         printf '开始安装\n'
-    elif [[ "$model_ready" != "true" ]]; then
-        printf '配置模型\n'
     else
-        printf '开始第一次对话\n'
+        printf '启动浏览器对话\n'
     fi
 }
 
@@ -1183,9 +1751,8 @@ show_intro_dialog() {
 
 maybe_handle_stage_completion() {
     local state="$1"
-    local installed model_ready
+    local installed
     installed="$(state_get installed "$state")"
-    model_ready="$(state_get model_ready "$state")"
 
     if [[ "$LAST_RESULT" == "running" || "$LAST_RESULT" == "idle" ]]; then
         return 0
@@ -1194,27 +1761,13 @@ maybe_handle_stage_completion() {
     case "$LAST_STAGE" in
         install)
             if [[ "$LAST_RESULT" == "success" && "$installed" == "true" ]]; then
-                show_message "安装已完成。\n\n下一步继续配置模型。完成后，你就可以开始和 Hermes 对话。"
+                show_message "安装已完成。\n\n下一步会启动浏览器对话；模型与渠道配置都可以在浏览器里完成。"
                 set_stage_state "none" "idle" "$LAST_LOG_PATH"
             else
                 local picked=""
                 picked="$(prompt_failure_action "安装还没有完成。\n\n如果终端里已经报错或提前结束，可以重新尝试，或先打开日志查看原因。")" || return 0
                 case "$picked" in
                     "重新尝试") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_install_flow ;;
-                    "打开日志") open_path "$LAST_LOG_PATH"; set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
-                    *) set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
-                esac
-            fi
-            ;;
-        model)
-            if [[ "$LAST_RESULT" == "success" && "$model_ready" == "true" ]]; then
-                show_message "模型配置已完成。\n\n现在可以开始第一次对话。"
-                set_stage_state "none" "idle" "$LAST_LOG_PATH"
-            else
-                local picked=""
-                picked="$(prompt_failure_action "还没有检测到完整模型配置。\n\n如果配置流程已经结束，可以重新打开它，或先查看日志。")" || return 0
-                case "$picked" in
-                    "重新尝试") set_stage_state "none" "idle" "$LAST_LOG_PATH"; start_model_flow "$(resolve_hermes_command 2>/dev/null || true)" ;;
                     "打开日志") open_path "$LAST_LOG_PATH"; set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
                     *) set_stage_state "none" "idle" "$LAST_LOG_PATH" ;;
                 esac
@@ -1322,6 +1875,18 @@ launch_install() {
     payload+="INSTALL_EXIT=\"\$FALLBACK_EXIT\"; "
     payload+="fi; "
     payload+="fi; "
+    # Track D: pin to a known-good commit if HERMES_AGENT_PINNED_COMMIT is not HEAD.
+    # Runs only on success and when a non-HEAD pin is configured. Failures are surfaced as warnings,
+    # not fatal — the install is already valid at the moving-main HEAD.
+    payload+="if [[ \"\$INSTALL_EXIT\" -eq 0 && $(printf '%q' "$HERMES_AGENT_PINNED_COMMIT") != 'HEAD' ]]; then "
+    payload+="echo; echo '正在切换到固定版本 $HERMES_AGENT_PINNED_COMMIT ...'; "
+    payload+="if (cd $(printf '%q' "$INSTALL_DIR") && git fetch --depth 50 origin && git checkout --quiet $(printf '%q' "$HERMES_AGENT_PINNED_COMMIT")); then "
+    payload+="(cd $(printf '%q' "$INSTALL_DIR") && (uv pip install -e '.' 2>/dev/null || $(printf '%q' "$INSTALL_DIR")/venv/bin/python -m pip install -e '.' 2>/dev/null || true)); "
+    payload+="echo '已切到固定版本。'; "
+    payload+="else "
+    payload+="echo '切换固定版本失败，将沿用刚装的 main 版本。'; "
+    payload+="fi; "
+    payload+="fi; "
     payload+="echo; if [[ \"\$INSTALL_EXIT\" -eq 0 ]]; then echo '安装流程已结束，可关闭此终端窗口。'; else echo '安装流程失败，请查看上方报错。'; fi; "
     payload+="FINAL_RESULT=failed; if [[ \"\$INSTALL_EXIT\" -eq 0 ]]; then FINAL_RESULT=success; fi; "
     payload+="printf 'LAST_STAGE=%s\nLAST_RESULT=%s\nLAST_LOG_PATH=%s\n' install \"\$FINAL_RESULT\" $(printf '%q' "$log_path") > $(printf '%q' "$LAUNCHER_STATE_FILE"); "
@@ -1401,132 +1966,19 @@ print_state_test() {
     printf 'last_stage=%s\nlast_result=%s\nlast_log_path=%s\n' "$LAST_STAGE" "$LAST_RESULT" "$LAST_LOG_PATH"
 }
 
-configure_model() {
-    local hermes_cmd="$1"
-    run_hermes_action "$hermes_cmd" "模型配置" "model" "命令执行结束后，可关闭窗口。" "model" "true" "TERM=dumb NO_COLOR=1 COLORTERM="
-}
-
 launch_terminal_chat() {
     local hermes_cmd="$1"
     run_hermes_action "$hermes_cmd" "终端对话" "chat" "" "" "false"
 }
 
-ensure_webui_checkout() {
-    local log_path="$1"
-
-    mkdir -p "$(dirname "$WEBUI_DIR")" "$WEBUI_STATE_DIR"
-
-    if [[ -f "$WEBUI_DIR/bootstrap.py" && -f "$WEBUI_DIR/server.py" ]]; then
-        return 0
-    fi
-
-    if [[ -e "$WEBUI_DIR" ]]; then
-        {
-            echo "Hermes WebUI 目录已存在，但没有检测到 bootstrap.py/server.py：$WEBUI_DIR"
-            echo "请移动或删除这个目录后重试。"
-        } >>"$log_path"
-        return 1
-    fi
-
-    if ! command -v git >/dev/null 2>&1; then
-        echo "没有检测到 git，无法自动下载 Hermes WebUI。" >>"$log_path"
-        return 1
-    fi
-
-    echo "正在下载 Hermes WebUI：$WEBUI_REPO_URL" >>"$log_path"
-    git clone --depth 1 "$WEBUI_REPO_URL" "$WEBUI_DIR" >>"$log_path" 2>&1
-}
-
-ensure_webui_default_language() {
-    local log_path="$1"
-    local python_cmd=""
-    python_cmd="$(find_webui_python 2>/dev/null || true)"
-    if [[ -z "$python_cmd" ]]; then
-        echo "没有检测到可用的 Python，暂时无法写入 WebUI 默认语言。" >>"$log_path"
-        return 0
-    fi
-
-    mkdir -p "$WEBUI_STATE_DIR"
-    "$python_cmd" - "$WEBUI_STATE_DIR/settings.json" "$WEBUI_LANGUAGE" >>"$log_path" 2>&1 <<'PY'
-import json
-import sys
-from pathlib import Path
-
-settings_path = Path(sys.argv[1]).expanduser()
-language = sys.argv[2]
-settings = {}
-if settings_path.exists():
-    try:
-        loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            settings = loaded
-    except Exception:
-        settings = {}
-
-current = settings.get("language")
-if current in (None, "", "en"):
-    settings["language"] = language
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(settings, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"WebUI default language set to {language}")
-else:
-    print(f"WebUI language preserved as {current}")
-PY
-}
-
-prepare_webui_checkout() {
-    local log_path="$1"
-
-    if ensure_webui_checkout "$log_path"; then
-        ensure_webui_default_language "$log_path"
-        return 0
-    fi
-
-    return 1
-}
-
-start_webui_server() {
-    local log_path="$1"
-    local python_cmd=""
-
-    python_cmd="$(find_webui_python 2>/dev/null || true)"
-    if [[ -z "$python_cmd" ]]; then
-        echo "没有检测到可用的 Python，无法启动 Hermes WebUI。" >>"$log_path"
-        return 1
-    fi
-
-    {
-        echo
-        echo "[$(timestamp_now)] 启动 Hermes WebUI"
-        echo "WebUI directory: $WEBUI_DIR"
-        echo "Agent directory: $INSTALL_DIR"
-        echo "State directory: $WEBUI_STATE_DIR"
-        echo "Default language: $WEBUI_LANGUAGE"
-        echo "URL: $WEBUI_URL"
-    } >>"$log_path"
-
-    (
-        cd "$WEBUI_DIR"
-        HERMES_HOME="$HERMES_HOME" \
-        HERMES_CONFIG_PATH="$HERMES_HOME/config.yaml" \
-        HERMES_WEBUI_AGENT_DIR="$INSTALL_DIR" \
-        HERMES_WEBUI_STATE_DIR="$WEBUI_STATE_DIR" \
-        HERMES_WEBUI_HOST="$WEBUI_HOST" \
-        HERMES_WEBUI_PORT="$WEBUI_PORT" \
-        HERMES_WEBUI_LANGUAGE="$WEBUI_LANGUAGE" \
-        "$python_cmd" "$WEBUI_DIR/bootstrap.py" --no-browser --skip-agent-install --host "$WEBUI_HOST" "$WEBUI_PORT"
-    ) >>"$log_path" 2>&1 &
-
-    local server_pid=$!
-    echo "Hermes 对话服务进程已启动，PID: $server_pid" >>"$log_path"
-    disown "$server_pid" 2>/dev/null || true
-}
-
 open_webui_browser() {
-    open "$WEBUI_URL"
+    local token=""
+    token="$(read_webui_token 2>/dev/null || true)"
+    if [[ -n "$token" ]]; then
+        open "http://localhost:${WEBUI_PORT}/#/?token=${token}"
+    else
+        open "$WEBUI_URL"
+    fi
 }
 
 handle_webui_launch_failure() {
@@ -1550,19 +2002,15 @@ launch_webui_chat() {
 
     local log_path
     log_path="$(build_log_path "webui")"
-    set_last_action "正在打开 Hermes WebUI，日志：$log_path"
+    set_last_action "正在准备 Hermes WebUI，日志：$log_path"
     set_stage_state "chat" "running" "$log_path"
 
-    if [[ "$(detect_webui_installed)" == "true" ]]; then
-        ensure_webui_default_language "$log_path"
-    fi
-
-    if ! select_webui_port_for_launch "$log_path"; then
-        set_last_action "Hermes 对话界面端口不可用，日志：$log_path"
-        set_stage_state "chat" "failed" "$log_path"
-        handle_webui_launch_failure "$log_path" "Hermes 对话界面暂时无法启动。\n\n端口 $WEBUI_PORT 附近都被占用或不可用。你可以关闭旧的 Hermes/WebUI 进程后重试。" "$hermes_cmd"
-        return 1
-    fi
+    {
+        echo
+        echo "[$(timestamp_now)] launch_webui_chat begin"
+        echo "WebUI URL: $WEBUI_URL"
+        echo "Runtime root: $LAUNCHER_RUNTIME_DIR"
+    } >>"$log_path"
 
     if webui_health_check; then
         open_webui_browser
@@ -1571,26 +2019,24 @@ launch_webui_chat() {
         return 0
     fi
 
-    if ! ensure_webui_checkout "$log_path"; then
-        set_last_action "Hermes WebUI 准备失败，日志：$log_path"
+    if ! ensure_node_runtime >>"$log_path" 2>&1; then
+        set_last_action "Node.js 运行时准备失败，日志：$log_path"
         set_stage_state "chat" "failed" "$log_path"
-        handle_webui_launch_failure "$log_path" "Hermes 对话界面没有准备成功。" "$hermes_cmd"
+        handle_webui_launch_failure "$log_path" "Node.js 运行时准备失败。" "$hermes_cmd"
         return 1
     fi
 
-    ensure_webui_default_language "$log_path"
+    if ! ensure_hermes_web_ui_installed >>"$log_path" 2>&1; then
+        set_last_action "WebUI 安装失败，日志：$log_path"
+        set_stage_state "chat" "failed" "$log_path"
+        handle_webui_launch_failure "$log_path" "Hermes WebUI 安装失败。" "$hermes_cmd"
+        return 1
+    fi
 
-    if ! start_webui_server "$log_path"; then
+    if ! start_hermes_web_ui "$log_path" >>"$log_path" 2>&1; then
         set_last_action "Hermes WebUI 启动失败，日志：$log_path"
         set_stage_state "chat" "failed" "$log_path"
         handle_webui_launch_failure "$log_path" "Hermes 对话界面没有启动成功。" "$hermes_cmd"
-        return 1
-    fi
-
-    if ! wait_for_webui_health 10; then
-        set_last_action "Hermes WebUI 健康检查失败，日志：$log_path"
-        set_stage_state "chat" "failed" "$log_path"
-        handle_webui_launch_failure "$log_path" "Hermes 对话界面已尝试启动，但暂时没有进入可用状态。" "$hermes_cmd"
         return 1
     fi
 
@@ -1599,14 +2045,21 @@ launch_webui_chat() {
     set_stage_state "chat" "success" "$log_path"
 }
 
-configure_gateway() {
+restart_webui_action() {
     local hermes_cmd="$1"
-    run_hermes_action "$hermes_cmd" "消息渠道配置" "gateway setup" "命令执行结束后，可关闭窗口。" "" "true"
+    local log_path
+    log_path="$(build_log_path "webui-restart")"
+    set_last_action "正在重启 Hermes WebUI，日志：$log_path"
+    stop_hermes_web_ui >>"$log_path" 2>&1 || true
+    launch_webui_chat "$hermes_cmd"
 }
 
-launch_gateway() {
-    local hermes_cmd="$1"
-    run_hermes_action "$hermes_cmd" "消息网关" "gateway" "保持这个终端窗口打开，消息渠道才能持续在线。" "" "true"
+stop_webui_action() {
+    local log_path
+    log_path="$(build_log_path "webui-stop")"
+    set_last_action "正在停止 Hermes WebUI，日志：$log_path"
+    stop_hermes_web_ui >>"$log_path" 2>&1 || true
+    set_last_action "Hermes WebUI 已停止"
 }
 
 run_doctor() {
@@ -1696,8 +2149,8 @@ handle_advanced_action() {
         "重新执行完整设置"|setup) run_full_setup "$hermes_cmd" ;;
         "配置 tools"|tools) run_tools "$hermes_cmd" ;;
         "打开终端对话"|chat_terminal|chat-terminal) start_terminal_chat_flow "$hermes_cmd" ;;
-        "配置消息渠道"|gateway_setup) configure_gateway "$hermes_cmd" ;;
-        "打开消息网关"|gateway_run) launch_gateway "$hermes_cmd" ;;
+        "停止浏览器对话"|stop_webui|stop-webui) stop_webui_action ;;
+        "重启浏览器对话"|restart_webui|restart-webui) restart_webui_action "$hermes_cmd" ;;
         "打开配置文件 config.yaml"|open_config) ensure_config_scaffold; open_path "$HERMES_HOME/config.yaml" ;;
         "打开环境变量 .env"|open_env) ensure_config_scaffold; open_path "$HERMES_HOME/.env" ;;
         "打开日志目录"|open_logs) open_path "$HERMES_HOME/logs" ;;
@@ -1718,8 +2171,8 @@ maintenance_menu() {
         "重新执行完整设置" \
         "配置 tools" \
         "打开终端对话" \
-        "配置消息渠道" \
-        "打开消息网关" \
+        "停止浏览器对话" \
+        "重启浏览器对话" \
         "打开配置文件 config.yaml" \
         "打开环境变量 .env" \
         "打开日志目录" \
@@ -1745,29 +2198,21 @@ start_install_flow() {
     launch_install || return 0
 }
 
-start_model_flow() {
-    local hermes_cmd="$1"
-    local intro=$'接下来会打开 Terminal 进入模型配置。\n\n如果你已经准备好 API Key，整个过程会更顺利。打开后按提示完成即可。\n\n现在继续配置模型吗？'
-    show_intro_dialog "$intro" "是" || return 0
-    configure_model "$hermes_cmd" || return 0
-    show_message $'模型配置窗口已经打开。\n\n完成后回到这里，启动器会继续引导你开始第一次对话。'
-}
-
 start_chat_flow() {
     local hermes_cmd="$1"
-    local intro=""
     if webui_health_check; then
         launch_webui_chat "$hermes_cmd" || return 0
         return 0
-    elif [[ "$(detect_webui_installed)" == "true" ]]; then
-        launch_webui_chat "$hermes_cmd" || return 0
-        return 0
+    fi
+    local intro=""
+    if [[ "$(detect_webui_installed)" == "true" ]]; then
+        intro=$'接下来会启动浏览器对话。\n\n模型与渠道配置都在浏览器里完成，启动器只负责把它拉起来。\n\n现在打开浏览器对话吗？'
     else
-        intro=$'接下来会先准备 Hermes 对话界面，然后自动打开浏览器。\n\n这通常只会在第一次使用时发生，可能需要下载必要文件并准备 Python 依赖。\n\n现在开始和 Hermes 对话吗？'
+        intro=$'第一次启动浏览器对话需要先准备 Node.js 运行时并安装 hermes-web-ui 包。\n\n这通常只会在第一次使用时发生。\n\n现在开始？'
     fi
     show_intro_dialog "$intro" "是" || return 0
     launch_webui_chat "$hermes_cmd" || return 0
-    show_message $'Hermes 对话界面已经打开。\n\n如果浏览器中出现对话界面，你就已经完成首次可用配置。'
+    show_message $'Hermes 对话界面已经打开。\n\n如果浏览器中出现对话界面，你就可以开始使用。模型 / 渠道配置在浏览器对话里完成。'
 }
 
 start_terminal_chat_flow() {
@@ -1784,8 +2229,7 @@ handle_action() {
 
     case "$action" in
         "开始安装") start_install_flow ;;
-        "配置模型") start_model_flow "$hermes_cmd" ;;
-        "开始第一次对话") start_chat_flow "$hermes_cmd" ;;
+        "启动浏览器对话"|"开始第一次对话") start_chat_flow "$hermes_cmd" ;;
         "终端对话") start_terminal_chat_flow "$hermes_cmd" ;;
         "维护与高级选项")
             local picked=""
@@ -1810,9 +2254,10 @@ main() {
         fi
         case "${2:-}" in
             install) handle_action "开始安装" "$hermes_cmd" ;;
-            model) handle_action "配置模型" "$hermes_cmd" ;;
-            chat) handle_action "开始第一次对话" "$hermes_cmd" ;;
+            launch|chat) handle_action "启动浏览器对话" "$hermes_cmd" ;;
             chat_terminal|chat-terminal) handle_action "终端对话" "$hermes_cmd" ;;
+            stop_webui|stop-webui) stop_webui_action ;;
+            restart_webui|restart-webui) restart_webui_action "$hermes_cmd" ;;
             refresh) exec "$SELF_PATH" ;;
             *) handle_advanced_action "${2:-}" "$hermes_cmd" ;;
         esac
@@ -1820,7 +2265,9 @@ main() {
     fi
 
     if [[ "${1:-}" == "--self-test" ]]; then
-        printf 'Version=%s\nHermesHome=%s\nInstallDir=%s\nWebUIDir=%s\nWebUIURL=%s\nWebUILanguage=%s\nBranch=%s\n' "$LAUNCHER_VERSION" "$HERMES_HOME" "$INSTALL_DIR" "$WEBUI_DIR" "$WEBUI_URL" "$WEBUI_LANGUAGE" "$BRANCH"
+        printf 'Version=%s\nHermesHome=%s\nInstallDir=%s\nWebUIPort=%s\nWebUIURL=%s\nNpmPrefix=%s\nNodePortableVersion=%s\nWebUINpmVersion=%s\nBranch=%s\n' \
+            "$LAUNCHER_VERSION" "$HERMES_HOME" "$INSTALL_DIR" "$WEBUI_PORT" "$WEBUI_URL" \
+            "$NPM_PREFIX" "$NODE_PORTABLE_VERSION" "$WEBUI_NPM_VERSION" "$BRANCH"
         exit 0
     fi
 
@@ -1832,6 +2279,84 @@ main() {
     if [[ "${1:-}" == "--doctor-test" ]]; then
         print_doctor_test
         exit 0
+    fi
+
+    if [[ "${1:-}" == "--probe-node" ]]; then
+        # Read-only probe (M1): tries phase A only, never downloads.
+        if detect_node_runtime; then
+            :
+        fi
+        printf 'node_runtime_kind=%s\nnode_runtime_version=%s\nnode_bin=%s\nnpm_bin=%s\n' \
+            "$NODE_RUNTIME_KIND" "$NODE_RUNTIME_VERSION" "$NODE_BIN" "$NPM_BIN"
+        exit 0
+    fi
+
+    if [[ "${1:-}" == "--install-webui" ]]; then
+        # M3 verification flag: ensure runtime + install npm package. Touches network.
+        ensure_launcher_dirs
+        if ! ensure_node_runtime; then
+            exit 1
+        fi
+        if ! ensure_hermes_web_ui_installed; then
+            exit 1
+        fi
+        printf 'webui_installed=true\nwebui_version=%s\nwebui_bin=%s\n' \
+            "$(webui_installed_version 2>/dev/null || true)" "$WEBUI_BIN"
+        exit 0
+    fi
+
+    if [[ "${1:-}" == "--start-webui" ]]; then
+        # Full launch flow: ensure runtime, install/refresh webui, ensure messaging deps,
+        # start the daemon, then verify the gateway connected the configured platforms.
+        ensure_launcher_dirs
+        if ! ensure_node_runtime; then
+            exit 1
+        fi
+        if ! ensure_hermes_web_ui_installed; then
+            exit 1
+        fi
+        # Track A: pure on-demand platform-deps install. Failure here is non-fatal — the daemon
+        # still starts; the post-verify (Track B) will surface the resulting mismatch in the UI.
+        ensure_gateway_platform_deps || true
+        if ! start_hermes_web_ui ""; then
+            exit 1
+        fi
+        # Track B: post-verify connected platforms vs .env. Non-fatal; emits STAGE event for UI banner.
+        verify_gateway_platforms_match_env || true
+        local token=""
+        token="$(read_webui_token 2>/dev/null || true)"
+        printf 'webui_running=true\nwebui_url=%s\nwebui_pid=%s\nwebui_token_present=%s\n' \
+            "$WEBUI_URL" "$(read_webui_pid 2>/dev/null || true)" "$([[ -n "$token" ]] && echo true || echo false)"
+        exit 0
+    fi
+
+    if [[ "${1:-}" == "--stop-webui" ]]; then
+        stop_hermes_web_ui
+        exit 0
+    fi
+
+    if [[ "${1:-}" == "--status-webui" ]]; then
+        if status_hermes_web_ui; then
+            exit 0
+        fi
+        exit 1
+    fi
+
+    if [[ "${1:-}" == "--ensure-platform-deps" ]]; then
+        # Track A standalone verification flag. Touches network if any channel needs install.
+        ensure_launcher_dirs
+        if ensure_gateway_platform_deps; then
+            exit 0
+        fi
+        exit 1
+    fi
+
+    if [[ "${1:-}" == "--verify-platforms" ]]; then
+        # Track B standalone verification flag. Reads gateway.log + .env, no side effects.
+        if verify_gateway_platforms_match_env; then
+            exit 0
+        fi
+        exit 1
     fi
 
     if [[ "$(uname -s)" != "Darwin" ]]; then

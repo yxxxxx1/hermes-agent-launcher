@@ -1,101 +1,55 @@
 import SwiftUI
+import AppKit
 
-private enum LauncherPalette {
-    static let bgApp = Color(red: 0.95, green: 0.94, blue: 0.91)
-    static let bgAppSecondary = Color(red: 0.92, green: 0.91, blue: 0.88)
-    static let bgGlow = Color(red: 0.96, green: 0.79, blue: 0.54)
+// MARK: - Visual tokens (v2 design)
 
-    static let surfacePrimary = Color(red: 0.98, green: 0.97, blue: 0.95)
-    static let surfaceSecondary = Color(red: 0.96, green: 0.94, blue: 0.91)
-    static let surfaceTertiary = Color(red: 0.94, green: 0.91, blue: 0.87)
-    static let surfaceHover = Color(red: 0.95, green: 0.90, blue: 0.84)
+enum LauncherPalette {
+    static let bgApp = Color(red: 0.949, green: 0.941, blue: 0.910)            // #f2f0e8
+    static let surfacePrimary = Color(red: 0.976, green: 0.965, blue: 0.937)   // window panel
+    static let surfaceSecondary = Color(red: 0.949, green: 0.929, blue: 0.886) // chip / pill
+    static let surfaceTertiary = Color(red: 0.929, green: 0.910, blue: 0.875)  // hover
 
-    static let textPrimary = Color(red: 0.15, green: 0.15, blue: 0.13)
-    static let textSecondary = Color(red: 0.37, green: 0.35, blue: 0.31)
-    static let textTertiary = Color(red: 0.54, green: 0.50, blue: 0.46)
-    static let textOnAccent = Color(red: 0.99, green: 0.99, blue: 0.97)
+    static let textPrimary = Color(red: 0.118, green: 0.106, blue: 0.090)      // ink
+    static let textSecondary = Color(red: 0.376, green: 0.349, blue: 0.314)
+    static let textTertiary = Color(red: 0.580, green: 0.541, blue: 0.490)
+    static let textOnAccent = Color(red: 0.996, green: 0.984, blue: 0.965)
 
-    static let accentPrimary = Color(red: 0.85, green: 0.47, blue: 0.17)
-    static let accentSoft = Color(red: 0.95, green: 0.71, blue: 0.42)
-    static let accentDeep = Color(red: 0.66, green: 0.33, blue: 0.12)
+    static let accentPrimary = Color(red: 0.851, green: 0.471, blue: 0.169)    // #d9782b
+    static let accentDeep = Color(red: 0.659, green: 0.329, blue: 0.122)       // #a8541f
+    static let accentSoft = Color(red: 0.953, green: 0.788, blue: 0.553)
 
-    static let success = Color(red: 0.31, green: 0.56, blue: 0.48)
-    static let successSoft = Color(red: 0.86, green: 0.93, blue: 0.90)
-    static let warning = Color(red: 0.78, green: 0.54, blue: 0.23)
-    static let warningSoft = Color(red: 0.96, green: 0.91, blue: 0.82)
-    static let danger = Color(red: 0.76, green: 0.37, blue: 0.32)
-    static let dangerSoft = Color(red: 0.97, green: 0.88, blue: 0.85)
+    static let success = Color(red: 0.310, green: 0.561, blue: 0.478)          // #4f8f7a
+    static let successSoft = Color(red: 0.847, green: 0.918, blue: 0.882)
+    static let warning = Color(red: 0.780, green: 0.541, blue: 0.227)          // #c78a3a
+    static let warningSoft = Color(red: 0.961, green: 0.910, blue: 0.820)
+    static let danger = Color(red: 0.761, green: 0.369, blue: 0.322)           // #c25e52
+    static let dangerSoft = Color(red: 0.965, green: 0.882, blue: 0.851)
 
     static let lineSoft = Color.black.opacity(0.06)
     static let lineSofter = Color.black.opacity(0.04)
 }
 
+// MARK: - Root
+
 struct LauncherRootView: View {
     @ObservedObject var store: LauncherStore
-    @State private var showsAdvancedTools = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var activeStage: StageCardModel {
-        store.snapshot.stages.first(where: { $0.status == .active }) ?? store.snapshot.stages[0]
-    }
-
-    private var completedCount: Int {
-        store.snapshot.stages.filter { $0.status == .complete }.count
-    }
-
-    private var isSetupFinished: Bool {
-        store.snapshot.stages.dropLast().allSatisfy { $0.status == .complete }
-    }
-
-    private var targetWindowSize: CGSize {
-        isSetupFinished ? CGSize(width: 820, height: 660) : CGSize(width: 920, height: 760)
-    }
+    @State private var showsAbout = false
 
     var body: some View {
         ZStack {
-            LauncherBackdrop()
+            LauncherPalette.bgApp
                 .ignoresSafeArea()
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 22) {
-                    TopBanner(snapshot: store.snapshot, isSetupFinished: isSetupFinished)
-
-                    if isSetupFinished {
-                        ManagementHome(store: store)
-                            .transition(screenTransition)
-                    } else {
-                        SetupHome(
-                            store: store,
-                            activeStage: activeStage,
-                            completedCount: completedCount,
-                            showsAdvancedTools: $showsAdvancedTools
-                        )
-                        .transition(screenTransition)
-                    }
-                }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 26)
-                .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.88), value: store.snapshot.primaryAction)
+            VStack(spacing: 0) {
+                TitleBarView()
+                HeroContainer(store: store, showsAbout: $showsAbout)
+                FooterView(store: store, showsAbout: $showsAbout)
             }
         }
-        .background(WindowSizeAdaptor(targetSize: targetWindowSize))
-        .overlay(alignment: .center) {
-            if store.showsBusyOverlay {
-                BusyOverlay(
-                    message: store.busyMessage,
-                    dismissible: store.busyOverlayDismissible,
-                    onClose: {
-                        store.dismissBusyOverlay()
-                    }
-                )
-            }
+        .frame(width: 720, height: 560)
+        .sheet(isPresented: $showsAbout) {
+            AboutSheet(store: store, isPresented: $showsAbout)
         }
-        .overlay(alignment: .center) {
-            if let resultCard = store.resultCard {
-                ResultOverlay(result: resultCard, store: store)
-            }
-        }
-        .disabled(store.isBusy && store.showsBusyOverlay)
         .alert("操作信息", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } }
@@ -110,1101 +64,848 @@ struct LauncherRootView: View {
             }
         }
     }
-
-    private var screenTransition: AnyTransition {
-        reduceMotion ? .opacity : .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.98)), removal: .opacity)
-    }
 }
 
-private struct BusyOverlay: View {
-    let message: String
-    let dismissible: Bool
-    let onClose: () -> Void
+// MARK: - Title bar
 
+private struct TitleBarView: View {
     var body: some View {
         ZStack {
-            Color.black.opacity(0.10)
-                .ignoresSafeArea()
-
-            VStack(spacing: 16) {
-                HStack {
-                    Spacer(minLength: 0)
-
-                    if dismissible {
-                        Button(action: onClose) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(LauncherPalette.textSecondary)
-                                .frame(width: 28, height: 28)
-                                .background(LauncherPalette.surfaceSecondary)
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                ZStack {
-                    Circle()
-                        .fill(LauncherPalette.surfacePrimary)
-                        .frame(width: 72, height: 72)
-
-                    ProgressView()
-                        .controlSize(.regular)
-                        .tint(LauncherPalette.accentPrimary)
-                }
-
-                VStack(spacing: 8) {
-                    Text("正在帮你检查")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-
-                    Text(message)
-                        .font(.system(size: 14, weight: .regular, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textSecondary)
-                        .multilineTextAlignment(.center)
-
-                    Text("不用打开命令行，检查完成后会直接告诉你结果。")
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textTertiary)
-                        .multilineTextAlignment(.center)
-
-                    if dismissible {
-                        Text("关闭后检查会继续，完成时仍会告诉你结果。")
-                            .font(.system(size: 12, weight: .regular, design: .rounded))
-                            .foregroundStyle(LauncherPalette.textTertiary)
-                            .multilineTextAlignment(.center)
-                    }
-                }
-            }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
-            .frame(width: 360)
-            .background(LauncherPalette.surfacePrimary.opacity(0.98))
-            .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: Color.black.opacity(0.12), radius: 30, y: 10)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .zIndex(20)
-        .transition(.opacity)
-    }
-}
-
-private struct ResultOverlay: View {
-    let result: LauncherResultCard
-    @ObservedObject var store: LauncherStore
-
-    private var toneColor: Color {
-        switch result.tone {
-        case .success: return LauncherPalette.success
-        case .warning: return LauncherPalette.warning
-        case .info: return LauncherPalette.accentPrimary
-        }
-    }
-
-    private var toneBackground: Color {
-        switch result.tone {
-        case .success: return LauncherPalette.successSoft
-        case .warning: return LauncherPalette.warningSoft
-        case .info: return LauncherPalette.surfaceTertiary
-        }
-    }
-
-    private var symbol: String {
-        switch result.tone {
-        case .success: return "checkmark.circle.fill"
-        case .warning: return "exclamationmark.circle.fill"
-        case .info: return "info.circle.fill"
-        }
-    }
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.12)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    store.resultCard = nil
-                }
-
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 14) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(toneColor)
-                        .frame(width: 44, height: 44)
-                        .background(toneBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(result.title)
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                            .foregroundStyle(LauncherPalette.textPrimary)
-
-                        Text(result.message)
-                            .font(.system(size: 14, weight: .regular, design: .rounded))
-                            .foregroundStyle(LauncherPalette.textSecondary)
-                            .lineSpacing(3)
-                    }
-
-                    Spacer(minLength: 0)
-                }
-
-                HStack(spacing: 12) {
-                    if let primaryTitle = result.primaryActionTitle,
-                       let primaryID = result.primaryActionID {
-                        Button(primaryTitle) {
-                            store.resultCard = nil
-                            store.perform(action: primaryID)
-                        }
-                        .buttonStyle(PrimaryLauncherButtonStyle())
-                    }
-
-                    if let secondaryTitle = result.secondaryActionTitle,
-                       let secondaryID = result.secondaryActionID {
-                        Button(secondaryTitle) {
-                            store.resultCard = nil
-                            store.perform(action: secondaryID)
-                        }
-                        .buttonStyle(SecondaryLauncherButtonStyle())
-                    }
-
-                    Button("知道了") {
-                        store.resultCard = nil
-                    }
-                    .buttonStyle(SecondaryLauncherButtonStyle())
-                }
-            }
-            .padding(24)
-            .frame(width: 460)
-            .background(LauncherPalette.surfacePrimary.opacity(0.98))
-            .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: Color.black.opacity(0.12), radius: 30, y: 10)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .zIndex(21)
-        .transition(.opacity)
-    }
-}
-
-private struct LauncherBackdrop: View {
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    LauncherPalette.bgApp,
-                    LauncherPalette.bgAppSecondary,
-                    LauncherPalette.surfaceSecondary
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            RadialGradient(
-                colors: [
-                    LauncherPalette.bgGlow.opacity(0.22),
-                    LauncherPalette.bgGlow.opacity(0.0)
-                ],
-                center: .top,
-                startRadius: 18,
-                endRadius: 360
-            )
-            .offset(x: 0, y: -220)
-        }
-    }
-}
-
-private struct GridPattern: View {
-    var body: some View {
-        GeometryReader { proxy in
-            Path { path in
-                let width = proxy.size.width
-                let height = proxy.size.height
-                stride(from: 0.0, through: width, by: 48).forEach { x in
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: height))
-                }
-                stride(from: 0.0, through: height, by: 48).forEach { y in
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: width, y: y))
-                }
-            }
-            .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-        }
-    }
-}
-
-private struct TopBanner: View {
-    let snapshot: LauncherSnapshot
-    let isSetupFinished: Bool
-
-    var body: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(LauncherPalette.accentPrimary)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(isSetupFinished ? "Hermes 管理中心" : "Hermes 安装助手")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-                    Text(snapshot.version)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(LauncherPalette.textTertiary)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(LauncherPalette.surfacePrimary.opacity(0.76))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: Color.black.opacity(0.05), radius: 10, y: 4)
-    }
-}
-
-private struct SetupHome: View {
-    @ObservedObject var store: LauncherStore
-    let activeStage: StageCardModel
-    let completedCount: Int
-    @Binding var showsAdvancedTools: Bool
-
-    var body: some View {
-        VStack(spacing: 14) {
-            SetupHero(store: store, activeStage: activeStage, completedCount: completedCount)
-            ProgressTrackCard(snapshot: store.snapshot, completedCount: completedCount)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct SetupHero: View {
-    @ObservedObject var store: LauncherStore
-    let activeStage: StageCardModel
-    let completedCount: Int
-
-    private var helperTitle: String {
-        switch activeStage.stage {
-        case .install:
-            return "现在先安装 Hermes"
-        case .model:
-            return "接下来连接 AI 服务"
-        case .chat:
-            return "最后打开浏览器对话"
-        }
-    }
-
-    private var helperDescription: String {
-        switch activeStage.stage {
-        case .install:
-            return "这一步会把 Hermes 安装到你的电脑上。大多数情况下只需要继续一次，然后等待完成。"
-        case .model:
-            return "这一步会帮你填好 AI 服务相关设置。完成后，Hermes 才能真正开始工作。"
-        case .chat:
-            return "这一步会打开 Hermes 对话界面。以后日常聊天都在浏览器里完成，不再需要守着终端窗口。"
-        }
-    }
-
-    private var durationText: String {
-        switch activeStage.stage {
-        case .install: return "预计 2 到 5 分钟"
-        case .model: return "预计 1 到 3 分钟"
-        case .chat: return "预计不到 1 分钟"
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("第 \(completedCount + 1) / 3 步")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(LauncherPalette.accentPrimary)
-                    .tracking(1.1)
-
-                Text(helperTitle)
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textPrimary)
-                    .tracking(-0.7)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text(helperDescription)
-                    .font(.system(size: 15, weight: .regular, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textSecondary)
-                    .lineSpacing(3)
-                    .frame(maxWidth: 620, alignment: .leading)
-
-                Text("不用打开命令行，也不用记步骤。先把这一项做完，启动器会自动带你到下一步。")
-                    .font(.system(size: 13, weight: .regular, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textTertiary)
-                    .lineSpacing(2)
-                    .frame(maxWidth: 600, alignment: .leading)
-            }
-
-            HStack(spacing: 14) {
-                Button(store.snapshot.primaryButtonTitle) {
-                    store.performPrimaryAction()
-                }
-                .buttonStyle(PrimaryLauncherButtonStyle())
-
-                Button("刷新状态") {
-                    store.refresh()
-                }
-                .buttonStyle(SecondaryLauncherButtonStyle())
-            }
-
-            HStack(spacing: 10) {
-                FriendlyPill(symbol: "clock", text: durationText)
-                FriendlyPill(symbol: "checkmark.circle", text: "现在只做这一项")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(28)
-        .heroPanelBackground()
-    }
-}
-
-private struct ProgressTrackCard: View {
-    let snapshot: LauncherSnapshot
-    let completedCount: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("安装进度")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textPrimary)
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    ForEach(snapshot.stages) { item in
-                        CompactProgressStep(item: item)
-                    }
-                }
-
-                VStack(spacing: 10) {
-                    ForEach(snapshot.stages) { item in
-                        ProgressStepRow(item: item)
-                    }
-                }
-            }
-        }
-        .padding(18)
-        .background(LauncherPalette.surfacePrimary.opacity(0.72))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-}
-
-private struct CompactProgressStep: View {
-    let item: StageCardModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                ZStack {
-                    Circle()
-                        .fill(item.status == .complete ? LauncherPalette.success : item.status == .active ? LauncherPalette.warning : LauncherPalette.surfaceTertiary)
-                        .frame(width: 30, height: 30)
-
-                    Image(systemName: item.status == .complete ? "checkmark" : item.symbolName)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            Text(item.shortTitle)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(LauncherPalette.textPrimary)
-
-            Text(item.status.label)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(item.accentColor)
-
-            Text(item.stage.detail)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+            Text("Hermes Launcher")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(LauncherPalette.textSecondary)
-                .lineLimit(3)
         }
-        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
-        .padding(14)
-        .background(item.status == .complete ? LauncherPalette.successSoft : item.status == .active ? LauncherPalette.warningSoft : LauncherPalette.surfacePrimary)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(item.status == .complete ? LauncherPalette.success.opacity(0.35) : item.status == .active ? LauncherPalette.warning.opacity(0.35) : LauncherPalette.lineSoft, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .frame(height: 40)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(LauncherPalette.lineSofter)
+                .frame(height: 1)
+        }
     }
 }
 
-private struct ProgressStepRow: View {
-    let item: StageCardModel
+// MARK: - Hero container
+
+private struct HeroContainer: View {
+    @ObservedObject var store: LauncherStore
+    @Binding var showsAbout: Bool
 
     var body: some View {
-        HStack(spacing: 14) {
+        Group {
+            switch store.snapshot.heroState {
+            case .notInstalled:
+                HeroNotInstalled(store: store)
+            case .readyToLaunch:
+                HeroReadyToLaunch(store: store)
+            case .inProgress:
+                HeroInProgress(store: store)
+            case .running:
+                HeroRunning(store: store)
+            case .error(let reason, let message):
+                HeroError(store: store, reason: reason, message: message)
+            case .networkBlocked:
+                HeroNetworkBlocked(store: store)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Hero state 1: not installed
+
+private struct HeroNotInstalled: View {
+    @ObservedObject var store: LauncherStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+
             ZStack {
                 Circle()
-                    .fill(item.status == .complete ? LauncherPalette.success : item.status == .active ? LauncherPalette.warning : LauncherPalette.surfaceTertiary)
-                    .frame(width: 36, height: 36)
-
-                Image(systemName: item.status == .complete ? "checkmark" : item.symbolName)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(item.stage.title)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-
-                    Text(item.status.label)
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(item.accentColor)
-                }
-
-                Text(item.stage.detail)
-                    .font(.system(size: 12, weight: .regular, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textSecondary)
-                    .lineSpacing(2)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 15)
-        .background(item.status == .complete ? LauncherPalette.successSoft : item.status == .active ? LauncherPalette.warningSoft : LauncherPalette.surfacePrimary)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(item.status == .complete ? LauncherPalette.success.opacity(0.35) : item.status == .active ? LauncherPalette.warning.opacity(0.35) : LauncherPalette.lineSoft, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-}
-
-private struct ManagementHome: View {
-    @ObservedObject var store: LauncherStore
-    @State private var showsAdvancedTools = false
-
-    var body: some View {
-        VStack(spacing: 18) {
-            ManagementHero(store: store)
-            ManagementSimpleActionsSection(store: store, showsAdvancedTools: $showsAdvancedTools)
-            ManagementMaintenanceSection(store: store, showsAdvancedTools: $showsAdvancedTools)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct ManagementHero: View {
-    @ObservedObject var store: LauncherStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Hermes 已经可以用了")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .foregroundStyle(LauncherPalette.textPrimary)
-                .tracking(-0.8)
-
-            Text("它已经安装好，也已经连上 AI。你现在最需要做的，通常就是打开浏览器和它说话。")
-                .font(.system(size: 16, weight: .regular, design: .rounded))
-                .foregroundStyle(LauncherPalette.textSecondary)
-                .lineSpacing(4)
-                .frame(maxWidth: 640, alignment: .leading)
-
-            HStack(spacing: 12) {
-                Button("开始和 Hermes 对话") {
-                    store.perform(action: "chat")
-                }
-                .buttonStyle(PrimaryLauncherButtonStyle())
-
-                if store.snapshot.aiModel != "未配置" {
-                    FriendlyPill(symbol: "cpu", text: "当前模型：\(store.snapshot.aiModel)")
-                }
-
-                FriendlyPill(symbol: "safari", text: store.snapshot.webuiStatus)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(26)
-        .managementHeroBackground()
-    }
-}
-
-private struct ManagementSimpleActionsSection: View {
-    @ObservedObject var store: LauncherStore
-    @Binding var showsAdvancedTools: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("接下来你可能会做的事")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textPrimary)
-
-                Text("只保留最常用的几个入口，其余放到下面。")
-                    .font(.system(size: 14, weight: .regular, design: .rounded))
-                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .fill(LauncherPalette.accentPrimary.opacity(0.16))
+                    .frame(width: 68, height: 68)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.accentPrimary)
             }
 
             VStack(spacing: 10) {
-                SimpleActionRow(
-                    title: "开始和 Hermes 对话",
-                    subtitle: "打开熟悉的对话界面，继续聊天、查看会话和处理任务。",
-                    symbol: "safari"
-                ) {
-                    store.perform(action: "chat")
+                Text("欢迎使用 Hermes Launcher")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textPrimary)
+                Text("点开始安装，启动器会自动准备好运行环境，并在浏览器中打开 Hermes 对话界面。")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+                    .lineSpacing(2)
+            }
+            .padding(.top, 18)
+
+            PrimaryCTA(title: "开始安装") {
+                store.performPrimaryAction()
+            }
+            .padding(.top, 22)
+
+            HStack(spacing: 6) {
+                Text("安装位置：")
+                    .foregroundStyle(LauncherPalette.textTertiary)
+                Text("~/.hermes")
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .fontWeight(.medium)
+                Button("更换位置") {
+                    // TODO(macos-webui-migration UI follow-up): expose install-dir picker.
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(LauncherPalette.accentDeep)
+                .underline()
+            }
+            .font(.system(size: 12, design: .rounded))
+            .padding(.top, 12)
 
-                SimpleActionRow(
-                    title: "换一个 AI 模型",
-                    subtitle: "如果你想切换到别的模型，从这里改就可以。",
-                    symbol: "slider.horizontal.3"
-                ) {
-                    store.perform(action: "model")
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+    }
+}
+
+// MARK: - Hero "ready to launch" (installed, but WebUI not running)
+
+private struct HeroReadyToLaunch: View {
+    @ObservedObject var store: LauncherStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+
+            ZStack {
+                Circle()
+                    .fill(LauncherPalette.successSoft)
+                    .frame(width: 80, height: 80)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.success)
+            }
+
+            VStack(spacing: 10) {
+                Text("Hermes 已安装，等待启动")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textPrimary)
+                Text("启动后会在浏览器中打开对话界面。")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+                    .lineSpacing(2)
+            }
+            .padding(.top, 18)
+
+            PrimaryCTA(title: "启动浏览器对话", width: 220) {
+                store.performPrimaryAction()
+            }
+            .padding(.top, 22)
+
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+    }
+}
+
+// MARK: - Hero state 2: in progress (7-row checklist)
+
+private struct HeroInProgress: View {
+    @ObservedObject var store: LauncherStore
+
+    private var progress: LaunchProgress {
+        store.snapshot.launchProgress ?? .initial()
+    }
+
+    private var headline: String {
+        progress.headlineFromSimplified
+    }
+
+    /// "第 N 步" — index of the currently-active simplified row, or fall back to the most recent.
+    private var stepLabel: String {
+        if let idx = progress.simplifiedStepIndex {
+            return "第 \(idx) 步"
+        }
+        // No row is currently running — count completed/skipped rows.
+        let done = progress.simplifiedRows.filter {
+            if case .done = $0.status { return true }
+            if case .skipped = $0.status { return true }
+            return false
+        }.count
+        if done >= 3 { return "完成" }
+        return "第 \(max(1, done + 1)) 步"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 14)
+
+            VStack(spacing: 4) {
+                Text(stepLabel)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(1.4)
+                    .foregroundStyle(LauncherPalette.textTertiary)
+                Text(headline)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textPrimary)
+                    .multilineTextAlignment(.center)
+            }
+
+            SimplifiedChecklist(rows: progress.simplifiedRows)
+                .padding(.top, 18)
+                .padding(.horizontal, 24)
+
+            Text("已用时 \(formatElapsed(store.elapsedSeconds))")
+                .font(.system(size: 12, design: .rounded))
+                .foregroundStyle(LauncherPalette.textTertiary)
+                .padding(.top, 14)
+
+            HStack(spacing: 12) {
+                PrimaryCTA(title: "启动浏览器对话", isDisabled: true) {}
+                Button("取消") {
+                    store.cancelLaunch()
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(LauncherPalette.textSecondary)
+            }
+            .padding(.top, 14)
 
-                SimpleActionRow(
-                    title: "检查现在能不能正常用",
-                    subtitle: "如果你担心没有配好，可以先做一次自动检查。",
-                    symbol: "stethoscope"
-                ) {
-                    store.perform(action: "doctor")
+            Spacer(minLength: 8)
+
+            Button {
+                store.openLog(path: NSHomeDirectory() + "/.hermes/launcher-runtime/install.log")
+            } label: {
+                Text("▸ 查看技术日志")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textTertiary)
+                    .underline(true, pattern: .dash)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 8)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private func formatElapsed(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct SimplifiedChecklist: View {
+    let rows: [LaunchProgress.SimplifiedRow]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(rows) { row in
+                rowView(row)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: LaunchProgress.SimplifiedRow) -> some View {
+        let isRunning: Bool = { if case .running = row.status { return true } else { return false } }()
+        HStack(spacing: 10) {
+            statusIcon(row.status)
+                .frame(width: 18, height: 18)
+            Text(row.title)
+                .font(.system(size: 13, weight: isRunning ? .semibold : .regular, design: .rounded))
+                .foregroundStyle(textColor(for: row.status))
+            Spacer(minLength: 8)
+            if !row.detail.isEmpty {
+                Text(row.detail)
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textTertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isRunning ? LauncherPalette.accentPrimary.opacity(0.08) : Color.clear)
+        )
+    }
+
+    @ViewBuilder
+    private func statusIcon(_ status: LaunchProgress.AggregateStatus) -> some View {
+        switch status {
+        case .done:
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(LauncherPalette.success)
+        case .running:
+            ProgressView()
+                .controlSize(.small)
+                .tint(LauncherPalette.accentPrimary)
+        case .pending:
+            Circle()
+                .stroke(LauncherPalette.lineSoft, lineWidth: 1.2)
+                .frame(width: 12, height: 12)
+        case .skipped:
+            Rectangle()
+                .fill(LauncherPalette.textTertiary)
+                .frame(width: 10, height: 1.4)
+        case .failed:
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(LauncherPalette.danger)
+        }
+    }
+
+    private func textColor(for status: LaunchProgress.AggregateStatus) -> Color {
+        switch status {
+        case .done, .running: return LauncherPalette.textPrimary
+        case .pending, .skipped: return LauncherPalette.textTertiary
+        case .failed: return LauncherPalette.danger
+        }
+    }
+}
+
+// MARK: - Hero state 3: running
+
+private struct HeroRunning: View {
+    @ObservedObject var store: LauncherStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Mismatch warning banner — only when verify_platforms emitted mismatch_persistent.
+            if let mm = store.snapshot.platformMismatch {
+                MismatchBanner(mismatch: mm) {
+                    store.perform(action: "open-install-log")
                 }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+            }
 
-                if store.snapshot.gatewayStatus == "未配置" {
-                    SimpleActionRow(
-                        title: "接收微信、飞书、QQ等消息通知",
-                        subtitle: "需要时再接入。不设置也不影响平时直接使用。",
-                        symbol: "message.badge.waveform"
-                    ) {
-                        store.perform(action: "gateway_setup")
-                    }
+            Spacer(minLength: 24)
+
+            ZStack {
+                Circle()
+                    .fill(LauncherPalette.successSoft)
+                    .frame(width: 68, height: 68)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.success)
+            }
+
+            VStack(spacing: 10) {
+                Text("Hermes 已就绪")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textPrimary)
+                Text("浏览器对话已经准备好了，点下面打开。")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+            .padding(.top, 18)
+
+            PrimaryCTA(title: "在浏览器中打开") {
+                store.openWebUIBrowser()
+            }
+            .padding(.top, 22)
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(LauncherPalette.success)
+                    .frame(width: 6, height: 6)
+                Text("运行中")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(LauncherPalette.successSoft)
+            )
+            .padding(.top, 14)
+
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+    }
+}
+
+private struct MismatchBanner: View {
+    let mismatch: PlatformMismatch
+    let onOpenLog: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(LauncherPalette.warning)
+                    .frame(width: 22, height: 22)
+                Text("!")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textOnAccent)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Hermes 网关只连接了 \(mismatch.connected) / \(mismatch.configured) 个已配置平台")
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.42, green: 0.29, blue: 0.09))
+                Text("可能某个聊天工具配置失败")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(Color(red: 0.42, green: 0.29, blue: 0.09).opacity(0.78))
+            }
+            Spacer(minLength: 8)
+            Button("查看安装日志") {
+                onOpenLog()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(LauncherPalette.accentDeep)
+            .underline()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(LauncherPalette.warningSoft)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color(red: 0.85, green: 0.69, blue: 0.42), lineWidth: 1)
+                )
+        )
+    }
+}
+
+// MARK: - Hero state 4: error
+
+private struct HeroError: View {
+    @ObservedObject var store: LauncherStore
+    let reason: String
+    let message: String
+
+    private var title: String {
+        if reason.hasPrefix("install_platform_dep_failed:") {
+            let label = reason.dropFirst("install_platform_dep_failed:".count)
+            return "\(label) 配置失败"
+        }
+        if reason == "install_platform_dep_failed" { return "聊天工具配置失败" }
+        if reason.hasPrefix("npm_install_failed") { return "安装失败" }
+        if reason.hasPrefix("curl_") || reason == "node_download_failed" { return "运行环境下载失败" }
+        if reason.hasPrefix("tar_") || reason == "node_extract_failed" { return "运行环境解压失败" }
+        if reason == "health_timeout" { return "启动超时" }
+        if reason == "webui_failed" { return "无法启动浏览器对话" }
+        return "无法启动浏览器对话"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+
+            ZStack {
+                Circle()
+                    .fill(LauncherPalette.dangerSoft)
+                    .frame(width: 68, height: 68)
+                Image(systemName: "exclamationmark")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.danger)
+            }
+
+            VStack(spacing: 10) {
+                Text(title)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textPrimary)
+                Text(message)
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+                    .lineSpacing(2)
+            }
+            .padding(.top, 18)
+
+            PrimaryCTA(title: "重试") {
+                store.snapshot.launchProgress = nil
+                store.launch()
+            }
+            .padding(.top, 22)
+
+            HStack(spacing: 16) {
+                Button("查看 Hermes 日志") {
+                    store.perform(action: "open-webui-log")
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(LauncherPalette.accentDeep)
+                .underline()
 
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                        showsAdvancedTools = true
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(LauncherPalette.textTertiary)
-                            .frame(width: 36, height: 36)
-                            .background(LauncherPalette.surfaceTertiary)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Button("查看安装日志") {
+                    store.perform(action: "open-install-log")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LauncherPalette.accentDeep)
+                .underline()
+            }
+            .font(.system(size: 12, design: .rounded))
+            .padding(.top, 14)
 
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("更多设置和维护")
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+    }
+}
+
+// MARK: - Hero state 5: network blocked
+
+private struct HeroNetworkBlocked: View {
+    @ObservedObject var store: LauncherStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+
+            ZStack {
+                Circle()
+                    .fill(LauncherPalette.dangerSoft)
+                    .frame(width: 80, height: 80)
+                Image(systemName: "exclamationmark")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.danger)
+            }
+
+            VStack(spacing: 10) {
+                Text("网络似乎不通")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textPrimary)
+                Text("下载组件需要联网，请检查网络后重试。")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+            .padding(.top, 18)
+
+            PrimaryCTA(title: "重新检测") {
+                store.refresh()
+            }
+            .padding(.top, 22)
+
+            HStack(spacing: 18) {
+                Button("使用国内镜像") {
+                    // TODO: wire mirror toggle to launcher script when registry-pin UI lands.
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LauncherPalette.accentDeep)
+                .underline()
+
+                Button("打开诊断帮助") {
+                    NSWorkspace.shared.open(URL(string: "https://hermes-agent.nousresearch.com/docs/getting-started/installation/")!)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LauncherPalette.accentDeep)
+                .underline()
+            }
+            .font(.system(size: 12, design: .rounded))
+            .padding(.top, 14)
+
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+    }
+}
+
+// MARK: - Footer
+
+private struct FooterView: View {
+    @ObservedObject var store: LauncherStore
+    @Binding var showsAbout: Bool
+    @State private var showsMenu = false
+
+    private var footerText: String {
+        // Mismatch overrides everything else with an orange-counted summary.
+        if let mm = store.snapshot.platformMismatch {
+            return "\(mm.connected)/\(mm.configured) 个聊天工具在线"
+        }
+        switch store.snapshot.heroState {
+        case .notInstalled:
+            return store.snapshot.primaryAction == "launch" ? "已安装，等待启动" : "未安装"
+        case .readyToLaunch: return "已安装，等待启动"
+        case .inProgress: return "准备中…"
+        case .running: return "运行中"
+        case .error: return "运行环境出错"
+        case .networkBlocked: return "网络检查未通过"
+        }
+    }
+
+    private var footerColor: Color {
+        if store.snapshot.platformMismatch != nil { return LauncherPalette.warning }
+        switch store.snapshot.heroState {
+        case .networkBlocked: return LauncherPalette.warning
+        case .error: return LauncherPalette.textSecondary
+        default: return LauncherPalette.textTertiary
+        }
+    }
+
+    var body: some View {
+        HStack {
+            Text(footerText)
+                .font(.system(size: 11, weight: footerColor == LauncherPalette.warning ? .semibold : .regular, design: .rounded))
+                .foregroundStyle(footerColor)
+            Spacer()
+            Button {
+                showsMenu.toggle()
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle().fill(LauncherPalette.surfaceSecondary)
+                    )
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showsMenu, arrowEdge: .top) {
+                FooterMenu(store: store, showsAbout: $showsAbout, isPresented: $showsMenu)
+                    .frame(width: 220)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(LauncherPalette.lineSofter)
+                .frame(height: 1)
+        }
+    }
+}
+
+private struct FooterMenu: View {
+    @ObservedObject var store: LauncherStore
+    @Binding var showsAbout: Bool
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            menuRow(icon: "arrow.clockwise", label: "重启 Hermes") {
+                store.perform(action: "restart-webui")
+            }
+            menuRow(icon: "stop.circle", label: "停止 Hermes") {
+                store.perform(action: "stop-webui")
+            }
+            divider
+            menuRow(icon: "doc.text", label: "查看 Hermes 日志") {
+                store.perform(action: "open-webui-log")
+            }
+            menuRow(icon: "doc.text.below.ecg", label: "查看安装日志") {
+                store.perform(action: "open-install-log")
+            }
+            menuRow(icon: "folder", label: "打开 ~/.hermes") {
+                store.perform(action: "open-home")
+            }
+            divider
+            menuRow(icon: "stethoscope", label: "诊断（doctor）") {
+                store.perform(action: "doctor")
+            }
+            menuRow(icon: "gearshape.2", label: "高级…") {
+                store.perform(action: "setup")
+            }
+            divider
+            menuRow(icon: "info.circle", label: "关于 Hermes Launcher") {
+                showsAbout = true
+            }
+            menuRow(icon: "trash", label: "卸载", role: .destructive) {
+                store.perform(action: "uninstall")
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(LauncherPalette.lineSofter)
+            .frame(height: 1)
+            .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func menuRow(icon: String, label: String, role: ButtonRole? = nil, action: @escaping () -> Void) -> some View {
+        Button {
+            isPresented = false
+            action()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .frame(width: 18, alignment: .center)
+                    .foregroundStyle(role == .destructive ? LauncherPalette.danger : LauncherPalette.textSecondary)
+                Text(label)
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(role == .destructive ? LauncherPalette.danger : LauncherPalette.textPrimary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - About sheet
+
+private struct AboutSheet: View {
+    @ObservedObject var store: LauncherStore
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("关于 Hermes Launcher")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(LauncherPalette.textSecondary)
+                .padding(.top, 16)
+                .padding(.horizontal, 24)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        Text("OPEN SOURCE")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .tracking(1.4)
+                            .foregroundStyle(LauncherPalette.textOnAccent)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule()
+                                    .fill(LinearGradient(colors: [LauncherPalette.accentPrimary, LauncherPalette.accentDeep], startPoint: .leading, endPoint: .trailing))
+                            )
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("本启动器代码已开源")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
                                 .foregroundStyle(LauncherPalette.textPrimary)
-
-                            Text("更新、查看记录、打开文件夹或卸载，都在这里。")
-                                .font(.system(size: 13, weight: .regular, design: .rounded))
+                            Text("欢迎在 GitHub 上查看源代码、提 issue、参与共建")
+                                .font(.system(size: 11, design: .rounded))
                                 .foregroundStyle(LauncherPalette.textSecondary)
                         }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(LauncherPalette.surfaceSecondary)
+                    )
 
-                        Spacer(minLength: 0)
+                    Text(store.snapshot.version)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(LauncherPalette.textPrimary)
 
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .bold))
+                    VStack(alignment: .leading, spacing: 6) {
+                        aboutRow(label: "运行环境:", value: runtimeStack)
+                        aboutRow(label: "数据目录:", value: "~/.hermes  ·  WebUI 状态：~/.hermes-web-ui")
+                        aboutRow(label: "©", value: "2026 · MIT License")
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("隐私与数据")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(LauncherPalette.textSecondary)
+                        Text("[ 文案占位 — 详细公示由 macos-launcher-telemetry 提案设计；本期仅占视觉位置，不留开关交互。等数据上报方案落地后再补 ]")
+                            .font(.system(size: 11, design: .rounded))
                             .foregroundStyle(LauncherPalette.textTertiary)
+                            .lineSpacing(2)
                     }
+                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .background(LauncherPalette.surfaceTertiary)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(LauncherPalette.lineSoft, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(LauncherPalette.lineSoft, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
-                .buttonStyle(CardPressButtonStyle(scale: 0.992))
-            }
-        }
-        .padding(22)
-        .darkPanelBackground(radius: 26)
-    }
-}
-
-private struct SimpleActionRow: View {
-    let title: String
-    let subtitle: String
-    let symbol: String
-    let trigger: () -> Void
-
-    var body: some View {
-        Button(action: trigger) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: symbol)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(LauncherPalette.accentPrimary)
-                    .frame(width: 36, height: 36)
-                    .background(LauncherPalette.surfaceTertiary)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-
-                    Text(subtitle)
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textSecondary)
-                        .lineSpacing(2)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(LauncherPalette.textTertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(LauncherPalette.surfacePrimary)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .buttonStyle(CardPressButtonStyle(scale: 0.992))
-    }
-}
-
-private struct ManagementMaintenanceSection: View {
-    @ObservedObject var store: LauncherStore
-    @Binding var showsAdvancedTools: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("更多设置和维护")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-
-                    Text("平时可以先不用看，遇到问题或想调整时再展开。")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(LauncherPalette.textSecondary)
-                }
-
-                Spacer(minLength: 0)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 18)
             }
 
-            DisclosureGroup(isExpanded: $showsAdvancedTools) {
-                VStack(alignment: .leading, spacing: 16) {
-                    ManagementSettingsGroup(title: "维护相关", actions: managementMaintenanceActions, store: store)
-                }
-                .padding(.top, 14)
-            } label: {
-                HStack {
-                    Text(showsAdvancedTools ? "收起这些内容" : "展开这些内容")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-                    Spacer()
-                }
-                .padding(.vertical, 4)
-            }
-        }
-        .padding(22)
-        .darkPanelBackground(radius: 26)
-        .onReceive(NotificationCenter.default.publisher(for: .toggleManagementSettings)) { _ in
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                showsAdvancedTools.toggle()
-            }
-        }
-    }
-}
-
-private struct ManagementSettingsGroup: View {
-    let title: String
-    let actions: [ManagementAction]
-    @ObservedObject var store: LauncherStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(LauncherPalette.textTertiary)
-                .tracking(0.6)
-
-            VStack(spacing: 8) {
-                ForEach(actions) { action in
-                    ManagementListActionButton(action: action) {
-                        store.perform(action: action.id)
+            HStack {
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/yxxxxx1/hermes-agent-launcher")!)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("github.com/yxxxxx1/hermes-agent-launcher")
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 9, weight: .semibold))
                     }
                 }
-            }
-        }
-    }
-}
+                .buttonStyle(.plain)
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(LauncherPalette.accentDeep)
+                .underline()
 
-private struct ManagementListActionButton: View {
-    let action: ManagementAction
-    let trigger: () -> Void
+                Spacer()
 
-    var body: some View {
-        Button(action: trigger) {
-            HStack(spacing: 12) {
-                Image(systemName: action.symbolName)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(action.id == "uninstall" ? LauncherPalette.danger : LauncherPalette.accentPrimary)
-                    .frame(width: 28, height: 28)
-                    .background(action.id == "uninstall" ? LauncherPalette.dangerSoft : LauncherPalette.surfaceTertiary)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(action.title)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-
-                    Text(action.subtitle)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(LauncherPalette.textSecondary)
-                        .lineLimit(2)
+                Button("关闭") {
+                    isPresented = false
                 }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(LauncherPalette.textTertiary)
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(LauncherPalette.textPrimary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(LauncherPalette.surfaceSecondary)
+                )
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 20)
             .padding(.vertical, 12)
-            .background(LauncherPalette.surfacePrimary)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(alignment: .top) {
+                Rectangle().fill(LauncherPalette.lineSofter).frame(height: 1)
+            }
         }
-        .buttonStyle(CardPressButtonStyle(scale: 0.992))
+        .frame(width: 540, height: 620)
+        .background(LauncherPalette.surfacePrimary)
     }
-}
 
-private struct PrimaryLauncherButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: .bold, design: .rounded))
-            .foregroundStyle(LauncherPalette.textOnAccent)
-            .padding(.horizontal, 22)
-            .frame(height: 54)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        configuration.isPressed
-                        ? LauncherPalette.accentDeep
-                        : LauncherPalette.accentPrimary
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: LauncherPalette.accentPrimary.opacity(configuration.isPressed ? 0.18 : 0.28), radius: configuration.isPressed ? 10 : 16, y: configuration.isPressed ? 4 : 8)
-            .scaleEffect(configuration.isPressed ? 0.988 : 1)
+    private var runtimeStack: String {
+        let webui = store.snapshot.webuiVersion.isEmpty ? "未安装" : store.snapshot.webuiVersion
+        let node = store.snapshot.nodeRuntimeVersion.isEmpty
+            ? "未检测"
+            : "\(store.snapshot.nodeRuntimeVersion) (\(store.snapshot.nodeRuntimeKind))"
+        return "WebUI \(webui)  ·  Node \(node)"
     }
-}
 
-private struct SecondaryLauncherButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: .semibold, design: .rounded))
-            .foregroundStyle(LauncherPalette.textPrimary)
-            .padding(.horizontal, 18)
-            .frame(height: 54)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(configuration.isPressed ? LauncherPalette.surfaceHover : LauncherPalette.surfaceTertiary)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: Color.black.opacity(0.06), radius: configuration.isPressed ? 6 : 10, y: configuration.isPressed ? 3 : 5)
-            .scaleEffect(configuration.isPressed ? 0.992 : 1)
-    }
-}
-
-private struct CardPressButtonStyle: ButtonStyle {
-    var scale: CGFloat = 0.986
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? scale : 1)
-            .opacity(configuration.isPressed ? 0.96 : 1)
-    }
-}
-
-private struct FriendlyPill: View {
-    let symbol: String
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(LauncherPalette.accentPrimary)
-            Text(text)
-                .font(.system(size: 12, weight: .medium))
+    private func aboutRow(label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(LauncherPalette.textTertiary)
+                .frame(width: 64, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11, design: .rounded))
                 .foregroundStyle(LauncherPalette.textSecondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(LauncherPalette.surfaceTertiary)
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
-private struct WindowSizeAdaptor: NSViewRepresentable {
-    let targetSize: CGSize
+// MARK: - Primary CTA button
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            applySizeIfNeeded(for: view)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            applySizeIfNeeded(for: nsView)
-        }
-    }
-
-    private func applySizeIfNeeded(for view: NSView) {
-        guard let window = view.window else { return }
-        let size = NSSize(width: targetSize.width, height: targetSize.height)
-        let current = window.frame.size
-
-        guard abs(current.width - size.width) > 1 || abs(current.height - size.height) > 1 else {
-            return
-        }
-
-        window.minSize = NSSize(width: 760, height: 620)
-        window.setContentSize(size)
-    }
-}
-
-private struct ManagementAction: Identifiable {
-    let id: String
+private struct PrimaryCTA: View {
     let title: String
-    let subtitle: String
-    let symbolName: String
-}
-
-private extension Notification.Name {
-    static let toggleManagementSettings = Notification.Name("toggleManagementSettings")
-}
-
-private let managementUsageActions: [ManagementAction] = [
-    ManagementAction(id: "chat", title: "开始和 Hermes 对话", subtitle: "打开对话界面，继续聊天和管理会话", symbolName: "safari"),
-    ManagementAction(id: "doctor", title: "检查现在能不能正常用", subtitle: "自动检查 Hermes 当前是不是已经能正常工作", symbolName: "stethoscope"),
-    ManagementAction(id: "model", title: "更换 AI 模型", subtitle: "重新选择你想使用的 AI 服务和默认模型", symbolName: "slider.horizontal.3"),
-    ManagementAction(id: "gateway_setup", title: "连接消息通知", subtitle: "把 Hermes 接到微信、飞书、QQ等消息入口", symbolName: "message.badge.waveform"),
-    ManagementAction(id: "setup", title: "重新走一遍设置", subtitle: "从头再做一遍常用设置，适合换账号或重配环境", symbolName: "wand.and.stars")
-]
-
-private let managementMaintenanceActions: [ManagementAction] = [
-    ManagementAction(id: "update", title: "检查更新", subtitle: "安装最新 Hermes 版本", symbolName: "arrow.triangle.2.circlepath"),
-    ManagementAction(id: "open_config", title: "打开主设置", subtitle: "查看 Hermes 的主要设置", symbolName: "doc.text"),
-    ManagementAction(id: "open_env", title: "查看密钥设置", subtitle: "检查 API Key 和环境变量", symbolName: "key"),
-    ManagementAction(id: "open_logs", title: "打开问题记录", subtitle: "查看最近运行时留下的记录", symbolName: "doc.text.magnifyingglass"),
-    ManagementAction(id: "chat_terminal", title: "打开终端对话", subtitle: "浏览器对话无法启动时使用的备用入口", symbolName: "terminal"),
-    ManagementAction(id: "open_home", title: "打开数据文件夹", subtitle: "查看 Hermes 保存的数据", symbolName: "house"),
-    ManagementAction(id: "open_install", title: "打开安装位置", subtitle: "查看 Hermes 的程序文件", symbolName: "folder"),
-    ManagementAction(id: "tools", title: "调整工具权限", subtitle: "处理工具权限或可用范围", symbolName: "shippingbox.and.arrow.backward"),
-    ManagementAction(id: "docs", title: "查看帮助文档", subtitle: "打开官方说明", symbolName: "book.closed"),
-    ManagementAction(id: "repo", title: "打开项目主页", subtitle: "查看 Hermes 项目页面", symbolName: "link"),
-    ManagementAction(id: "uninstall", title: "卸载 Hermes", subtitle: "从这台 Mac 移除 Hermes", symbolName: "trash")
-]
-
-private struct RecoveryActionButton: View {
-    let title: String
-    let subtitle: String
-    let symbol: String
+    var isDisabled: Bool = false
+    var width: CGFloat = 300
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(LauncherPalette.accentPrimary)
-                    .frame(width: 34, height: 34)
-                    .background(LauncherPalette.surfaceTertiary)
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textPrimary)
-                    Text(subtitle)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(LauncherPalette.textSecondary)
-                        .multilineTextAlignment(.leading)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(LauncherPalette.surfacePrimary)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .buttonStyle(CardPressButtonStyle(scale: 0.992))
-    }
-}
-
-private struct StatusChip: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(LauncherPalette.textTertiary)
-                .tracking(1.1)
-            Text(value)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(LauncherPalette.textPrimary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(LauncherPalette.surfaceTertiary)
-        .overlay(
-            Capsule()
-                .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-        )
-        .clipShape(Capsule())
-    }
-}
-
-private extension View {
-    func heroPanelBackground(radius: CGFloat = 34) -> some View {
-        self
-            .background(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                LauncherPalette.surfacePrimary,
-                                LauncherPalette.surfaceSecondary
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        LauncherPalette.bgGlow.opacity(0.16),
-                                        Color.clear
-                                    ],
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(LauncherPalette.textOnAccent)
+                .frame(width: width, height: 48)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isDisabled
+                              ? AnyShapeStyle(LauncherPalette.accentPrimary.opacity(0.55))
+                              : AnyShapeStyle(LinearGradient(
+                                    colors: [LauncherPalette.accentPrimary, LauncherPalette.accentDeep],
                                     startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
-    }
-
-    func managementHeroBackground() -> some View {
-        self
-            .background(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                LauncherPalette.surfacePrimary,
-                                LauncherPalette.surfaceSecondary
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        LauncherPalette.bgGlow.opacity(0.20),
-                                        Color.clear
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(LauncherPalette.lineSoft, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: .black.opacity(0.08), radius: 16, y: 7)
-    }
-
-    func darkPanelBackground(radius: CGFloat = 30) -> some View {
-        self
-            .background(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(LauncherPalette.surfaceSecondary.opacity(0.88))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(Color.white.opacity(0.22))
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(LauncherPalette.lineSofter, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
+                                    endPoint: .bottom)))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
     }
 }

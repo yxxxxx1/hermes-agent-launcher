@@ -1,0 +1,1343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>macOS WebUI Migration — UI Mockups</title>
+<style>
+  /* ── Design tokens (sourced from LauncherRootView.swift LauncherPalette) ────────── */
+  :root {
+    --bg-app: #f2f0e8;
+    --bg-app-2: #ebe8dd;
+    --bg-glow: #f5c98a;
+
+    --surface-1: #faf8f1;          /* surfacePrimary */
+    --surface-2: #f5f0e8;          /* surfaceSecondary */
+    --surface-3: #f0e8dd;          /* surfaceTertiary */
+    --surface-hover: #f2e6d6;
+
+    --text-1: #262621;             /* textPrimary */
+    --text-2: #5e594f;             /* textSecondary */
+    --text-3: #8a7f75;             /* textTertiary */
+    --text-on-accent: #fdfdf7;
+
+    --accent: #d9782b;             /* accentPrimary */
+    --accent-soft: #f2b56b;
+    --accent-deep: #a8541f;
+
+    --success: #4f8f7a;
+    --success-soft: #dceee5;
+    --warning: #c78a3a;
+    --warning-soft: #f5e8d1;
+    --danger: #c25e52;
+    --danger-soft: #f7e0d9;
+
+    --line-soft: rgba(0,0,0,0.06);
+    --line-softer: rgba(0,0,0,0.04);
+
+    --r-10:10px; --r-12:12px; --r-14:14px; --r-16:16px;
+    --r-18:18px; --r-22:22px; --r-26:26px; --r-28:28px; --r-34:34px;
+
+    /* Page-level (not from launcher) */
+    --page-bg: #ece7d8;
+    --doc-text: #2a2820;
+    --doc-muted: #6f6a5d;
+    --doc-rule: rgba(0,0,0,0.08);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "SF Pro Text",
+                 system-ui, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    background: var(--page-bg);
+    color: var(--doc-text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    padding: 36px 32px 80px;
+  }
+
+  /* ── Document chrome ───────────────────────────────────────────────────────────── */
+  .doc { max-width: 1320px; margin: 0 auto; }
+  .doc-title {
+    font-size: 30px; font-weight: 800; letter-spacing: -0.6px;
+    margin: 0 0 6px; color: var(--text-1);
+  }
+  .doc-sub { color: var(--doc-muted); font-size: 14px; margin: 0 0 28px; }
+  .doc-card {
+    background: #fbf8ec; border: 1px solid var(--doc-rule);
+    border-radius: 18px; padding: 22px 26px; margin: 0 0 36px;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.02);
+  }
+  .doc-card h2 { margin: 0 0 8px; font-size: 16px; font-weight: 700; color: var(--text-1);}
+  .doc-card ol { margin: 0; padding-left: 22px; color: var(--doc-text); font-size: 14px; }
+  .doc-card ol li { margin: 4px 0; }
+  .toc {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 18px;
+    margin-top: 8px; font-size: 13px;
+  }
+  .toc a { color: var(--accent-deep); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  /* ── Section frame ─────────────────────────────────────────────────────────────── */
+  section.scene {
+    margin: 0 0 56px; padding: 0;
+    border-top: 1px solid var(--doc-rule); padding-top: 28px;
+  }
+  .scene-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 0 0 6px; }
+  .scene-head h2 {
+    font-size: 22px; font-weight: 800; letter-spacing: -0.4px;
+    color: var(--text-1); margin: 0;
+  }
+  .scene-head .ref {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: var(--doc-muted);
+    background: rgba(0,0,0,0.04); padding: 2px 8px; border-radius: 6px;
+  }
+  .scene-desc { color: var(--doc-muted); font-size: 14px; margin: 0 0 18px; max-width: 920px; }
+  .scene-desc strong { color: var(--text-1); }
+  .meta {
+    background: #fbf6e6; border: 1px solid rgba(217,120,43,0.18);
+    border-radius: 12px; padding: 10px 14px; margin: 0 0 18px;
+    font-size: 13px; color: #6b5524;
+  }
+  .meta code, code.f {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    background: rgba(0,0,0,0.05);
+    padding: 1px 6px; border-radius: 5px;
+  }
+  /* Two-column compare */
+  .compare {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+  }
+  .compare.full { grid-template-columns: 1fr; }
+  .compare-col h3 {
+    font-size: 12px; font-weight: 800; letter-spacing: 1.2px;
+    text-transform: uppercase; margin: 0 0 10px;
+  }
+  .compare-col h3.before { color: #9b6b3b; }
+  .compare-col h3.after  { color: var(--accent); }
+  .compare-col .note {
+    font-size: 12px; color: var(--doc-muted); margin: 8px 2px 0;
+  }
+
+  /* ── Macos window chrome (mockup container) ───────────────────────────────────── */
+  .macwin {
+    background: linear-gradient(135deg, var(--bg-app) 0%, var(--bg-app-2) 80%);
+    border-radius: 14px; padding: 0; overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.10), 0 1px 0 rgba(255,255,255,0.6) inset;
+    border: 1px solid rgba(0,0,0,0.06);
+    position: relative;
+  }
+  .macwin::before {
+    /* warm glow */
+    content: ""; position: absolute; left: 50%; top: -180px; width: 520px; height: 360px;
+    transform: translateX(-50%);
+    background: radial-gradient(circle at center, rgba(245,201,138,0.22), rgba(245,201,138,0) 70%);
+    pointer-events: none;
+  }
+  .macwin .titlebar {
+    height: 28px; display: flex; align-items: center; gap: 7px;
+    padding: 0 13px; background: rgba(255,255,255,0.32);
+    border-bottom: 1px solid var(--line-softer);
+  }
+  .macwin .light { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .macwin .light.r { background: #ed6a5e; }
+  .macwin .light.y { background: #f4bf4f; }
+  .macwin .light.g { background: #61c554; }
+  .macwin .body { padding: 22px 22px 22px; position: relative; z-index: 1; }
+  .macwin.compact .body { padding: 16px; }
+
+  /* ── Top banner (TopBanner reproduction) ──────────────────────────────────────── */
+  .topbanner {
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(250,248,241,0.76);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-18);
+    padding: 11px 16px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    margin-bottom: 18px;
+  }
+  .topbanner .icon { color: var(--accent); font-weight: 800; font-size: 13px; }
+  .topbanner .ttl {
+    font-size: 14px; font-weight: 600; color: var(--text-1);
+    font-family: -apple-system, "SF Pro Rounded", system-ui, sans-serif;
+  }
+  .topbanner .sub { font-size: 11px; font-weight: 500; color: var(--text-3); margin-top: 2px; }
+
+  /* ── Cards / surfaces ─────────────────────────────────────────────────────────── */
+  .hero {
+    background: linear-gradient(135deg, var(--surface-1), var(--surface-2));
+    border-radius: var(--r-34); padding: 24px;
+    border: 1px solid var(--line-soft);
+    box-shadow: 0 8px 18px rgba(0,0,0,0.08);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(245,201,138,0.16), transparent 60%);
+    pointer-events: none;
+  }
+  .hero h1 {
+    font-size: 28px; font-weight: 800; letter-spacing: -0.7px;
+    color: var(--text-1); margin: 0 0 8px;
+  }
+  .hero .lead {
+    font-size: 14.5px; color: var(--text-2); margin: 0 0 14px; line-height: 1.6;
+    max-width: 560px;
+  }
+  .hero .lead-tiny {
+    font-size: 13px; color: var(--text-3); margin: 0 0 18px; max-width: 540px;
+  }
+  .hero .step-tag {
+    color: var(--accent); font-size: 12px; font-weight: 800;
+    letter-spacing: 1.1px; margin-bottom: 10px;
+  }
+
+  .panel {
+    background: rgba(250,248,241,0.72);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-22); padding: 18px;
+  }
+  .panel-dark {
+    background: rgba(245,240,232,0.88);
+    border: 1px solid var(--line-softer);
+    border-radius: var(--r-26); padding: 22px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  }
+  .panel h4, .panel-dark h4 {
+    font-size: 16px; font-weight: 800; color: var(--text-1); margin: 0 0 12px;
+  }
+  .panel-dark .panel-sub { font-size: 14px; color: var(--text-2); margin: -6px 0 14px; }
+
+  /* ── Buttons ──────────────────────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 54px; padding: 0 22px; border-radius: var(--r-18);
+    font-family: -apple-system, "SF Pro Rounded", system-ui, sans-serif;
+    font-size: 15px; font-weight: 700; letter-spacing: -0.2px;
+    border: 1px solid rgba(255,255,255,0.18); cursor: pointer;
+  }
+  .btn.primary {
+    background: var(--accent); color: var(--text-on-accent);
+    box-shadow: 0 8px 16px rgba(217,120,43,0.28);
+  }
+  .btn.secondary {
+    background: var(--surface-3); color: var(--text-1);
+    border: 1px solid var(--line-soft); font-weight: 600;
+    box-shadow: 0 5px 10px rgba(0,0,0,0.06);
+  }
+  .btn.danger-soft {
+    background: var(--danger-soft); color: #823a30;
+    border: 1px solid rgba(194,94,82,0.28); font-weight: 700;
+  }
+  .btn.sm { height: 38px; padding: 0 14px; font-size: 13px; border-radius: 14px; }
+  .btn.xs { height: 30px; padding: 0 12px; font-size: 12px; border-radius: 12px; }
+
+  /* ── Pills ────────────────────────────────────────────────────────────────────── */
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 12px; background: var(--surface-3);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-14);
+    font-size: 12px; font-weight: 500; color: var(--text-2);
+  }
+  .pill .ic { color: var(--accent); font-weight: 800; font-size: 12px;}
+  .pill.deprecated {
+    text-decoration: line-through;
+    color: #b0a59a;
+    background: rgba(0,0,0,0.03);
+  }
+  .pill.deprecated .ic { color: #b0a59a; }
+
+  /* ── Stage cards (CompactProgressStep / ProgressStepRow) ──────────────────────── */
+  .stages {
+    display: grid; gap: 10px;
+  }
+  .stages.compact { grid-auto-flow: column; grid-auto-columns: 1fr; }
+  .stages.list  { grid-template-columns: 1fr; }
+  .stage-card {
+    background: var(--surface-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-18); padding: 14px;
+    min-height: 118px;
+  }
+  .stage-card.complete {
+    background: var(--success-soft);
+    border-color: rgba(79,143,122,0.35);
+  }
+  .stage-card.active {
+    background: var(--warning-soft);
+    border-color: rgba(199,138,58,0.35);
+  }
+  .stage-card .head {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--surface-3); color: white;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; margin-bottom: 10px;
+  }
+  .stage-card.complete .head { background: var(--success); }
+  .stage-card.active   .head { background: var(--warning); }
+  .stage-card .short {
+    font-size: 14px; font-weight: 800; color: var(--text-1); margin: 6px 0;
+    font-family: -apple-system, "SF Pro Rounded", system-ui, sans-serif;
+  }
+  .stage-card .label-tag {
+    font-size: 11px; font-weight: 800; margin-bottom: 6px;
+    color: var(--text-3);
+  }
+  .stage-card.active .label-tag { color: var(--warning); }
+  .stage-card.complete .label-tag { color: var(--success); }
+  .stage-card .body-text {
+    font-size: 11px; font-weight: 600; color: var(--text-2);
+    line-height: 1.5;
+  }
+  .stage-card .body-text.muted { color: var(--text-3); font-weight: 500; }
+
+  /* List variant (ProgressStepRow) */
+  .stage-row {
+    display: flex; gap: 14px; align-items: center;
+    padding: 15px 16px; border-radius: var(--r-18);
+    background: var(--surface-1); border: 1px solid var(--line-soft);
+  }
+  .stage-row.complete { background: var(--success-soft); border-color: rgba(79,143,122,0.35); }
+  .stage-row.active   { background: var(--warning-soft); border-color: rgba(199,138,58,0.35); }
+  .stage-row .badge {
+    width: 36px; height: 36px; border-radius: 50%;
+    display:inline-flex; align-items:center; justify-content:center;
+    color:#fff; font-size:13px; font-weight:800; flex-shrink: 0;
+    background: var(--surface-3);
+  }
+  .stage-row.complete .badge { background: var(--success); }
+  .stage-row.active   .badge { background: var(--warning); }
+  .stage-row .ttl { font-size:15px; font-weight:800; color: var(--text-1); }
+  .stage-row .sub { font-size:12px; color: var(--text-2); margin-top: 4px; }
+  .stage-row .stat { font-size: 10px; font-weight: 800; margin-left: 6px; vertical-align: middle; }
+  .stage-row.complete .stat { color: var(--success); }
+  .stage-row.active   .stat { color: var(--warning); }
+  .stage-row.muted    .stat { color: var(--text-3); }
+
+  /* ── LaunchProgressCard (NEW) ─────────────────────────────────────────────────── */
+  .launchcard {
+    background: linear-gradient(135deg, var(--surface-1), var(--surface-2));
+    border: 1px solid var(--line-soft); border-radius: var(--r-26);
+    padding: 22px; box-shadow: 0 8px 18px rgba(0,0,0,0.08); position: relative;
+  }
+  .launchcard h4 {
+    font-size: 18px; font-weight: 800; color: var(--text-1); margin: 0 0 4px;
+  }
+  .launchcard .progressline {
+    height: 6px; background: var(--surface-3); border-radius: 3px;
+    overflow: hidden; margin: 14px 0 18px;
+  }
+  .launchcard .progressline .fill {
+    display:block; height: 100%; background: var(--accent);
+    border-radius: 3px;
+  }
+  .launch-step { display: flex; align-items: center; gap: 12px; padding: 10px 4px; }
+  .launch-step + .launch-step { border-top: 1px solid var(--line-softer); }
+  .launch-step .dot {
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 800; color: white;
+    background: var(--surface-3);
+    border: 1px solid var(--line-soft);
+  }
+  .launch-step.ok      .dot { background: var(--success); border-color: var(--success); }
+  .launch-step.running .dot {
+    background: var(--surface-1); border: 1.5px solid var(--accent);
+    color: var(--accent); animation: spin 1.2s linear infinite;
+  }
+  .launch-step.failed  .dot { background: var(--danger); border-color: var(--danger); }
+  .launch-step.waiting .dot { background: var(--surface-3); color: var(--text-3); }
+  @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+  .launch-step .text {
+    font-size: 14px; color: var(--text-1); font-weight: 600;
+  }
+  .launch-step.waiting .text { color: var(--text-3); font-weight: 500; }
+  .launch-step .det {
+    font-size: 12px; color: var(--text-3); margin-left: 8px; font-weight: 500;
+  }
+  .launch-step.ok .det { color: var(--success); }
+  .launch-step.failed .det { color: var(--danger); }
+  .launch-step .open-log {
+    margin-left: auto; font-size: 12px; color: var(--accent-deep);
+    text-decoration: underline; cursor: pointer;
+  }
+
+  /* ── Action rows (SimpleActionRow / Maintenance row) ──────────────────────────── */
+  .action-row {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 14px 16px; background: var(--surface-1);
+    border: 1px solid var(--line-soft); border-radius: var(--r-18);
+    cursor: pointer;
+  }
+  .action-row + .action-row { margin-top: 10px; }
+  .action-row .ic-box {
+    width: 36px; height: 36px; border-radius: var(--r-12);
+    background: var(--surface-3); color: var(--accent);
+    display: inline-flex; align-items:center; justify-content:center;
+    font-size: 14px; font-weight: 800; flex-shrink: 0;
+  }
+  .action-row .body { flex: 1; min-width: 0; }
+  .action-row .ttl { font-size: 15px; font-weight: 800; color: var(--text-1); }
+  .action-row .sub { font-size: 13px; color: var(--text-2); margin-top: 5px; line-height: 1.45; }
+  .action-row .chev { color: var(--text-3); font-weight: 800; }
+  .action-row.deprecated {
+    background: rgba(0,0,0,0.03); border-style: dashed;
+    border-color: rgba(0,0,0,0.10);
+  }
+  .action-row.deprecated .ttl { text-decoration: line-through; color: #a89c8e; }
+  .action-row.deprecated .sub { color: #a89c8e; }
+  .action-row.deprecated .ic-box { color: #b0a59a; background: rgba(0,0,0,0.03); }
+
+  /* ── Result overlay (ResultOverlay) ───────────────────────────────────────────── */
+  .result-card {
+    background: rgba(250,248,241,0.98);
+    border: 1px solid var(--line-soft); border-radius: var(--r-28);
+    padding: 24px; width: 460px; max-width: 100%;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.16);
+  }
+  .result-card .row { display: flex; gap: 14px; align-items: flex-start; }
+  .result-card .ic-box {
+    width: 44px; height: 44px; border-radius: var(--r-14);
+    display: inline-flex; align-items:center; justify-content:center;
+    font-size: 22px; font-weight: 800; flex-shrink: 0;
+  }
+  .result-card.warn .ic-box { background: var(--warning-soft); color: var(--warning); }
+  .result-card.err  .ic-box { background: var(--danger-soft);  color: var(--danger); }
+  .result-card.info .ic-box { background: var(--surface-3);    color: var(--accent); }
+  .result-card.ok   .ic-box { background: var(--success-soft); color: var(--success); }
+  .result-card h3 {
+    font-size: 22px; font-weight: 800; color: var(--text-1);
+    margin: 0 0 6px; letter-spacing: -0.4px;
+  }
+  .result-card p {
+    font-size: 14px; color: var(--text-2); line-height: 1.7; margin: 0;
+  }
+  .result-card .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+
+  /* ── About dialog ─────────────────────────────────────────────────────────────── */
+  .about-card {
+    background: var(--surface-1); border: 1px solid var(--line-soft);
+    border-radius: var(--r-28); padding: 26px; width: 540px; max-width: 100%;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.14);
+  }
+  .opensource-banner {
+    background: linear-gradient(135deg, #fef3e0, #fbe2c2);
+    border: 1px solid rgba(217,120,43,0.32);
+    border-radius: var(--r-16); padding: 14px 16px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  .opensource-banner .badge {
+    background: var(--accent); color: var(--text-on-accent);
+    font-size: 10px; font-weight: 800; letter-spacing: 1px;
+    padding: 4px 8px; border-radius: 8px;
+  }
+  .opensource-banner .ts {
+    font-size: 13.5px; font-weight: 700; color: var(--text-1);
+  }
+  .opensource-banner .lk {
+    font-size: 12.5px; color: var(--accent-deep);
+    text-decoration: underline;
+  }
+  .privacy-block {
+    background: var(--surface-2); border-radius: var(--r-16);
+    padding: 16px; margin-top: 16px; border: 1px dashed rgba(0,0,0,0.10);
+  }
+  .privacy-block .lbl {
+    font-size: 11px; color: var(--text-3); font-weight: 800;
+    letter-spacing: 0.6px;
+  }
+  .privacy-block .ph {
+    font-size: 13px; color: var(--text-3); margin-top: 6px;
+    font-style: italic;
+  }
+  .vline {
+    display:flex; gap: 8px; align-items: baseline; margin: 16px 0 4px;
+  }
+  .vline .v { font-size: 24px; font-weight: 800; color: var(--text-1); }
+  .vline .w { font-size: 13px; color: var(--text-3); }
+
+  /* ── Hero error / network blocked ─────────────────────────────────────────────── */
+  .blocked {
+    text-align: center;
+    padding: 48px 36px 24px;
+  }
+  .blocked .glyph {
+    font-size: 56px; margin-bottom: 14px; opacity: 0.7;
+  }
+  .blocked h2 {
+    font-size: 26px; font-weight: 800; color: var(--text-1);
+    margin: 0 0 10px; letter-spacing: -0.5px;
+  }
+  .blocked p {
+    font-size: 14px; color: var(--text-2); line-height: 1.7;
+    max-width: 480px; margin: 0 auto 16px;
+  }
+  .blocked .probes {
+    display: flex; justify-content: center; gap: 8px; margin: 14px 0 18px;
+  }
+  .probe {
+    background: var(--danger-soft); color: #823a30;
+    border: 1px solid rgba(194,94,82,0.20);
+    border-radius: 12px; padding: 8px 12px; font-size: 12px;
+    font-weight: 700;
+  }
+  .probe.ok { background: var(--success-soft); color: #1f5f4a; border-color: rgba(79,143,122,0.20); }
+
+  /* ── Inline notice (china network) ────────────────────────────────────────────── */
+  .inline-notice {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #fbf3df, #f6e7c2);
+    border: 1px solid rgba(199,138,58,0.30);
+    border-radius: var(--r-14);
+    margin: 14px 0 0;
+  }
+  .inline-notice .ic {
+    color: var(--warning); font-size: 16px; font-weight: 800; flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .inline-notice .body { font-size: 13px; color: #6b5524; line-height: 1.55; }
+  .inline-notice strong { color: var(--text-1); font-weight: 800; }
+
+  /* ── Misc ─────────────────────────────────────────────────────────────────────── */
+  .grid-2 { display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
+  .gap-md { gap: 12px; display: flex; flex-wrap: wrap; }
+  .row    { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  hr.sep  { border: 0; height: 1px; background: var(--line-softer); margin: 20px 0; }
+  .small  { font-size: 12px; color: var(--text-3); }
+  .strike { text-decoration: line-through; color: #b0a59a; }
+  .codeblk {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px; background: rgba(0,0,0,0.045);
+    padding: 8px 12px; border-radius: 8px;
+    color: var(--text-2); white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* Annotation callouts inside mockups */
+  .anno {
+    display: inline-flex; align-items:center; gap: 6px;
+    background: rgba(217,120,43,0.16); color: var(--accent-deep);
+    font-size: 11px; font-weight: 700; padding: 3px 9px;
+    border-radius: 999px; border: 1px solid rgba(217,120,43,0.28);
+  }
+
+  @media (max-width: 1100px) {
+    .compare { grid-template-columns: 1fr; }
+    .toc     { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <!-- ═══════════════════════════════════════════════════════════════════════════ -->
+  <h1 class="doc-title">macOS WebUI Migration — UI 设计稿</h1>
+  <p class="doc-sub">
+    对应 OpenSpec 提案：<code class="f">openspec/changes/macos-webui-migration/proposal.md</code> ·
+    设计稿沿用 <code class="f">LauncherRootView.swift</code> 现有 <code class="f">LauncherPalette</code> token 与圆角/阴影规范，不引入新视觉系统。
+  </p>
+
+  <div class="doc-card">
+    <h2>本次 UI 改动的范围与原则</h2>
+    <p style="margin: 4px 0 12px; font-size: 14px; color: var(--text-2);">
+      <strong style="color: var(--text-1);">范围</strong>：阶段卡（3→2）、新增启动进度卡、管理首页简化、错误结果卡、About 加开源 banner、网络阻塞 hero、China network 内联提示、删除"模型/渠道"入口。
+      <strong style="color: var(--text-1);">不动</strong>：色板 / 字体 / 圆角等级 / 按钮规范 / TopBanner / BusyOverlay / 全局背景 glow / DisclosureGroup 折叠样式。
+    </p>
+    <ol>
+      <li>启动器只做"装 + 启 + 给浏览器入口"，模型/渠道 / 网关配置全部交给 WebUI 承载。</li>
+      <li>视觉沿用现有 macOS Big Sur+ 暖米色风格，不做风格大改。</li>
+      <li>错误态都给"可操作"的下一步（重试 / 查看日志），不只是显示错误。</li>
+      <li>文案简洁、动词开头（沿用现有"开始和 Hermes 对话""检查现在能不能正常用"风格）。</li>
+      <li>不引入新颜色 token、不引入新组件库，所有元素都能从现有 SwiftUI primitives 推导。</li>
+    </ol>
+    <div class="toc">
+      <a href="#s1">§1 阶段卡：3 张 → 2 张</a>
+      <a href="#s2">§2 启动进度卡（NEW）</a>
+      <a href="#s3">§3 管理首页 / Dashboard 简化</a>
+      <a href="#s4">§4 错误结果卡（4 种代表）</a>
+      <a href="#s5">§5 About 对话框</a>
+      <a href="#s6">§6 网络阻塞 Hero</a>
+      <a href="#s7">§7 China network 内联提示</a>
+      <a href="#s8">§8 删除模型/渠道入口</a>
+    </div>
+  </div>
+
+  <!-- ═══ §1 STAGE CARDS ════════════════════════════════════════════════════════ -->
+  <section class="scene" id="s1">
+    <div class="scene-head">
+      <h2>§1 阶段卡：3 张 → 2 张</h2>
+      <span class="ref">LauncherRootView.swift L478–601</span>
+      <span class="ref">LauncherModels.swift L4–29</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：把 <code class="f">install / model / chat</code> 三段进度卡改成 <code class="f">install / launch</code> 两段。<code class="f">.model</code> case 从 <code class="f">LauncherStage</code> 删除，<code class="f">.chat</code> 改名 <code class="f">.launch</code>，对应文案/SF Symbol 一并更新。<br/>
+      <strong>为什么</strong>：模型配置从启动器移到 WebUI 内部，启动器不再阻塞在"模型这一步"，用户在浏览器里即可完成；少一张卡也让首屏更聚焦。<br/>
+      <strong>对应字段</strong>：<code class="f">snapshot.stages: [StageCardModel]</code> 由 3 元素降为 2；<code class="f">StageCardModel.shortTitle/symbolName/accentColor</code> switch 删 <code class="f">.model</code> 分支。
+    </p>
+    <div class="meta">
+      文案：<code>.install</code> = "安装 Hermes" / "把 Hermes 装到这台 Mac 上，装好后才能继续。"｜
+      <code>.launch</code> = "启动浏览器对话" / "启动浏览器对话界面，并在浏览器里完成模型配置。" ·
+      SF Symbol：<code>.install</code> = <code>shippingbox.fill</code>，<code>.launch</code> = <code>safari.fill</code>（沿用原 <code>.chat</code> 的 symbol）
+    </div>
+
+    <div class="compare">
+      <!-- BEFORE: 3 cards -->
+      <div class="compare-col">
+        <h3 class="before">BEFORE — 3 张卡（compact 横向）</h3>
+        <div class="macwin compact"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body" style="padding: 18px;">
+          <div class="panel">
+            <h4>安装进度</h4>
+            <div class="stages compact" style="grid-template-columns: 1fr 1fr 1fr;">
+              <div class="stage-card complete">
+                <div class="head">✓</div>
+                <div class="short">安装</div>
+                <div class="label-tag">已完成</div>
+                <div class="body-text">把 Hermes 装到这台 Mac 上…</div>
+              </div>
+              <div class="stage-card active">
+                <div class="head">⚙</div>
+                <div class="short">模型</div>
+                <div class="label-tag">当前步骤</div>
+                <div class="body-text">把 AI 服务接好。填完后…</div>
+              </div>
+              <div class="stage-card">
+                <div class="head">🧭</div>
+                <div class="short">对话</div>
+                <div class="label-tag">稍后进行</div>
+                <div class="body-text muted">打开浏览器对话窗口…</div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <p class="note">3 个 <code class="f">StageCardModel</code>。"模型"卡上承载了启动器的模型配置流（<code class="f">configure_model</code> bash 函数 + 模型对话框）。</p>
+      </div>
+
+      <!-- AFTER: 2 cards -->
+      <div class="compare-col">
+        <h3 class="after">AFTER — 2 张卡（compact 横向）</h3>
+        <div class="macwin compact"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body" style="padding: 18px;">
+          <div class="panel">
+            <h4>安装进度</h4>
+            <div class="stages compact" style="grid-template-columns: 1fr 1fr;">
+              <div class="stage-card complete">
+                <div class="head">✓</div>
+                <div class="short">安装</div>
+                <div class="label-tag">已完成</div>
+                <div class="body-text">这一步已经完成了。</div>
+              </div>
+              <div class="stage-card active">
+                <div class="head">🧭</div>
+                <div class="short">启动</div>
+                <div class="label-tag">当前步骤</div>
+                <div class="body-text">启动浏览器对话界面，并在浏览器里完成模型配置。</div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <p class="note">2 个 <code class="f">StageCardModel</code>。模型/渠道 配置不再是启动器流程的一环，全部下沉到 WebUI 内部。</p>
+      </div>
+    </div>
+
+    <!-- list variant -->
+    <hr class="sep"/>
+    <div class="compare">
+      <div class="compare-col">
+        <h3 class="before">BEFORE — list 变体（窄窗口下）</h3>
+        <div class="macwin compact"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body" style="padding: 18px;">
+          <div class="panel">
+            <h4>安装进度</h4>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <div class="stage-row complete">
+                <span class="badge">✓</span>
+                <div><span class="ttl">安装 Hermes</span><span class="stat">已完成</span><div class="sub">这一步已经完成了</div></div>
+              </div>
+              <div class="stage-row active">
+                <span class="badge">⚙</span>
+                <div><span class="ttl">配置模型</span><span class="stat">当前步骤</span><div class="sub">现在要填好 AI 设置</div></div>
+              </div>
+              <div class="stage-row muted">
+                <span class="badge" style="background:var(--surface-3);color:var(--text-3);">🧭</span>
+                <div><span class="ttl" style="color:var(--text-3);">开始第一次对话</span><span class="stat">稍后进行</span><div class="sub">设置好后再试</div></div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <div class="compare-col">
+        <h3 class="after">AFTER — list 变体</h3>
+        <div class="macwin compact"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body" style="padding: 18px;">
+          <div class="panel">
+            <h4>安装进度</h4>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <div class="stage-row complete">
+                <span class="badge">✓</span>
+                <div><span class="ttl">安装 Hermes</span><span class="stat">已完成</span><div class="sub">这一步已经完成了</div></div>
+              </div>
+              <div class="stage-row active">
+                <span class="badge">🧭</span>
+                <div><span class="ttl">启动浏览器对话</span><span class="stat">当前步骤</span><div class="sub">现在可以打开浏览器</div></div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ §2 LAUNCH PROGRESS CARD (NEW) ═════════════════════════════════════════ -->
+  <section class="scene" id="s2">
+    <div class="scene-head">
+      <h2>§2 启动进度卡（NEW LaunchProgressCard）</h2>
+      <span class="ref">新增组件</span>
+      <span class="ref">对应 STAGE: 事件协议</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：用户点"开始使用"后，<u>替换</u>当前 hero 区域为竖向 7 步 checklist。每一步四态：
+      <span class="anno">waiting 灰</span>
+      <span class="anno" style="background:rgba(217,120,43,0.20);color:var(--accent-deep);">running 旋转</span>
+      <span class="anno" style="background:var(--success-soft);color:var(--success);border-color:rgba(79,143,122,0.30);">ok 绿勾</span>
+      <span class="anno" style="background:var(--danger-soft);color:var(--danger);border-color:rgba(194,94,82,0.30);">failed 红 X</span>。<br/>
+      <strong>为什么</strong>：从 Bash 子进程读 <code class="f">STAGE:&lt;phase&gt; STATUS=&lt;s&gt;</code> 事件流推动 UI；用户能清楚看到现在卡在哪一步、要等多久；失败时直接给"查看日志"入口。<br/>
+      <strong>对应字段</strong>：<code class="f">snapshot.launchProgress: LaunchProgress?</code>（idle 时 nil）；<code class="f">LaunchProgress.Phase</code> 8 个 case；<code class="f">LaunchProgress.Status = .running | .ok | .failed</code>。<br/>
+      <strong>走完后</strong>：<u>设计建议</u>整张卡片折叠为单行成功条（"已启动，浏览器已打开 → http://localhost:8648"），而不是消失，便于用户复查。
+    </p>
+    <div class="meta">
+      <strong>7 个阶段顺序</strong>：
+      <code>check_node</code> → <code>download_node</code>（仅当系统 Node 缺失或 &lt; 23）→ <code>extract_node</code> → <code>install_webui</code> → <code>start_gateway</code> → <code>wait_gateway_healthy</code> → <code>start_webui</code> → <code>wait_healthy</code>。
+      系统已有 Node ≥ 23 时跳过 download/extract 两步，直接显示 5 步可见。
+    </div>
+
+    <div class="compare">
+      <!-- Variant A: in-progress -->
+      <div class="compare-col">
+        <h3 class="after">A. 进行中（部分完成、当前在跑、其余 waiting）</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body">
+          <div class="topbanner">
+            <span class="icon">✦</span>
+            <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+          </div>
+
+          <div class="launchcard">
+            <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+              <div>
+                <h4>正在为你启动浏览器对话</h4>
+                <div style="font-size:13px; color:var(--text-3);">第一次启动通常 1-3 分钟，下次进入会快很多。</div>
+              </div>
+              <div style="font-size:11px; color:var(--text-3); font-weight:800; letter-spacing:1px;">第 4 / 7 步</div>
+            </div>
+            <div class="progressline"><span class="fill" style="width:48%;"></span></div>
+
+            <div class="launch-step ok">
+              <span class="dot">✓</span>
+              <span class="text">检查 Node.js 运行时</span>
+              <span class="det">使用系统 Node v23.11.0</span>
+            </div>
+            <div class="launch-step ok">
+              <span class="dot">✓</span>
+              <span class="text">安装 hermes-web-ui (npm)</span>
+              <span class="det">v0.5.9</span>
+            </div>
+            <div class="launch-step ok">
+              <span class="dot">✓</span>
+              <span class="text">启动 Hermes 网关</span>
+              <span class="det">端口 8642</span>
+            </div>
+            <div class="launch-step running">
+              <span class="dot">●</span>
+              <span class="text">等待网关健康</span>
+              <span class="det">已等待 3 秒…</span>
+            </div>
+            <div class="launch-step waiting">
+              <span class="dot">○</span>
+              <span class="text">启动 WebUI</span>
+            </div>
+            <div class="launch-step waiting">
+              <span class="dot">○</span>
+              <span class="text">等待 WebUI 健康</span>
+            </div>
+
+            <div style="display:flex; gap:12px; margin-top:18px;">
+              <button class="btn secondary" style="height:44px; padding:0 16px;">取消</button>
+              <span class="pill"><span class="ic">⌚</span> 预计还需 30-60 秒</span>
+            </div>
+          </div>
+        </div></div>
+      </div>
+
+      <!-- Variant B: failed at one step -->
+      <div class="compare-col">
+        <h3 class="after">B. 中间某步失败（带"查看日志"内联）</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body">
+          <div class="topbanner">
+            <span class="icon">✦</span>
+            <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+          </div>
+
+          <div class="launchcard" style="border-color: rgba(194,94,82,0.28);">
+            <h4 style="color:var(--danger);">启动遇到问题</h4>
+            <div style="font-size:13px; color:var(--text-3);">下面这一步没能完成，可点击"查看日志"了解详情。</div>
+            <div class="progressline"><span class="fill" style="width:42%; background:var(--danger);"></span></div>
+
+            <div class="launch-step ok">
+              <span class="dot">✓</span>
+              <span class="text">检查 Node.js 运行时</span>
+              <span class="det">下载便携版 v23.11.0 (darwin-arm64)</span>
+            </div>
+            <div class="launch-step ok">
+              <span class="dot">✓</span>
+              <span class="text">下载 Node.js</span>
+              <span class="det">35.2 MB</span>
+            </div>
+            <div class="launch-step ok">
+              <span class="dot">✓</span>
+              <span class="text">解压 Node.js</span>
+            </div>
+            <div class="launch-step failed">
+              <span class="dot">✕</span>
+              <span class="text">安装 hermes-web-ui (npm)</span>
+              <span class="det">退出码 1 · registry_unreachable</span>
+              <a class="open-log">查看安装日志 ›</a>
+            </div>
+            <div class="launch-step waiting">
+              <span class="dot">○</span>
+              <span class="text">启动 Hermes 网关</span>
+            </div>
+            <div class="launch-step waiting">
+              <span class="dot">○</span>
+              <span class="text">启动 WebUI</span>
+            </div>
+
+            <div style="display:flex; gap:12px; margin-top:18px;">
+              <button class="btn primary" style="height:44px; padding:0 16px;">重试</button>
+              <button class="btn secondary" style="height:44px; padding:0 16px;">查看安装日志</button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- Variant C: success collapsed -->
+    <hr class="sep"/>
+    <div class="compare full">
+      <div class="compare-col">
+        <h3 class="after">C. 成功后折叠（单行成功条 + "在浏览器里打开" CTA）</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body" style="padding: 22px 22px 20px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px 18px; background:var(--success-soft); border:1px solid rgba(79,143,122,0.28); border-radius: var(--r-22);">
+            <div style="display:flex; gap:14px; align-items:center;">
+              <div style="width:34px; height:34px; border-radius:50%; background:var(--success); color:#fff; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:16px;">✓</div>
+              <div>
+                <div style="font-weight:800; color:var(--text-1); font-size:15px;">已启动，浏览器已自动打开</div>
+                <div style="font-size:12px; color:#1f5f4a; margin-top:3px; font-family: ui-monospace, Menlo, monospace;">http://localhost:8648/#/?token=…</div>
+              </div>
+            </div>
+            <div style="display:flex; gap:10px;">
+              <button class="btn sm secondary">查看启动详情</button>
+              <button class="btn sm primary" style="height:38px;">在浏览器里打开</button>
+            </div>
+          </div>
+        </div></div>
+        <p class="note">
+          这是 §2 走完之后的稳态。点"查看启动详情"重新展开 7 步 checklist；点"在浏览器里打开"调 <code class="f">store.perform("launch")</code> 重新走 health 检查并重开 tab。
+        </p>
+      </div>
+    </div>
+
+    <div class="meta" style="margin-top:18px;">
+      <strong>需要决策</strong>：
+      ① 走完后是 <em>折叠成单行成功条</em>（如 C，保留入口）还是 <em>整体替换为 ResultOverlay</em>（弹窗式，需要点"知道了"关闭）？目前倾向 C，更接近现有 ManagementHero 风格。
+      ② 失败态是 <em>留在原位 + 内联 CTA</em>（如 B）还是 <em>触发 ResultOverlay</em>？目前倾向 B 内联，避免双层弹层。
+    </div>
+  </section>
+
+  <!-- ═══ §3 MANAGEMENT HOME ════════════════════════════════════════════════════ -->
+  <section class="scene" id="s3">
+    <div class="scene-head">
+      <h2>§3 管理首页 / Dashboard 简化</h2>
+      <span class="ref">LauncherRootView.swift L617–650 / L652–747</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：删除 Hero 区下方的"当前模型/渠道/网关"pill 与"换一个 AI 模型 / 接收消息通知"两个 SimpleActionRow；只保留"打开浏览器对话"主入口。维护项（模型/网关/工具/卸载）统一收到下方 DisclosureGroup。<br/>
+      <strong>为什么</strong>：模型/渠道交给 WebUI 后，启动器首屏不应该再展示这些信息（它们也没法在启动器里改）。Hero 区只承担一件事：把用户送进浏览器对话。<br/>
+      <strong>对应字段</strong>：<code class="f">snapshot.aiProvider / aiModel / gatewayStatus / gatewayChannel / supportSummary</code> 移除（按 §4.5 兼容垫片做法暂时保留为 deprecated 占位，UI 落地后再删）；<code class="f">snapshot.webuiURL / webuiVersion / installDirectory</code> 是首屏唯一信息源。
+    </p>
+
+    <div class="compare">
+      <!-- BEFORE -->
+      <div class="compare-col">
+        <h3 class="before">BEFORE — Hero 含模型/渠道，常用区 4 项</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body">
+          <div class="topbanner">
+            <span class="icon">✦</span>
+            <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.04.19.2</div></div>
+          </div>
+
+          <div class="hero" style="margin-bottom:14px;">
+            <h1>Hermes 已经可以用了</h1>
+            <p class="lead">它已经安装好，也已经连上 AI。你现在最需要做的，通常就是打开浏览器和它说话。</p>
+            <div class="row" style="margin-top:12px;">
+              <button class="btn primary">开始和 Hermes 对话</button>
+              <span class="pill deprecated"><span class="ic">⚙</span> 当前模型：gpt-4o</span>
+              <span class="pill"><span class="ic">🌐</span> 浏览器对话已在运行</span>
+            </div>
+          </div>
+
+          <div class="panel-dark">
+            <h4>接下来你可能会做的事</h4>
+            <div class="panel-sub">只保留最常用的几个入口，其余放到下面。</div>
+            <div>
+              <div class="action-row">
+                <div class="ic-box">🌐</div>
+                <div class="body"><div class="ttl">开始和 Hermes 对话</div><div class="sub">打开熟悉的对话界面，继续聊天、查看会话和处理任务。</div></div>
+                <div class="chev">›</div>
+              </div>
+              <div class="action-row deprecated">
+                <div class="ic-box">⚙</div>
+                <div class="body"><div class="ttl">换一个 AI 模型</div><div class="sub">如果你想切换到别的模型，从这里改就可以。</div></div>
+                <div class="chev">›</div>
+              </div>
+              <div class="action-row">
+                <div class="ic-box">🩺</div>
+                <div class="body"><div class="ttl">检查现在能不能正常用</div><div class="sub">如果你担心没有配好，可以先做一次自动检查。</div></div>
+                <div class="chev">›</div>
+              </div>
+              <div class="action-row deprecated">
+                <div class="ic-box">💬</div>
+                <div class="body"><div class="ttl">接收微信、飞书、QQ等消息通知</div><div class="sub">需要时再接入。不设置也不影响平时直接使用。</div></div>
+                <div class="chev">›</div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <p class="note">虚线 / 删除线行 = 即将被本次改动删除的入口与字段。</p>
+      </div>
+
+      <!-- AFTER -->
+      <div class="compare-col">
+        <h3 class="after">AFTER — Hero 只剩 WebUI 状态，常用区 2 项</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body">
+          <div class="topbanner">
+            <span class="icon">✦</span>
+            <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · WebUI 0.5.9</div></div>
+          </div>
+
+          <div class="hero" style="margin-bottom:14px;">
+            <h1>Hermes 已经可以用了</h1>
+            <p class="lead">浏览器对话已就绪。接下来的设置（模型、API Key、消息通道）都在浏览器里完成。</p>
+            <div class="row" style="margin-top:12px;">
+              <button class="btn primary">在浏览器中打开 WebUI</button>
+              <span class="pill"><span class="ic">🌐</span> 浏览器对话已在运行 · :8648</span>
+              <span class="pill"><span class="ic">📦</span> 数据目录：~/.hermes</span>
+            </div>
+          </div>
+
+          <div class="panel-dark">
+            <h4>接下来你可能会做的事</h4>
+            <div class="panel-sub">现在只保留两个入口；其它（模型、消息平台、密钥）都在 WebUI 里设置。</div>
+            <div>
+              <div class="action-row">
+                <div class="ic-box">🌐</div>
+                <div class="body"><div class="ttl">在浏览器中打开 WebUI</div><div class="sub">继续聊天、配置模型、接入消息通道，都在浏览器里完成。</div></div>
+                <div class="chev">›</div>
+              </div>
+              <div class="action-row">
+                <div class="ic-box">🩺</div>
+                <div class="body"><div class="ttl">检查现在能不能正常用</div><div class="sub">如果你担心 Hermes 没准备好，可以做一次自动检查。</div></div>
+                <div class="chev">›</div>
+              </div>
+
+              <div class="action-row" style="background:var(--surface-3); border-style:dashed;">
+                <div class="ic-box" style="background:var(--surface-2); color:var(--text-3);">⋯</div>
+                <div class="body"><div class="ttl">更多设置和维护</div><div class="sub">重启 / 停止 WebUI、查看日志、更新、卸载，都在这里。</div></div>
+                <div class="chev">▾</div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <p class="note">"模型 / 消息通道"两个直达入口被移除；维护类下移到折叠区。新增 pill <code class="f">📦 数据目录</code>用于让用户看到本地数据落点。</p>
+      </div>
+    </div>
+
+    <hr class="sep"/>
+
+    <!-- AFTER expanded maintenance -->
+    <div class="compare full">
+      <div class="compare-col">
+        <h3 class="after">AFTER — 维护折叠区展开（含 WebUI 重启 / 停止 / 日志，移除 模型 / 渠道）</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body">
+          <div class="panel-dark">
+            <h4>更多设置和维护</h4>
+            <div class="panel-sub">平时可以先不用看，遇到问题或想调整时再展开。</div>
+            <div class="grid-2" style="margin-top: 6px;">
+              <div>
+                <div class="small" style="font-weight:800; letter-spacing:0.6px; margin-bottom:8px;">WEBUI 维护</div>
+                <div class="action-row" style="padding: 12px 14px;"><div class="ic-box" style="width:28px;height:28px;font-size:12px;">↻</div>
+                  <div class="body"><div class="ttl" style="font-size:14px;">重启 WebUI</div><div class="sub" style="font-size:12px;">重启浏览器对话服务</div></div><div class="chev">›</div>
+                </div>
+                <div class="action-row" style="padding: 12px 14px;"><div class="ic-box" style="width:28px;height:28px;font-size:12px;">⏹</div>
+                  <div class="body"><div class="ttl" style="font-size:14px;">停止 WebUI</div><div class="sub" style="font-size:12px;">关闭浏览器对话服务</div></div><div class="chev">›</div>
+                </div>
+                <div class="action-row" style="padding: 12px 14px;"><div class="ic-box" style="width:28px;height:28px;font-size:12px;">📄</div>
+                  <div class="body"><div class="ttl" style="font-size:14px;">查看 WebUI 日志</div><div class="sub" style="font-size:12px;">~/.hermes-web-ui/server.log</div></div><div class="chev">›</div>
+                </div>
+              </div>
+              <div>
+                <div class="small" style="font-weight:800; letter-spacing:0.6px; margin-bottom:8px;">系统维护</div>
+                <div class="action-row" style="padding: 12px 14px;"><div class="ic-box" style="width:28px;height:28px;font-size:12px;">⟳</div>
+                  <div class="body"><div class="ttl" style="font-size:14px;">检查更新</div><div class="sub" style="font-size:12px;">安装最新 Hermes 版本</div></div><div class="chev">›</div>
+                </div>
+                <div class="action-row" style="padding: 12px 14px;"><div class="ic-box" style="width:28px;height:28px;font-size:12px;">📁</div>
+                  <div class="body"><div class="ttl" style="font-size:14px;">打开数据文件夹</div><div class="sub" style="font-size:12px;">~/.hermes</div></div><div class="chev">›</div>
+                </div>
+                <div class="action-row" style="padding: 12px 14px; background: var(--danger-soft); border-color: rgba(194,94,82,0.28);">
+                  <div class="ic-box" style="width:28px;height:28px;font-size:12px; background:rgba(194,94,82,0.18); color:var(--danger);">🗑</div>
+                  <div class="body"><div class="ttl" style="font-size:14px;">卸载 Hermes</div><div class="sub" style="font-size:12px;">从这台 Mac 移除 Hermes</div></div><div class="chev">›</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ §4 ERROR RESULT CARDS ═════════════════════════════════════════════════ -->
+  <section class="scene" id="s4">
+    <div class="scene-head">
+      <h2>§4 错误结果卡（4 种代表）</h2>
+      <span class="ref">LauncherRootView.swift L196–294 (ResultOverlay)</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：沿用现有 <code class="f">ResultOverlay</code> 视觉（44px 图标方块 + tone 色 + 主/次 / 知道了三按钮），按 proposal §4.3 错误映射给 4 种代表性 REASON 一种视觉。<br/>
+      <strong>为什么</strong>：每个错误必须给"可操作的下一步"，不能只显示文字。<u>不再 fall back 到 CLI / 终端对话</u>（按 proposal §7.3 决策），所有失败都给"重试 + 查看日志"两条路。<br/>
+      <strong>对应字段</strong>：<code class="f">LauncherResultCard { tone, title, message, primaryActionTitle/ID, secondaryActionTitle/ID }</code>。
+    </p>
+    <div class="meta">
+      <strong>共同布局</strong>：宽 460px / 圆角 28 / 浅背景蒙板（black 12% opacity）/ 顶部 row 含 44px 图标方块 + 标题(22pt bold rounded) + 正文(14pt 1.7 line-height)。底部按钮区主+次+知道了。
+    </div>
+
+    <div class="grid-2" style="gap: 22px;">
+
+      <!-- Card 1: node_download_failed -->
+      <div>
+        <h3 class="compare-col after" style="margin-bottom:10px;">A. <code class="f">node_download_failed</code> · 网络问题</h3>
+        <div style="background: rgba(0,0,0,0.06); border-radius: 24px; padding: 22px; display:flex; align-items:center; justify-content:center;">
+          <div class="result-card warn">
+            <div class="row">
+              <div class="ic-box">!</div>
+              <div>
+                <h3>Node.js 下载失败</h3>
+                <p>网络看起来不太通畅，试了 3 次都没下载成功。可以重试，或者暂时改用本机已经装好的 Node（≥ v23）。</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="btn primary" style="height:44px;">重试下载</button>
+              <button class="btn secondary" style="height:44px;">查看排障文档</button>
+              <button class="btn secondary" style="height:44px; background: transparent; box-shadow:none;">知道了</button>
+            </div>
+          </div>
+        </div>
+        <div class="codeblk" style="margin-top:8px;">tone: .warning ｜ primaryActionID: "retry-launch" ｜ secondaryActionID: "open-network-docs"</div>
+      </div>
+
+      <!-- Card 2: npm_install_failed -->
+      <div>
+        <h3 class="compare-col after" style="margin-bottom:10px;">B. <code class="f">npm_install_failed_*</code> · 安装日志入口</h3>
+        <div style="background: rgba(0,0,0,0.06); border-radius: 24px; padding: 22px; display:flex; align-items:center; justify-content:center;">
+          <div class="result-card err">
+            <div class="row">
+              <div class="ic-box">!</div>
+              <div>
+                <h3>WebUI 安装失败</h3>
+                <p>npm 退出码 1，可能是镜像源短暂不通。我们已经把详细记录写到日志里，可以查看排查；或直接重试。</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="btn primary" style="height:44px;">重试安装</button>
+              <button class="btn secondary" style="height:44px;">查看安装日志</button>
+              <button class="btn secondary" style="height:44px; background: transparent; box-shadow:none;">知道了</button>
+            </div>
+          </div>
+        </div>
+        <div class="codeblk" style="margin-top:8px;">tone: .warning ｜ primaryActionID: "retry-launch" ｜ secondaryActionID: "open-install-log" → ~/.hermes/launcher-runtime/install.log</div>
+      </div>
+
+      <!-- Card 3: webui_failed -->
+      <div>
+        <h3 class="compare-col after" style="margin-bottom:10px;">C. <code class="f">webui_failed</code> · 不再 fall back CLI</h3>
+        <div style="background: rgba(0,0,0,0.06); border-radius: 24px; padding: 22px; display:flex; align-items:center; justify-content:center;">
+          <div class="result-card err">
+            <div class="row">
+              <div class="ic-box">!</div>
+              <div>
+                <h3>浏览器对话界面没启动起来</h3>
+                <p>WebUI 进程退出了。可以重试，或者打开服务日志看看具体出错的位置。</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="btn primary" style="height:44px;">重试</button>
+              <button class="btn secondary" style="height:44px;">查看 WebUI 日志</button>
+              <button class="btn secondary" style="height:44px; background: transparent; box-shadow:none;">知道了</button>
+            </div>
+          </div>
+        </div>
+        <div class="codeblk" style="margin-top:8px;">tone: .warning ｜ 不再有"改用终端对话"按钮（proposal §7.3 决策）｜ secondaryActionID: "open-webui-log" → ~/.hermes-web-ui/server.log</div>
+      </div>
+
+      <!-- Card 4: health_timeout -->
+      <div>
+        <h3 class="compare-col after" style="margin-bottom:10px;">D. <code class="f">health_timeout</code> · 进程在但 /health 不通</h3>
+        <div style="background: rgba(0,0,0,0.06); border-radius: 24px; padding: 22px; display:flex; align-items:center; justify-content:center;">
+          <div class="result-card warn">
+            <div class="row">
+              <div class="ic-box">!</div>
+              <div>
+                <h3>WebUI 已启动，但响应较慢</h3>
+                <p>进程正在跑，但 30 秒内 <code class="f">/health</code> 还没通。可以再等等，或者停止后重试。</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="btn primary" style="height:44px;">停止并重试</button>
+              <button class="btn secondary" style="height:44px;">查看 WebUI 日志</button>
+              <button class="btn secondary" style="height:44px; background: transparent; box-shadow:none;">再等 30 秒</button>
+            </div>
+          </div>
+        </div>
+        <div class="codeblk" style="margin-top:8px;">tone: .warning ｜ primaryActionID: "stop-and-retry" ｜ secondary: "open-webui-log" ｜ tertiary: dismiss(再等 30 秒)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ §5 ABOUT DIALOG ═══════════════════════════════════════════════════════ -->
+  <section class="scene" id="s5">
+    <div class="scene-head">
+      <h2>§5 About 对话框</h2>
+      <span class="ref">沿用 Windows v2026.05.06.2 / 平移到 Mac</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：在原版本号区上方加开源 banner（橙色渐变 + "OPEN SOURCE" 标签 + GitHub 链接）；下方加隐私文案 plan B 占位区，但<u>详细文案在数据上报那条线（macos-launcher-telemetry）单独设计</u>，本次只占视觉位置。<br/>
+      <strong>为什么</strong>：保持与 Windows About 视觉一致；同时为后续 Telemetry 同意 UI 留出"隐私公示"承载位置，避免后续返工。<br/>
+      <strong>对应字段</strong>：<code class="f">snapshot.version</code>（已有）+ 新增 <code class="f">snapshot.webuiVersion</code>、<code class="f">snapshot.nodeRuntimeKind / nodeRuntimeVersion</code> 用于显示完整运行时栈。
+    </p>
+
+    <div class="compare">
+      <div class="compare-col">
+        <h3 class="before">BEFORE — 仅版本号</h3>
+        <div style="background: rgba(0,0,0,0.06); border-radius: 24px; padding: 22px; display:flex; justify-content:center;">
+          <div class="about-card">
+            <h3 style="margin:0 0 4px; font-size:22px; font-weight:800;">关于 Hermes 启动器</h3>
+            <div class="vline">
+              <span class="v">macOS v2026.04.19.2</span>
+            </div>
+            <p style="font-size:13px; color:var(--text-3); margin: 4px 0 18px;">© 2026 · MIT License</p>
+            <div class="row"><button class="btn secondary" style="height:38px;">关闭</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="compare-col">
+        <h3 class="after">AFTER — 加开源 banner + 隐私公示占位</h3>
+        <div style="background: rgba(0,0,0,0.06); border-radius: 24px; padding: 22px; display:flex; justify-content:center;">
+          <div class="about-card">
+            <h3 style="margin:0 0 14px; font-size:22px; font-weight:800;">关于 Hermes 启动器</h3>
+
+            <div class="opensource-banner">
+              <span class="badge">OPEN SOURCE</span>
+              <div style="flex:1;">
+                <div class="ts">本启动器代码已开源</div>
+                <div style="font-size: 12px; color: var(--text-2); margin-top:2px;">
+                  欢迎在 GitHub 上查看源代码、提 issue、参与共建：
+                  <a class="lk">github.com/yxxxxx1/hermes-agent-launcher ↗</a>
+                </div>
+              </div>
+            </div>
+
+            <div class="vline" style="margin-top: 18px;">
+              <span class="v">macOS v2026.05.06.0</span>
+              <span class="w">· WebUI 0.5.9 · Node v23.11.0</span>
+            </div>
+            <p style="font-size:13px; color:var(--text-3); margin: 4px 0 14px;">© 2026 · MIT License · 数据目录 ~/.hermes</p>
+
+            <div class="privacy-block">
+              <div class="lbl">隐私与数据</div>
+              <div class="ph">[ 文案占位 — 详细公示由 macos-launcher-telemetry 提案设计；目前仅占视觉位置 ]</div>
+              <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+                <span class="pill" style="opacity:0.55;"><span class="ic">○</span> 匿名数据上报（占位开关）</span>
+                <a class="lk" style="font-size:12px;">阅读公示 ›</a>
+              </div>
+            </div>
+
+            <div class="row" style="margin-top:18px; justify-content:flex-end;"><button class="btn secondary" style="height:38px;">关闭</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ §6 NETWORK BLOCKED HERO ══════════════════════════════════════════════ -->
+  <section class="scene" id="s6">
+    <div class="scene-head">
+      <h2>§6 网络阻塞 Hero state</h2>
+      <span class="ref">平移自 Windows Bug N · 1fbb26a</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：preflight 探测 GitHub / PyPI / npm 三个源都连不上时，<u>替换</u>整个 SetupHero 区域为 hero 错误态。<br/>
+      <strong>为什么</strong>：让用户立刻知道是网络环境问题、不是程序坏了；给可操作的"重试 / 查看排障文档"路径，避免反复点装。<br/>
+      <strong>对应字段</strong>：bash <code class="f">STAGE:preflight STATUS=failed REASON=network_blocked DETAIL=github,pypi,npm</code>，Swift 端解析 DETAIL 显示三项探测各自的连通状态 chip。
+    </p>
+
+    <div class="compare full">
+      <div class="compare-col">
+        <h3 class="after">AFTER — 网络全断时的 hero state</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body" style="padding:0;">
+          <div class="topbanner" style="margin: 22px 22px 0;">
+            <span class="icon">✦</span>
+            <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+          </div>
+
+          <div class="hero blocked" style="margin: 18px 22px 22px; border-color: rgba(194,94,82,0.20);">
+            <div class="glyph">🚫</div>
+            <h2>网络看起来连不上</h2>
+            <p>启动器尝试访问 GitHub、PyPI 和 npm，三个常用源都没有响应。
+            通常是临时的代理或网络限制造成的。可以等一会儿再重试，或者打开排障说明确认网络环境。</p>
+
+            <div class="probes">
+              <span class="probe">GitHub ✕</span>
+              <span class="probe">PyPI ✕</span>
+              <span class="probe">npm ✕</span>
+            </div>
+
+            <div class="row" style="justify-content:center; gap:12px;">
+              <button class="btn primary">重试探测</button>
+              <button class="btn secondary">查看排障文档</button>
+            </div>
+            <div class="small" style="margin-top:14px;">如果你在国内代理环境下，可以先确认 VPN/代理是否开启。</div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ §7 CHINA INLINE NOTICE ═══════════════════════════════════════════════ -->
+  <section class="scene" id="s7">
+    <div class="scene-head">
+      <h2>§7 China network 警告 inline</h2>
+      <span class="ref">平移自 Windows Bug M / Bug N→inline · bea831e + 3847f49</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：当 preflight 探测发现 npm 官方源不通、淘宝镜像通的时候，<u>不弹对话框</u>，在 SetupHero 区域内插入一条 inline notice，告知会自动走镜像源。<br/>
+      <strong>为什么</strong>：dialog 打断用户操作流；而镜像源切换是无感的、不影响安装结果，inline 提示足够。<br/>
+      <strong>对应字段</strong>：bash <code class="f">STAGE:preflight STATUS=ok DETAIL=mirror_npm</code>，Swift 端在 <code class="f">snapshot.networkEnv = .china</code> 下渲染该提示条。
+    </p>
+
+    <div class="compare full">
+      <div class="compare-col">
+        <h3 class="after">AFTER — inline 提示条嵌在 SetupHero 下方</h3>
+        <div class="macwin"><div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+        <div class="body">
+          <div class="topbanner">
+            <span class="icon">✦</span>
+            <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+          </div>
+
+          <div class="hero">
+            <div class="step-tag">第 1 / 2 步</div>
+            <h1>现在先安装 Hermes</h1>
+            <p class="lead">这一步会把 Hermes 安装到你的电脑上。大多数情况下只需要继续一次，然后等待完成。</p>
+            <p class="lead-tiny">不用打开命令行，也不用记步骤。先把这一项做完，启动器会自动带你到下一步。</p>
+            <div class="row">
+              <button class="btn primary">继续安装</button>
+              <button class="btn secondary">刷新状态</button>
+            </div>
+            <div class="row" style="margin-top:12px;">
+              <span class="pill"><span class="ic">⌚</span> 预计 2 到 5 分钟</span>
+              <span class="pill"><span class="ic">✓</span> 现在只做这一项</span>
+            </div>
+
+            <div class="inline-notice">
+              <span class="ic">!</span>
+              <div class="body">
+                <strong>检测到国内网络环境</strong>，这次安装会自动走 <code class="f">npmmirror.com</code> 镜像源，速度会快不少。如果遇到问题，启动器会自动回落到官方源。
+              </div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ §8 REMOVED ENTRIES ════════════════════════════════════════════════════ -->
+  <section class="scene" id="s8">
+    <div class="scene-head">
+      <h2>§8 删除模型/渠道相关入口的影响</h2>
+      <span class="ref">LauncherRootView.swift L1031–1051 (managementUsageActions / managementMaintenanceActions)</span>
+    </div>
+    <p class="scene-desc">
+      <strong>改了什么</strong>：删掉所有"配置模型 / 换 AI 模型 / 接收消息通知 / 配置网关 / 启动网关"等启动器内入口；这些能力下沉到 WebUI 内承载。统一以"在浏览器中打开 WebUI"作为唯一入口。<br/>
+      <strong>为什么</strong>：启动器与 WebUI 并存时这些入口会混淆用户（究竟改启动器的还是 WebUI 里的？）；现在启动器只暴露"装+启"，避免分裂。<br/>
+      <strong>对应字段</strong>：<code class="f">managementUsageActions</code> 数组从 5 项减为 3 项；<code class="f">managementMaintenanceActions</code> 数组移除 <code class="f">chat_terminal</code>（不再 fallback CLI），新增 <code class="f">webui-restart / webui-stop / webui-log</code>。
+    </p>
+
+    <div class="compare">
+      <!-- BEFORE list -->
+      <div class="compare-col">
+        <h3 class="before">BEFORE — 入口清单</h3>
+        <div class="panel-dark" style="background: rgba(245,240,232,0.6);">
+          <h4 style="font-size:13px; letter-spacing:0.6px; color:var(--text-3); font-weight:800;">USAGE</h4>
+          <div class="action-row deprecated"><div class="ic-box">🌐</div><div class="body"><div class="ttl">开始和 Hermes 对话</div><div class="sub">这条保留，但 ID 改名为 <code class="f">launch</code></div></div></div>
+          <div class="action-row deprecated"><div class="ic-box">🩺</div><div class="body"><div class="ttl">检查现在能不能正常用</div><div class="sub">保留</div></div></div>
+          <div class="action-row deprecated"><div class="ic-box">⚙</div><div class="body"><div class="ttl">更换 AI 模型</div><div class="sub">删除 — 模型在 WebUI 里改</div></div></div>
+          <div class="action-row deprecated"><div class="ic-box">💬</div><div class="body"><div class="ttl">连接消息通知</div><div class="sub">删除 — 消息平台在 WebUI 里接</div></div></div>
+          <div class="action-row deprecated"><div class="ic-box">✨</div><div class="body"><div class="ttl">重新走一遍设置</div><div class="sub">删除 — 三段式流程已不存在</div></div></div>
+
+          <h4 style="font-size:13px; letter-spacing:0.6px; color:var(--text-3); font-weight:800; margin-top:18px;">MAINTENANCE</h4>
+          <div class="action-row deprecated"><div class="ic-box">▶</div><div class="body"><div class="ttl">打开终端对话</div><div class="sub">删除 — 不再 fall back CLI</div></div></div>
+          <div class="action-row deprecated"><div class="ic-box">⚙</div><div class="body"><div class="ttl">调整工具权限</div><div class="sub">保留（开放给希望细调权限的用户）</div></div></div>
+          <div class="action-row deprecated"><div class="ic-box">⟳</div><div class="body"><div class="ttl">检查更新</div><div class="sub">保留</div></div></div>
+        </div>
+      </div>
+
+      <!-- AFTER list -->
+      <div class="compare-col">
+        <h3 class="after">AFTER — 入口清单</h3>
+        <div class="panel-dark" style="background: rgba(245,240,232,0.6);">
+          <h4 style="font-size:13px; letter-spacing:0.6px; color:var(--text-3); font-weight:800;">USAGE</h4>
+          <div class="action-row"><div class="ic-box">🌐</div><div class="body"><div class="ttl">在浏览器中打开 WebUI</div><div class="sub">所有日常使用、模型、消息平台都在浏览器里完成</div></div><div class="chev">›</div></div>
+          <div class="action-row"><div class="ic-box">🩺</div><div class="body"><div class="ttl">检查现在能不能正常用</div><div class="sub">自动检查 Hermes 当前是不是已经能正常工作</div></div><div class="chev">›</div></div>
+
+          <h4 style="font-size:13px; letter-spacing:0.6px; color:var(--text-3); font-weight:800; margin-top:18px;">MAINTENANCE — WEBUI</h4>
+          <div class="action-row"><div class="ic-box">↻</div><div class="body"><div class="ttl">重启 WebUI</div><div class="sub">重启浏览器对话服务（hermes-web-ui restart）</div></div><div class="chev">›</div></div>
+          <div class="action-row"><div class="ic-box">⏹</div><div class="body"><div class="ttl">停止 WebUI</div><div class="sub">关闭浏览器对话服务</div></div><div class="chev">›</div></div>
+          <div class="action-row"><div class="ic-box">📄</div><div class="body"><div class="ttl">查看 WebUI 日志</div><div class="sub">~/.hermes-web-ui/server.log</div></div><div class="chev">›</div></div>
+
+          <h4 style="font-size:13px; letter-spacing:0.6px; color:var(--text-3); font-weight:800; margin-top:18px;">MAINTENANCE — 系统</h4>
+          <div class="action-row"><div class="ic-box">⟳</div><div class="body"><div class="ttl">检查更新</div><div class="sub">安装最新 Hermes / WebUI 版本</div></div><div class="chev">›</div></div>
+          <div class="action-row"><div class="ic-box">📁</div><div class="body"><div class="ttl">打开数据文件夹</div><div class="sub">~/.hermes</div></div><div class="chev">›</div></div>
+          <div class="action-row"><div class="ic-box">🗑</div><div class="body"><div class="ttl">卸载 Hermes</div><div class="sub">从这台 Mac 移除 Hermes</div></div><div class="chev">›</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="meta" style="margin-top:18px;">
+      <strong>需要决策</strong>：「调整工具权限」「打开主设置 / 密钥设置」这几个老入口要不要保留？
+      它们本质上是给用户直接编辑 <code class="f">~/.hermes/config.yaml</code> / <code class="f">~/.hermes/.env</code> 的入口。WebUI 也提供了表单化编辑同一份文件，但部分 power user 可能仍偏好直接看文件。
+      <em>建议保留</em>，但放进折叠区"系统维护 → 高级"次级位置。
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

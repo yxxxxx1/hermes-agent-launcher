@@ -1,0 +1,1135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Hermes macOS Launcher — Final Preview</title>
+<style>
+  /* ── design tokens (from LauncherRootView.swift LauncherPalette) ─────────── */
+  :root {
+    --bg-app: #f2f0e8;
+    --bg-app-2: #ebe8dd;
+    --bg-glow: #f5c98a;
+
+    --surface-1: #faf8f1;
+    --surface-2: #f5f0e8;
+    --surface-3: #f0e8dd;
+    --surface-hover: #f2e6d6;
+
+    --text-1: #262621;
+    --text-2: #5e594f;
+    --text-3: #8a7f75;
+    --text-on-accent: #fdfdf7;
+
+    --accent: #d9782b;
+    --accent-soft: #f2b56b;
+    --accent-deep: #a8541f;
+
+    --success: #4f8f7a;
+    --success-soft: #dceee5;
+    --warning: #c78a3a;
+    --warning-soft: #f5e8d1;
+    --danger: #c25e52;
+    --danger-soft: #f7e0d9;
+
+    --line-soft: rgba(0,0,0,0.06);
+    --line-softer: rgba(0,0,0,0.04);
+
+    --r-12:12px; --r-14:14px; --r-16:16px; --r-18:18px;
+    --r-22:22px; --r-26:26px; --r-28:28px; --r-34:34px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "SF Pro Display",
+                 system-ui, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    background: #d8d4c5;
+    background-image:
+      radial-gradient(circle at 18% 12%, rgba(245,201,138,0.18), transparent 45%),
+      radial-gradient(circle at 80% 88%, rgba(217,120,43,0.10), transparent 50%);
+    color: var(--text-1);
+    -webkit-font-smoothing: antialiased;
+    padding: 56px 24px 96px;
+  }
+
+  /* ── desktop wrapper for each frame ──────────────────────────────────────── */
+  .frame { max-width: 1040px; margin: 0 auto; }
+  .desktop {
+    margin: 0 0 60px;
+  }
+  .stamp {
+    color: rgba(0,0,0,0.42);
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.4px;
+    margin: 0 0 14px 4px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .stamp .id {
+    background: rgba(0,0,0,0.08); color: rgba(0,0,0,0.55);
+    border-radius: 6px; padding: 1px 7px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+  }
+
+  /* ── macOS window chrome ─────────────────────────────────────────────────── */
+  .window {
+    background: linear-gradient(135deg, var(--bg-app) 0%, var(--bg-app-2) 80%);
+    border-radius: 16px; overflow: hidden;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.18), 0 1px 0 rgba(255,255,255,0.6) inset;
+    border: 1px solid rgba(0,0,0,0.06);
+    position: relative;
+  }
+  .window::before {
+    content: ""; position: absolute; left: 50%; top: -200px; width: 540px; height: 380px;
+    transform: translateX(-50%);
+    background: radial-gradient(circle at center, rgba(245,201,138,0.22), rgba(245,201,138,0) 70%);
+    pointer-events: none;
+  }
+  .titlebar {
+    height: 28px; display: flex; align-items: center; gap: 8px;
+    padding: 0 14px; background: transparent;
+  }
+  .light { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .light.r { background: #ed6a5e; }
+  .light.y { background: #f4bf4f; }
+  .light.g { background: #61c554; }
+
+  .window .body {
+    padding: 22px 24px 24px;
+    position: relative; z-index: 1;
+  }
+
+  /* sized variants — width fixed, height grows to fit content (matches the
+     real app's ScrollView-driven layout) */
+  .w-setup { width: 920px; min-height: 760px; }
+  .w-mgmt  { width: 820px; min-height: 660px; }
+  .w-about { width: 540px; min-height: 620px; }
+
+  /* ── topbanner (header bar) ──────────────────────────────────────────────── */
+  .topbanner {
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(250,248,241,0.76);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-18);
+    padding: 10px 16px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    margin-bottom: 16px;
+  }
+  .topbanner .glyph { color: var(--accent); font-weight: 800; font-size: 13px; }
+  .topbanner .ttl {
+    font-size: 14px; font-weight: 600; color: var(--text-1);
+  }
+  .topbanner .sub { font-size: 11px; font-weight: 500; color: var(--text-3); margin-top: 2px; }
+
+  /* ── hero (SetupHero / ManagementHero) ───────────────────────────────────── */
+  .hero {
+    background: linear-gradient(135deg, var(--surface-1), var(--surface-2));
+    border-radius: var(--r-28); padding: 22px 24px;
+    border: 1px solid var(--line-soft);
+    box-shadow: 0 8px 18px rgba(0,0,0,0.08);
+    position: relative; overflow: hidden;
+  }
+  .hero.r28 { border-radius: var(--r-28); }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(245,201,138,0.16), transparent 60%);
+    pointer-events: none;
+  }
+  .hero > * { position: relative; }
+  .step-tag {
+    color: var(--accent); font-size: 12px; font-weight: 800;
+    letter-spacing: 1.1px; margin-bottom: 8px;
+  }
+  .hero h1 {
+    font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
+    color: var(--text-1); margin: 0 0 8px; line-height: 1.2;
+  }
+  .hero h1.mgmt { font-size: 26px; letter-spacing: -0.5px; }
+  .hero .lead {
+    font-size: 14.5px; color: var(--text-2); margin: 0 0 6px; line-height: 1.55;
+    max-width: 620px;
+  }
+  .hero .lead-tiny {
+    font-size: 12.5px; color: var(--text-3); margin: 0 0 14px; max-width: 600px;
+    line-height: 1.5;
+  }
+  .hero .ctaline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 2px;}
+  .hero .pillrow { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+  /* ── pill ───────────────────────────────────────────────────────────────── */
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 12px; background: var(--surface-3);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-14);
+    font-size: 12px; font-weight: 500; color: var(--text-2);
+  }
+  .pill .ic { color: var(--accent); font-weight: 800; font-size: 12px; }
+  .pill.success { background: var(--success-soft); color: #1f5f4a; border-color: rgba(79,143,122,0.20); }
+  .pill.success .ic { color: var(--success); }
+
+  /* ── buttons ────────────────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 48px; padding: 0 20px; border-radius: var(--r-18);
+    font-family: inherit;
+    font-size: 14.5px; font-weight: 700; letter-spacing: -0.2px;
+    border: 1px solid rgba(255,255,255,0.18); cursor: pointer;
+    user-select: none;
+  }
+  .btn.primary {
+    background: var(--accent); color: var(--text-on-accent);
+    box-shadow: 0 8px 16px rgba(217,120,43,0.28);
+  }
+  .btn.secondary {
+    background: var(--surface-3); color: var(--text-1);
+    border: 1px solid var(--line-soft); font-weight: 600;
+    box-shadow: 0 5px 10px rgba(0,0,0,0.06);
+  }
+  .btn.ghost {
+    background: transparent; color: var(--text-1);
+    border: 1px solid var(--line-soft); font-weight: 600;
+    box-shadow: none;
+  }
+  .btn.sm { height: 38px; padding: 0 14px; font-size: 13px; border-radius: 14px; }
+  .btn.md { height: 44px; padding: 0 16px; font-size: 14px; border-radius: 16px; }
+  .btn.disabled {
+    background: var(--surface-3); color: var(--text-3);
+    box-shadow: none; cursor: not-allowed; border: 1px solid var(--line-soft);
+  }
+
+  /* ── progress track card (stages) ───────────────────────────────────────── */
+  .track {
+    background: rgba(250,248,241,0.72);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-22);
+    padding: 16px;
+    margin-top: 12px;
+  }
+  .track h4 {
+    font-size: 15px; font-weight: 800; color: var(--text-1); margin: 0 0 12px;
+  }
+  .stages {
+    display: grid; gap: 10px;
+    grid-template-columns: 1fr 1fr;
+  }
+  .scard {
+    background: var(--surface-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-18); padding: 14px;
+    min-height: 110px;
+  }
+  .scard.complete { background: var(--success-soft); border-color: rgba(79,143,122,0.35); }
+  .scard.active   { background: var(--warning-soft); border-color: rgba(199,138,58,0.35); }
+  .scard.running  { background: var(--warning-soft); border-color: rgba(199,138,58,0.45); }
+  .scard .head {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface-3); color: white;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; margin-bottom: 12px;
+  }
+  .scard.complete .head { background: var(--success); }
+  .scard.active   .head { background: var(--warning); }
+  .scard.running  .head { background: transparent; border: 2px solid var(--warning);
+                          color: var(--warning); animation: spin 1.1s linear infinite; }
+  .scard .short {
+    font-size: 14px; font-weight: 800; color: var(--text-1); margin: 4px 0;
+  }
+  .scard .lbl {
+    font-size: 11px; font-weight: 800; margin-bottom: 6px; color: var(--text-3);
+    letter-spacing: 0.2px;
+  }
+  .scard.active .lbl, .scard.running .lbl { color: var(--warning); }
+  .scard.complete .lbl { color: var(--success); }
+  .scard .sub {
+    font-size: 11px; font-weight: 600; color: var(--text-2); line-height: 1.5;
+  }
+  .scard .sub.muted { color: var(--text-3); font-weight: 500; }
+
+  /* ── launch progress card ───────────────────────────────────────────────── */
+  .lcard {
+    background: linear-gradient(135deg, var(--surface-1), var(--surface-2));
+    border: 1px solid var(--line-soft); border-radius: var(--r-22);
+    padding: 18px 20px; box-shadow: 0 8px 18px rgba(0,0,0,0.08);
+    position: relative;
+  }
+  .lcard h4 { font-size: 17px; font-weight: 800; color: var(--text-1); margin: 0 0 4px; letter-spacing: -0.2px; }
+  .lcard .meta-line { font-size: 12.5px; color: var(--text-3); line-height: 1.5; }
+  .lcard .step-counter {
+    font-size: 11px; color: var(--text-3); font-weight: 800;
+    letter-spacing: 1px;
+  }
+  .lcard .progressline {
+    height: 5px; background: var(--surface-3); border-radius: 3px;
+    overflow: hidden; margin: 12px 0 12px;
+  }
+  .lcard .progressline .fill {
+    display: block; height: 100%; background: var(--accent); border-radius: 3px;
+  }
+  .lcard.failed .progressline .fill { background: var(--danger); }
+
+  .lstep { display: flex; align-items: center; gap: 12px; padding: 8px 4px; }
+  .lstep + .lstep { border-top: 1px solid var(--line-softer); }
+  .lstep .dot {
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 800; color: white;
+    background: var(--surface-3);
+    border: 1px solid var(--line-soft);
+  }
+  .lstep.ok      .dot { background: var(--success); border-color: var(--success); }
+  .lstep.running .dot {
+    background: var(--surface-1); border: 1.5px solid var(--accent);
+    color: var(--accent); animation: spin 1.1s linear infinite;
+  }
+  .lstep.failed  .dot { background: var(--danger); border-color: var(--danger); }
+  .lstep.waiting .dot { background: var(--surface-3); color: var(--text-3); }
+  .lstep .text {
+    font-size: 14px; color: var(--text-1); font-weight: 600;
+  }
+  .lstep.waiting .text { color: var(--text-3); font-weight: 500; }
+  .lstep .det { font-size: 12px; color: var(--text-3); margin-left: 8px; font-weight: 500; }
+  .lstep.ok .det { color: var(--success); }
+  .lstep.failed .det { color: var(--danger); }
+  .lstep .open-log {
+    margin-left: auto; font-size: 12px; color: var(--accent-deep);
+    font-weight: 700; cursor: pointer;
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  .lcard .footer-row { display: flex; gap: 12px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+
+  /* success collapsed bar */
+  .success-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 10px 14px;
+    background: var(--success-soft);
+    border: 1px solid rgba(79,143,122,0.28);
+    border-radius: var(--r-18);
+    margin-bottom: 12px;
+  }
+  .success-bar .lhs { display: flex; gap: 12px; align-items: center; }
+  .success-bar .check {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--success); color: #fff;
+    font-weight: 800; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .success-bar .ttl { font-weight: 800; color: var(--text-1); font-size: 14px; }
+  .success-bar .url {
+    font-size: 11.5px; color: #1f5f4a; margin-top: 2px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  .success-bar .rhs { display: flex; gap: 8px; }
+
+  /* ── inline result card (in-hero error overlay) ──────────────────────────── */
+  .result-inline {
+    background: var(--surface-1);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-26);
+    padding: 24px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  }
+  .result-inline.warn { border-left: 4px solid var(--warning); }
+  .result-inline.err  { border-left: 4px solid var(--danger); }
+  .result-inline .row { display: flex; gap: 14px; align-items: flex-start; }
+  .result-inline .ic-box {
+    width: 40px; height: 40px; border-radius: var(--r-14);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 800; flex-shrink: 0;
+  }
+  .result-inline.warn .ic-box { background: var(--warning-soft); color: var(--warning); }
+  .result-inline.err  .ic-box { background: var(--danger-soft);  color: var(--danger); }
+  .result-inline h3 {
+    font-size: 19px; font-weight: 800; color: var(--text-1);
+    margin: 0 0 6px; letter-spacing: -0.3px;
+  }
+  .result-inline p { font-size: 13.5px; color: var(--text-2); line-height: 1.65; margin: 0; }
+  .result-inline p code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px; background: rgba(0,0,0,0.05);
+    padding: 1px 6px; border-radius: 5px;
+  }
+  .result-inline .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+
+  /* ── action-row & maintenance panel ─────────────────────────────────────── */
+  .panel-dark {
+    background: rgba(245,240,232,0.88);
+    border: 1px solid var(--line-softer);
+    border-radius: var(--r-22); padding: 16px 18px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+    margin-top: 14px;
+  }
+  .panel-dark h4 { font-size: 16px; font-weight: 800; color: var(--text-1); margin: 0 0 4px; letter-spacing: -0.2px; }
+  .panel-dark .panel-sub { font-size: 13px; color: var(--text-2); margin: 0 0 10px; }
+
+  .action-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; background: var(--surface-1);
+    border: 1px solid var(--line-soft); border-radius: var(--r-16);
+  }
+  .action-row + .action-row { margin-top: 8px; }
+  .action-row .ic-box {
+    width: 32px; height: 32px; border-radius: var(--r-12);
+    background: var(--surface-3); color: var(--accent);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; flex-shrink: 0;
+  }
+  .action-row.danger .ic-box { background: var(--danger-soft); color: var(--danger); }
+  .action-row .body { flex: 1; min-width: 0; }
+  .action-row .ttl { font-size: 14px; font-weight: 800; color: var(--text-1); line-height: 1.25; }
+  .action-row .sub { font-size: 12px; color: var(--text-2); margin-top: 3px; line-height: 1.4; }
+  .action-row .chev { color: var(--text-3); font-weight: 800; font-size: 13px; }
+
+  .action-row.compact { padding: 8px 12px; }
+  .action-row.compact .ic-box { width: 26px; height: 26px; font-size: 11px; border-radius: 8px; }
+  .action-row.compact .ttl { font-size: 13px; }
+  .action-row.compact .sub { font-size: 11.5px; margin-top: 2px; }
+
+  .group-label {
+    font-size: 11px; font-weight: 800; letter-spacing: 0.6px;
+    color: var(--text-3); margin: 12px 0 6px;
+    text-transform: uppercase;
+  }
+  .group-label:first-of-type { margin-top: 2px; }
+
+  .more-collapsed {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; background: var(--surface-3);
+    border: 1px solid var(--line-soft); border-radius: var(--r-16);
+    cursor: pointer; margin-top: 10px;
+  }
+  .more-collapsed .ic-box {
+    width: 32px; height: 32px; border-radius: var(--r-12);
+    background: var(--surface-2); color: var(--text-3);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; flex-shrink: 0;
+  }
+  .more-collapsed .body { flex: 1; }
+  .more-collapsed .ttl { font-size: 14px; font-weight: 800; color: var(--text-1); }
+  .more-collapsed .sub { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+
+  /* ── network blocked hero ───────────────────────────────────────────────── */
+  .blocked {
+    text-align: center; padding: 32px 36px 24px;
+  }
+  .blocked .glyph {
+    font-size: 56px; margin-bottom: 12px; opacity: 0.7; line-height: 1;
+  }
+  .blocked h2 {
+    font-size: 26px; font-weight: 800; color: var(--text-1);
+    margin: 0 0 10px; letter-spacing: -0.5px;
+  }
+  .blocked p {
+    font-size: 14px; color: var(--text-2); line-height: 1.6;
+    max-width: 540px; margin: 0 auto 12px;
+  }
+  .blocked .probes {
+    display: flex; justify-content: center; gap: 8px; margin: 14px 0 18px;
+  }
+  .probe {
+    background: var(--danger-soft); color: #823a30;
+    border: 1px solid rgba(194,94,82,0.20);
+    border-radius: 12px; padding: 8px 12px; font-size: 12px; font-weight: 700;
+  }
+  .probe.ok { background: var(--success-soft); color: #1f5f4a; border-color: rgba(79,143,122,0.20); }
+  .blocked .ctas { display: flex; justify-content: center; gap: 12px; }
+  .blocked .small { color: var(--text-3); font-size: 12px; margin-top: 16px; }
+
+  /* ── inline notice ──────────────────────────────────────────────────────── */
+  .inline-notice {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #fbf3df, #f6e7c2);
+    border: 1px solid rgba(199,138,58,0.30);
+    border-radius: var(--r-14);
+    margin-top: 16px;
+  }
+  .inline-notice .ic {
+    color: var(--warning); font-size: 16px; font-weight: 800; flex-shrink: 0; margin-top: 1px;
+  }
+  .inline-notice .body { font-size: 13px; color: #6b5524; line-height: 1.55; }
+  .inline-notice strong { color: var(--text-1); font-weight: 800; }
+  .inline-notice code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px; background: rgba(0,0,0,0.05);
+    padding: 1px 5px; border-radius: 4px;
+  }
+
+  /* ── About modal ────────────────────────────────────────────────────────── */
+  .about-content { padding: 26px 28px; }
+  .about-content h2 {
+    font-size: 24px; font-weight: 800; margin: 0 0 18px; letter-spacing: -0.4px;
+    color: var(--text-1);
+  }
+  .opensource-banner {
+    background: linear-gradient(135deg, #fef3e0, #fbe2c2);
+    border: 1px solid rgba(217,120,43,0.32);
+    border-radius: var(--r-16); padding: 14px 16px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  .opensource-banner .badge {
+    background: var(--accent); color: var(--text-on-accent);
+    font-size: 10px; font-weight: 800; letter-spacing: 1px;
+    padding: 4px 8px; border-radius: 8px;
+  }
+  .opensource-banner .ts { font-size: 13.5px; font-weight: 700; color: var(--text-1); }
+  .opensource-banner .lk { font-size: 12.5px; color: var(--accent-deep); text-decoration: underline; }
+  .vline { display: flex; gap: 8px; align-items: baseline; margin: 20px 0 4px; flex-wrap: wrap;}
+  .vline .v { font-size: 24px; font-weight: 800; color: var(--text-1); }
+  .vline .w { font-size: 13px; color: var(--text-3); }
+  .runtime-stack { font-size: 13px; color: var(--text-2); margin: 4px 0 0; line-height: 1.7; }
+  .runtime-stack code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: var(--text-1);
+  }
+  .privacy-block {
+    background: var(--surface-2); border-radius: var(--r-16);
+    padding: 16px; margin-top: 18px; border: 1px dashed rgba(0,0,0,0.12);
+  }
+  .privacy-block .lbl { font-size: 11px; color: var(--text-3); font-weight: 800; letter-spacing: 0.6px; }
+  .privacy-block .ph { font-size: 13px; color: var(--text-3); margin-top: 6px; font-style: italic; }
+  .privacy-block .toggle-row {
+    display: flex; gap: 10px; margin-top: 12px; align-items: center; justify-content: space-between;
+  }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-radius: 999px;
+    background: var(--surface-3); color: var(--text-2);
+    font-size: 12px; font-weight: 600;
+    border: 1px solid var(--line-soft);
+  }
+  .toggle .knob {
+    width: 28px; height: 16px; border-radius: 999px; background: rgba(0,0,0,0.2); position: relative;
+  }
+  .toggle .knob::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%; background: white;
+  }
+
+  /* misc */
+  @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+  .duration-pill { display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 12px; background: var(--surface-3); border: 1px solid var(--line-soft);
+    border-radius: var(--r-14); font-size: 12px; font-weight: 500; color: var(--text-2);}
+  .duration-pill .ic { color: var(--accent); font-size: 12px; font-weight: 800; }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <!-- ────────── A. 冷启动 / 首次未安装 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">A</span> 冷启动 — 首次打开，未安装</div>
+    <div class="window w-setup">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+        </div>
+
+        <div class="hero">
+          <div class="step-tag">第 1 / 2 步</div>
+          <h1>现在先安装 Hermes</h1>
+          <p class="lead">这一步会把 Hermes 安装到你的电脑上。大多数情况下只需要继续一次，然后等待完成。</p>
+          <p class="lead-tiny">不用打开命令行，也不用记步骤。先把这一项做完，启动器会自动带你到下一步。</p>
+          <div class="ctaline">
+            <button class="btn primary">开始使用</button>
+            <button class="btn secondary">刷新状态</button>
+          </div>
+          <div class="pillrow">
+            <span class="duration-pill"><span class="ic">⌚</span>预计 2 到 5 分钟</span>
+            <span class="duration-pill"><span class="ic">✓</span>现在只做这一项</span>
+          </div>
+        </div>
+
+        <div class="track">
+          <h4>安装进度</h4>
+          <div class="stages">
+            <div class="scard active">
+              <div class="head">📦</div>
+              <div class="lbl">当前步骤</div>
+              <div class="short">安装</div>
+              <div class="sub">把 Hermes 装到这台 Mac 上，装好后才能继续。</div>
+            </div>
+            <div class="scard">
+              <div class="head">🧭</div>
+              <div class="lbl">稍后进行</div>
+              <div class="short">启动</div>
+              <div class="sub muted">启动浏览器对话界面，并在浏览器里完成模型配置。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── B. 安装进行中 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">B</span> 安装 Hermes 进行中</div>
+    <div class="window w-setup">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+        </div>
+
+        <div class="hero">
+          <div class="step-tag">第 1 / 2 步</div>
+          <h1>正在安装 Hermes</h1>
+          <p class="lead">已经在装了，过程会自动完成。如果中途断网或中断，启动器会告诉你。</p>
+          <p class="lead-tiny">不用打开命令行，也不用守在这里。装好后会自动带你到下一步。</p>
+          <div class="ctaline">
+            <button class="btn primary disabled">安装中…</button>
+            <button class="btn secondary">查看安装日志</button>
+          </div>
+          <div class="pillrow">
+            <span class="duration-pill"><span class="ic">⌚</span>预计还需 1-3 分钟</span>
+            <span class="duration-pill"><span class="ic">↓</span>已完成约 40%</span>
+          </div>
+        </div>
+
+        <div class="track">
+          <h4>安装进度</h4>
+          <div class="stages">
+            <div class="scard running">
+              <div class="head">●</div>
+              <div class="lbl">正在进行</div>
+              <div class="short">安装</div>
+              <div class="sub">正在下载并安装 Hermes 主程序…</div>
+            </div>
+            <div class="scard">
+              <div class="head">🧭</div>
+              <div class="lbl">稍后进行</div>
+              <div class="short">启动</div>
+              <div class="sub muted">启动浏览器对话界面，并在浏览器里完成模型配置。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── C. 安装完成，等待启动 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">C</span> 安装完成，等待启动浏览器对话</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · WebUI 未启动</div></div>
+        </div>
+
+        <div class="hero r28">
+          <h1 class="mgmt">Hermes 已经装好</h1>
+          <p class="lead">接下来打开浏览器对话。模型、API Key、消息通道这些设置都会在浏览器里完成。</p>
+          <div class="ctaline">
+            <button class="btn primary">启动浏览器对话</button>
+            <span class="pill"><span class="ic">📦</span>数据目录：~/.hermes</span>
+            <span class="pill"><span class="ic">🌐</span>WebUI 已准备，点击后打开</span>
+          </div>
+        </div>
+
+        <div class="panel-dark">
+          <h4>接下来你可能会做的事</h4>
+          <div class="panel-sub">现在只保留两个入口；其它（模型、消息平台、密钥）都在 WebUI 里设置。</div>
+
+          <div class="action-row">
+            <div class="ic-box">🌐</div>
+            <div class="body"><div class="ttl">启动浏览器对话</div><div class="sub">第一次启动会顺便准备好运行环境，1-3 分钟。</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row">
+            <div class="ic-box">🩺</div>
+            <div class="body"><div class="ttl">检查现在能不能正常用</div><div class="sub">如果你担心 Hermes 没准备好，可以做一次自动检查。</div></div>
+            <div class="chev">›</div>
+          </div>
+
+          <div class="more-collapsed">
+            <div class="ic-box">⋯</div>
+            <div class="body">
+              <div class="ttl">更多设置和维护</div>
+              <div class="sub">重启 / 停止 WebUI、查看日志、更新、卸载，都在这里。</div>
+            </div>
+            <div class="chev">▾</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── D. 启动进度 - 第 3/7 步 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">D</span> 启动中 — 第 3 / 7 步（installing webui）</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · 启动中</div></div>
+        </div>
+
+        <div class="lcard">
+          <div style="display:flex; justify-content:space-between; align-items:flex-end; gap:14px;">
+            <div>
+              <h4>正在为你启动浏览器对话</h4>
+              <div class="meta-line">第一次启动通常 1-3 分钟，下次进入会快很多。</div>
+            </div>
+            <div class="step-counter">第 3 / 7 步</div>
+          </div>
+          <div class="progressline"><span class="fill" style="width:36%;"></span></div>
+
+          <div class="lstep ok">
+            <span class="dot">✓</span>
+            <span class="text">检查 Node.js 运行时</span>
+            <span class="det">使用系统 Node v23.11.0</span>
+          </div>
+          <div class="lstep ok">
+            <span class="dot">✓</span>
+            <span class="text">启动 Hermes 网关</span>
+            <span class="det">端口 8642</span>
+          </div>
+          <div class="lstep running">
+            <span class="dot">●</span>
+            <span class="text">安装 hermes-web-ui (npm)</span>
+            <span class="det">正在解析依赖…（约 1-2 分钟）</span>
+          </div>
+          <div class="lstep waiting">
+            <span class="dot">○</span>
+            <span class="text">等待网关健康</span>
+          </div>
+          <div class="lstep waiting">
+            <span class="dot">○</span>
+            <span class="text">启动 WebUI</span>
+          </div>
+          <div class="lstep waiting">
+            <span class="dot">○</span>
+            <span class="text">等待 WebUI 健康</span>
+          </div>
+
+          <div class="footer-row">
+            <button class="btn secondary md">取消</button>
+            <span class="pill"><span class="ic">⌚</span>预计还需 1-2 分钟</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── E. 启动进度 - 中间失败 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">E</span> 启动失败 — 第 3 / 7 步 npm_install_failed</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · 启动遇到问题</div></div>
+        </div>
+
+        <div class="lcard failed">
+          <h4 style="color: var(--danger);">启动遇到问题</h4>
+          <div class="meta-line">第 3 步没能完成，可点击"查看安装日志"了解详情。前面已完成的步骤会保留，重试时不必重做。</div>
+          <div class="progressline"><span class="fill" style="width:30%;"></span></div>
+
+          <div class="lstep ok">
+            <span class="dot">✓</span>
+            <span class="text">检查 Node.js 运行时</span>
+            <span class="det">使用系统 Node v23.11.0</span>
+          </div>
+          <div class="lstep ok">
+            <span class="dot">✓</span>
+            <span class="text">启动 Hermes 网关</span>
+            <span class="det">端口 8642</span>
+          </div>
+          <div class="lstep failed">
+            <span class="dot">✕</span>
+            <span class="text">安装 hermes-web-ui (npm)</span>
+            <span class="det">退出码 1 · registry_unreachable</span>
+            <span class="open-log">查看安装日志 ›</span>
+          </div>
+          <div class="lstep waiting">
+            <span class="dot">○</span>
+            <span class="text">等待网关健康</span>
+          </div>
+          <div class="lstep waiting">
+            <span class="dot">○</span>
+            <span class="text">启动 WebUI</span>
+          </div>
+          <div class="lstep waiting">
+            <span class="dot">○</span>
+            <span class="text">等待 WebUI 健康</span>
+          </div>
+
+          <div class="footer-row">
+            <button class="btn primary md">重试</button>
+            <button class="btn secondary md">查看安装日志</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── F. 启动成功，已折叠成功条 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">F</span> 启动成功 — 折叠成单行成功条</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · WebUI 0.5.9</div></div>
+        </div>
+
+        <div class="success-bar">
+          <div class="lhs">
+            <div class="check">✓</div>
+            <div>
+              <div class="ttl">已启动，浏览器已自动打开</div>
+              <div class="url">http://localhost:8648/#/?token=…</div>
+            </div>
+          </div>
+          <div class="rhs">
+            <button class="btn sm secondary">查看启动详情</button>
+            <button class="btn sm primary" style="height:38px;">在浏览器里打开</button>
+          </div>
+        </div>
+
+        <div class="hero r28">
+          <h1 class="mgmt">Hermes 已经可以用了</h1>
+          <p class="lead">浏览器对话已就绪。接下来的设置（模型、API Key、消息通道）都在浏览器里完成。</p>
+          <div class="ctaline">
+            <button class="btn primary">在浏览器中打开 WebUI</button>
+            <span class="pill success"><span class="ic">●</span>WebUI 在线 · :8648</span>
+            <span class="pill"><span class="ic">📦</span>数据目录：~/.hermes</span>
+          </div>
+        </div>
+
+        <div class="panel-dark">
+          <h4>接下来你可能会做的事</h4>
+          <div class="panel-sub">现在只保留两个入口；其它（模型、消息平台、密钥）都在 WebUI 里设置。</div>
+
+          <div class="action-row">
+            <div class="ic-box">🌐</div>
+            <div class="body"><div class="ttl">在浏览器中打开 WebUI</div><div class="sub">继续聊天、配置模型、接入消息通道，都在浏览器里完成。</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row">
+            <div class="ic-box">🩺</div>
+            <div class="body"><div class="ttl">检查现在能不能正常用</div><div class="sub">如果你担心 Hermes 没准备好，可以做一次自动检查。</div></div>
+            <div class="chev">›</div>
+          </div>
+
+          <div class="more-collapsed">
+            <div class="ic-box">⋯</div>
+            <div class="body">
+              <div class="ttl">更多设置和维护</div>
+              <div class="sub">重启 / 停止 WebUI、查看日志、更新、卸载，都在这里。</div>
+            </div>
+            <div class="chev">▾</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── G. 维护折叠区展开 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">G</span> 运行中 dashboard — 维护折叠区展开</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · WebUI 0.5.9</div></div>
+        </div>
+
+        <div class="hero r28" style="padding: 18px 20px;">
+          <h1 class="mgmt" style="font-size: 22px; margin-bottom: 10px;">Hermes 已经可以用了</h1>
+          <div class="ctaline">
+            <button class="btn primary md">在浏览器中打开 WebUI</button>
+            <span class="pill success"><span class="ic">●</span>WebUI 在线 · :8648</span>
+          </div>
+        </div>
+
+        <div class="panel-dark">
+          <h4>更多设置和维护</h4>
+          <div class="panel-sub">平时可以先不用看，遇到问题或想调整时再展开。</div>
+
+          <div class="group-label">WebUI 维护</div>
+          <div class="action-row compact">
+            <div class="ic-box">↻</div>
+            <div class="body"><div class="ttl">重启 WebUI</div><div class="sub">重启浏览器对话服务（hermes-web-ui restart）</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row compact">
+            <div class="ic-box">⏹</div>
+            <div class="body"><div class="ttl">停止 WebUI</div><div class="sub">关闭浏览器对话服务</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row compact">
+            <div class="ic-box">📄</div>
+            <div class="body"><div class="ttl">查看 WebUI 日志</div><div class="sub">~/.hermes-web-ui/server.log</div></div>
+            <div class="chev">›</div>
+          </div>
+
+          <div class="group-label">系统维护</div>
+          <div class="action-row compact">
+            <div class="ic-box">⟳</div>
+            <div class="body"><div class="ttl">检查更新</div><div class="sub">安装最新 Hermes / WebUI 版本</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row compact">
+            <div class="ic-box">📁</div>
+            <div class="body"><div class="ttl">打开数据文件夹</div><div class="sub">~/.hermes</div></div>
+            <div class="chev">›</div>
+          </div>
+
+          <div class="group-label">系统维护 · 高级</div>
+          <div class="action-row compact">
+            <div class="ic-box">📝</div>
+            <div class="body"><div class="ttl">打开主设置</div><div class="sub">直接编辑 ~/.hermes/config.yaml（适合熟悉文件结构的用户）</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row compact">
+            <div class="ic-box">🔑</div>
+            <div class="body"><div class="ttl">查看密钥设置</div><div class="sub">直接编辑 ~/.hermes/.env</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row compact">
+            <div class="ic-box">🛠</div>
+            <div class="body"><div class="ttl">调整工具权限</div><div class="sub">处理工具权限或可用范围</div></div>
+            <div class="chev">›</div>
+          </div>
+          <div class="action-row compact danger">
+            <div class="ic-box">🗑</div>
+            <div class="body"><div class="ttl">卸载 Hermes</div><div class="sub">从这台 Mac 移除 Hermes</div></div>
+            <div class="chev">›</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── H. 健康检查超时 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">H</span> 健康检查超时（warn）</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · 等待 WebUI 响应</div></div>
+        </div>
+
+        <div class="result-inline warn">
+          <div class="row">
+            <div class="ic-box">!</div>
+            <div>
+              <h3>WebUI 已启动，但响应较慢</h3>
+              <p>进程正在跑，但 30 秒内 <code>/health</code> 还没通。可能是首次构建索引或系统较慢。可以再等等，或者停止后重试。</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn primary md">停止并重试</button>
+            <button class="btn secondary md">查看 WebUI 日志</button>
+            <button class="btn ghost md">再等 30 秒</button>
+          </div>
+        </div>
+
+        <div class="panel-dark" style="margin-top: 22px;">
+          <h4>诊断信息</h4>
+          <div class="panel-sub">如果你愿意附带这些信息提 issue，会更容易复现。</div>
+          <div class="action-row compact">
+            <div class="ic-box">📊</div>
+            <div class="body">
+              <div class="ttl">PID 12847 · CPU 0% · 端口 8648 已监听</div>
+              <div class="sub">服务进程仍存活，但 HTTP 没有返回。可能是初始化阻塞或权限问题。</div>
+            </div>
+            <div class="chev">›</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── I. WebUI 失败错误 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">I</span> WebUI 启动失败（err，无 CLI fallback）</div>
+    <div class="window w-mgmt">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 管理中心</div><div class="sub">macOS v2026.05.06.0 · 启动遇到问题</div></div>
+        </div>
+
+        <div class="result-inline err">
+          <div class="row">
+            <div class="ic-box">!</div>
+            <div>
+              <h3>浏览器对话界面没启动起来</h3>
+              <p>WebUI 进程意外退出。可以重试，或者打开服务日志看看具体出错的位置。前面已经完成的安装不会被清掉，重试时会从启动这一步继续。</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn primary md">重试</button>
+            <button class="btn secondary md">查看 WebUI 日志</button>
+            <button class="btn ghost md">知道了</button>
+          </div>
+        </div>
+
+        <div class="panel-dark" style="margin-top: 22px;">
+          <h4>常见原因</h4>
+          <div class="action-row compact">
+            <div class="ic-box">🔌</div>
+            <div class="body"><div class="ttl">端口 8648 被占用</div><div class="sub">其他程序正在用这个端口。可以重启 Mac 后再试。</div></div>
+          </div>
+          <div class="action-row compact">
+            <div class="ic-box">📁</div>
+            <div class="body"><div class="ttl">~/.hermes-web-ui 数据目录权限异常</div><div class="sub">通常是磁盘空间不足或权限被改写。可在日志里看到具体错误。</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── J. 网络阻塞 hero ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">J</span> 网络阻塞 — 全屏 hero state</div>
+    <div class="window w-setup">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0 · 网络检查未通过</div></div>
+        </div>
+
+        <div class="hero r28 blocked" style="border-color: rgba(194,94,82,0.20);">
+          <div class="glyph">🚫</div>
+          <h2>网络看起来连不上</h2>
+          <p>启动器尝试访问 GitHub、PyPI 和 npm，三个常用源都没有响应。
+          通常是临时的代理或网络限制造成的。可以等一会儿再重试，或者打开排障说明确认网络环境。</p>
+
+          <div class="probes">
+            <span class="probe">GitHub ✕</span>
+            <span class="probe">PyPI ✕</span>
+            <span class="probe">npm ✕</span>
+          </div>
+
+          <div class="ctas">
+            <button class="btn primary">重试探测</button>
+            <button class="btn secondary">查看排障文档</button>
+          </div>
+          <div class="small">如果你在国内代理环境下，可以先确认 VPN/代理是否开启。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── K. China network 内联提示 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">K</span> China network 警告 — inline 提示（不弹对话框）</div>
+    <div class="window w-setup">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="body">
+        <div class="topbanner">
+          <span class="glyph">✦</span>
+          <div><div class="ttl">Hermes 安装助手</div><div class="sub">macOS v2026.05.06.0</div></div>
+        </div>
+
+        <div class="hero">
+          <div class="step-tag">第 1 / 2 步</div>
+          <h1>现在先安装 Hermes</h1>
+          <p class="lead">这一步会把 Hermes 安装到你的电脑上。大多数情况下只需要继续一次，然后等待完成。</p>
+          <p class="lead-tiny">不用打开命令行，也不用记步骤。先把这一项做完，启动器会自动带你到下一步。</p>
+          <div class="ctaline">
+            <button class="btn primary">开始使用</button>
+            <button class="btn secondary">刷新状态</button>
+          </div>
+          <div class="pillrow">
+            <span class="duration-pill"><span class="ic">⌚</span>预计 2 到 5 分钟</span>
+            <span class="duration-pill"><span class="ic">✓</span>现在只做这一项</span>
+          </div>
+
+          <div class="inline-notice">
+            <span class="ic">!</span>
+            <div class="body">
+              <strong>检测到国内网络环境</strong>，这次安装会自动走 <code>npmmirror.com</code> 镜像源，速度会快不少。如果遇到问题，启动器会自动回落到官方源。
+            </div>
+          </div>
+        </div>
+
+        <div class="track">
+          <h4>安装进度</h4>
+          <div class="stages">
+            <div class="scard active">
+              <div class="head">📦</div>
+              <div class="lbl">当前步骤</div>
+              <div class="short">安装</div>
+              <div class="sub">把 Hermes 装到这台 Mac 上，装好后才能继续。</div>
+            </div>
+            <div class="scard">
+              <div class="head">🧭</div>
+              <div class="lbl">稍后进行</div>
+              <div class="short">启动</div>
+              <div class="sub muted">启动浏览器对话界面，并在浏览器里完成模型配置。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────── L. About 对话框 ────────── -->
+  <div class="desktop">
+    <div class="stamp"><span class="id">L</span> About 对话框（独立 modal 窗口）</div>
+    <div class="window w-about">
+      <div class="titlebar"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+      <div class="about-content">
+        <h2>关于 Hermes 启动器</h2>
+
+        <div class="opensource-banner">
+          <span class="badge">OPEN SOURCE</span>
+          <div style="flex:1;">
+            <div class="ts">本启动器代码已开源</div>
+            <div style="font-size: 12px; color: var(--text-2); margin-top:2px;">
+              欢迎在 GitHub 上查看源代码、提 issue、参与共建：
+              <a class="lk">github.com/yxxxxx1/hermes-agent-launcher ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="vline">
+          <span class="v">macOS v2026.05.06.0</span>
+        </div>
+        <p class="runtime-stack">
+          运行时栈：<code>WebUI 0.5.9</code> · <code>Node v23.11.0 (system)</code><br/>
+          数据目录：<code>~/.hermes</code> · WebUI 状态：<code>~/.hermes-web-ui</code><br/>
+          © 2026 · MIT License
+        </p>
+
+        <div class="privacy-block">
+          <div class="lbl">隐私与数据</div>
+          <div class="ph">[ 文案占位 — 详细公示由 macos-launcher-telemetry 提案设计；目前仅占视觉位置 ]</div>
+          <div class="toggle-row">
+            <div class="toggle">
+              <span class="knob"></span>
+              <span>匿名数据上报（占位开关）</span>
+            </div>
+            <a class="lk" style="font-size:12px;">阅读公示 ›</a>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; margin-top: 18px;">
+          <button class="btn secondary md">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

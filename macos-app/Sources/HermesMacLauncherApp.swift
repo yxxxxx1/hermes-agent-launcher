@@ -7,10 +7,11 @@ struct HermesMacLauncherApp: App {
     var body: some Scene {
         WindowGroup {
             LauncherRootView(store: store)
-                .frame(minWidth: 760, minHeight: 620)
+                .frame(width: 720, height: 560)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 920, height: 760)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
         Settings {
             EmptyView()
         }
