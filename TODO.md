@@ -4,6 +4,45 @@
 
 ---
 
+## 🎯 下一阶段三大主题（2026-05-06 Windows v2026.05.06.4 收尾后定）
+
+Windows 端在 5 月初集中迭代了一轮（v2026.05.04.x → v2026.05.06.4，14 个 patch），主流程稳定 + telemetry / dashboard / 地区分布 / 关于对话框 / 开源准备文案都到位。**告一段落**。
+
+下一阶段从产品视角分三大主题，按 PM 决定的顺序推进：
+
+### 主题 1：Mac 端追平 Windows 改造（最大工作量）
+
+把 Windows 端这一轮做的所有改造同步到 macOS：
+- WebUI 启动状态机 + 坏 SQLite 库自愈 + 残留进程清理（陷阱 #46）
+- Gateway 启动 + health check 等待 + GatewayManager 抢管防御（陷阱 #22/#23）
+- 替换 webui 上游版本（与 Windows 端 `0.5.9` 对齐，并跟进后续升级）
+- 接入数据上报：ALLOWED_EVENTS 全集（含 `webui_session_kept_5min`）+ Worker 边缘 country/region（macOS 端 launcher 一行不动也能拿到）
+- 关于对话框对齐 Windows 端的「开源项目卡 + 隐私两栏对照表 + B 方案文案」
+- 5min 代理事件 timer + DispatcherTimer 等价物（Swift Timer + RunLoop）
+
+代码触点：`macos-app/Sources/LauncherRootView.swift`（1210 行）
+
+**优先级**：高（只发 Windows 不公平）
+
+### 主题 2：GitHub 开源（中等工作量，但有不可逆决策点）
+
+详细清单见本文件下方「开源 pre-flight 检查清单」 G1–G7。最关键决策点是 **G2**（git 历史已经包含 PM 内部文档，三选一：A 接受 / B filter-repo 重写 / C 新建干净 public 仓）。
+
+不解决 G2 之前**绝对不要**点 GitHub 的 "Make repository public" 按钮——一旦 public 全球可读 git log，CLAUDE.md / DECISIONS.md / tasks/ 全暴露。
+
+**优先级**：高（紧跟主题 1，或并行）
+
+### 主题 3：官网重做
+
+`hermes.aisuper.win` 的 `index.html` 现在是从早期工程态演化下来的，**未做产品化重做**：
+- 信息架构：仅有"Windows 下载 + macOS 下载"两个卡片，没有"是什么 / 为什么用 / 怎么开始 / 常见问题 / 反馈"等用户旅程
+- 视觉：跟启动器内的 LauncherPalette（暖色调）也没系统对齐
+- 内容：所有文字都是开发者视角，缺用户视角（"这能解决我什么问题"）
+
+**优先级**：中（用户已经能下载使用，重做是体验升级而非阻塞项；建议主题 1+2 落地后做）
+
+---
+
 ### 待办：State 8 安装中 in-app 进度条（任务 012 P1-2，已评估，转 v2）
 
 **背景**：任务 012 真机验收时发现安装中（State 8）的进度反馈仍在独立 PowerShell 终端里，launcher 主区停留在安装前确认屏（State 7），用户无法在 launcher 内看到安装进度。
