@@ -121,11 +121,21 @@
         <option value="7" selected>近 7 天</option>
         <option value="30">近 30 天</option>
       </select>
+      <label style="margin-left:8px;">平台</label>
+      <select id="platformSelect">
+        <option value="all" selected>全部</option>
+        <option value="windows">Windows</option>
+        <option value="mac">macOS</option>
+      </select>
       <button class="primary" id="btnRefresh">刷新</button>
       <span id="status" class="subtitle"></span>
     </div>
 
     <div id="errorBox" class="error" hidden></div>
+
+    <!-- Always-full-population platform distribution; shows even when filtered. Active filter
+         pill stays opaque, the other dims to 45%. -->
+    <div id="platformDist" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;"></div>
 
     <div class="grid-stats" id="statsGrid"></div>
 
@@ -361,14 +371,50 @@
     document.getElementById('regionDist').innerHTML = countryHtml + regionHtml;
   }
 
+  // Pretty Chinese label for the platform filter (echoed in status text + panel headings).
+  function platformLabel(raw) {
+    if (raw === 'windows') return 'Windows';
+    if (raw === 'mac' || raw === 'macos' || raw === 'darwin') return 'macOS';
+    return '全部平台';
+  }
+
+  // Render the always-full-population platform distribution panel below the toolbar.
+  // The Worker returns this even when a platform filter is active, so PM can see at a
+  // glance "目前 Mac/Windows 各占多少" while drilling down into one of them.
+  function renderPlatformDist(rows, selected) {
+    const el = document.getElementById('platformDist');
+    if (!el) return;
+    rows = rows || [];
+    if (!rows.length) {
+      el.innerHTML = '<span class="subtitle">暂无数据</span>';
+      return;
+    }
+    const totalUsers = rows.reduce(function (a, r) { return a + (r.users || 0); }, 0) || 1;
+    const html = rows.map(function (r) {
+      const pct = ((r.users || 0) / totalUsers * 100).toFixed(1);
+      const isActive =
+        (selected === 'all') ||
+        (selected === 'mac' && r.platform === 'macOS') ||
+        (selected === 'windows' && r.platform === 'Windows');
+      const opacity = isActive ? '1' : '0.45';
+      return '<span class="pill" style="opacity:' + opacity + '">' +
+        r.platform + ' · ' + (r.users || 0) + ' 人 (' + pct + '%) · ' + (r.events || 0) + ' 事件' +
+        '</span>';
+    }).join(' ');
+    el.innerHTML = html;
+  }
+
   async function loadDashboard() {
     const cfg = ensureCfg();
     if (!cfg) return;
     const days = document.getElementById('rangeSelect').value;
+    const platform = document.getElementById('platformSelect').value || 'all';
     setStatus('加载中…');
     setError('');
     try {
-      const url = cfg.endpoint + '/api/dashboard?days=' + encodeURIComponent(days);
+      const url = cfg.endpoint + '/api/dashboard'
+        + '?days=' + encodeURIComponent(days)
+        + '&platform=' + encodeURIComponent(platform);
       const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + cfg.token } });
       if (res.status === 401) {
         setError('鉴权失败:Token 不正确或未配置。点击「设置」更新 Token。');
@@ -387,12 +433,13 @@
       renderReasonsTable(data.top_failure_reasons);
       renderTrend(data.daily_trend);
       renderRegionDist(data.country_distribution, data.cn_region_distribution);
+      renderPlatformDist(data.platform_distribution, data.platform || platform);
       // 任务 015 Bug H (v2026.05.06.3):趋势标题跟随 days 选择，PM 切窗口能看到反馈
       const trendTitle = document.getElementById('trendTitle');
       if (trendTitle) {
-        trendTitle.textContent = '近 ' + (data.days || days) + ' 天趋势(独立用户 / 总事件数)';
+        trendTitle.textContent = '近 ' + (data.days || days) + ' 天趋势(独立用户 / 总事件数) · ' + platformLabel(data.platform || platform);
       }
-      setStatus('已更新 · 窗口:近 ' + (data.days || days) + ' 天 · ' + new Date().toLocaleString('zh-CN'));
+      setStatus('已更新 · 窗口:近 ' + (data.days || days) + ' 天 · 平台:' + platformLabel(data.platform || platform) + ' · ' + new Date().toLocaleString('zh-CN'));
     } catch (e) {
       setError('网络异常:' + (e && e.message ? e.message : String(e)));
       setStatus('');
@@ -401,6 +448,7 @@
 
   document.getElementById('btnRefresh').addEventListener('click', loadDashboard);
   document.getElementById('rangeSelect').addEventListener('change', loadDashboard);
+  document.getElementById('platformSelect').addEventListener('change', loadDashboard);
   document.getElementById('btnSettings').addEventListener('click', function () {
     const next = promptForCfg(getCfg());
     if (next) {
