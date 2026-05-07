@@ -137,6 +137,16 @@ async function handleTelemetry(request, env, headers) {
   return new Response(null, { status: 204, headers });
 }
 
+// Map a `?platform=` query value to a SQL `LIKE` pattern matching `os_version`.
+// Returns null when the filter should be a no-op ("all" or unrecognized → backward-compatible).
+// macOS launcher writes os_version like "macOS 13.5.0"; Windows writes "Windows 10/11/...".
+function platformLikePattern(raw) {
+  const v = (raw || '').toLowerCase();
+  if (v === 'mac' || v === 'macos' || v === 'darwin') return 'macOS%';
+  if (v === 'windows' || v === 'win')                 return 'Windows%';
+  return null;  // 'all' / '' / unknown → don't filter
+}
+
 async function handleDashboard(request, env, headers) {
   const auth = request.headers.get('Authorization') || '';
   const expected = env.DASHBOARD_TOKEN ? `Bearer ${env.DASHBOARD_TOKEN}` : null;
@@ -148,29 +158,38 @@ async function handleDashboard(request, env, headers) {
   const days = Math.max(1, Math.min(30, parseInt(url.searchParams.get('days') || '1', 10) || 1));
   const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
 
+  // 平台筛选 — `?platform=windows|mac|all`，默认 all 与历史行为完全一致。
+  // 通过 `os_version LIKE ?` 派生（D1 schema 没有独立的 platform 列；不破坏旧数据）。
+  // 任何一个查询都拼接同一个 platSql 片段 + platBind 数组，保证一致性。
+  const rawPlatform = url.searchParams.get('platform') || 'all';
+  const osLike = platformLikePattern(rawPlatform);
+  const platform = osLike ? rawPlatform.toLowerCase() : 'all';
+  const platSql  = osLike ? ' AND os_version LIKE ?' : '';
+  const platBind = osLike ? [osLike] : [];
+
   const eventCounts = await env.DB
-    .prepare(`SELECT event_name, COUNT(*) AS count FROM events WHERE server_timestamp >= ? GROUP BY event_name ORDER BY count DESC`)
-    .bind(sinceTs)
+    .prepare(`SELECT event_name, COUNT(*) AS count FROM events WHERE server_timestamp >= ?${platSql} GROUP BY event_name ORDER BY count DESC`)
+    .bind(sinceTs, ...platBind)
     .all();
 
   const uniqUsers = await env.DB
-    .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE server_timestamp >= ?`)
-    .bind(sinceTs)
+    .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE server_timestamp >= ?${platSql}`)
+    .bind(sinceTs, ...platBind)
     .first();
 
   const totalEvents = await env.DB
-    .prepare(`SELECT COUNT(*) AS count FROM events WHERE server_timestamp >= ?`)
-    .bind(sinceTs)
+    .prepare(`SELECT COUNT(*) AS count FROM events WHERE server_timestamp >= ?${platSql}`)
+    .bind(sinceTs, ...platBind)
     .first();
 
   const failureRows = await env.DB
     .prepare(
       `SELECT properties FROM events
        WHERE (event_name LIKE '%failed' OR event_name = 'unexpected_error')
-         AND server_timestamp >= ?
+         AND server_timestamp >= ?${platSql}
        ORDER BY server_timestamp DESC LIMIT 500`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...platBind)
     .all();
 
   const reasonCounts = {};
@@ -197,10 +216,10 @@ async function handleDashboard(request, env, headers) {
               COUNT(DISTINCT anonymous_id) AS users,
               COUNT(*) AS events
        FROM events
-       WHERE server_timestamp >= ?
+       WHERE server_timestamp >= ?${platSql}
        GROUP BY day ORDER BY day`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...platBind)
     .all();
 
   const funnelSteps = [
@@ -214,8 +233,8 @@ async function handleDashboard(request, env, headers) {
   const funnel = {};
   for (const step of funnelSteps) {
     const r = await env.DB
-      .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE event_name = ? AND server_timestamp >= ?`)
-      .bind(step, sinceTs)
+      .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE event_name = ? AND server_timestamp >= ?${platSql}`)
+      .bind(step, sinceTs, ...platBind)
       .first();
     funnel[step] = r ? r.count : 0;
   }
@@ -225,23 +244,42 @@ async function handleDashboard(request, env, headers) {
     .prepare(
       `SELECT COALESCE(NULLIF(server_country, ''), 'UNKNOWN') AS country,
               COUNT(DISTINCT anonymous_id) AS users
-       FROM events WHERE server_timestamp >= ?
+       FROM events WHERE server_timestamp >= ?${platSql}
        GROUP BY country ORDER BY users DESC LIMIT 15`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...platBind)
     .all();
   const cnRegionDist = await env.DB
     .prepare(
       `SELECT COALESCE(NULLIF(server_region, ''), 'UNKNOWN') AS region,
               COUNT(DISTINCT anonymous_id) AS users
-       FROM events WHERE server_country = 'CN' AND server_timestamp >= ?
+       FROM events WHERE server_country = 'CN' AND server_timestamp >= ?${platSql}
        GROUP BY region ORDER BY users DESC LIMIT 10`
+    )
+    .bind(sinceTs, ...platBind)
+    .all();
+
+  // 平台分布(总览):无论当前选了哪个 platform 都返回全平台分布,让 PM 一眼看出
+  // "目前 Mac/Windows 各占多少" — 不受 platSql 过滤。
+  const platformDist = await env.DB
+    .prepare(
+      `SELECT
+         CASE
+           WHEN os_version LIKE 'macOS%'   THEN 'macOS'
+           WHEN os_version LIKE 'Windows%' THEN 'Windows'
+           ELSE 'unknown'
+         END AS platform,
+         COUNT(DISTINCT anonymous_id) AS users,
+         COUNT(*) AS events
+       FROM events WHERE server_timestamp >= ?
+       GROUP BY platform ORDER BY users DESC`
     )
     .bind(sinceTs)
     .all();
 
   const data = {
     days,
+    platform,                      // 'all' / 'windows' / 'mac' — echoed for client to confirm
     generated_at: new Date().toISOString(),
     total_events: totalEvents ? totalEvents.count : 0,
     unique_users: uniqUsers ? uniqUsers.count : 0,
@@ -251,6 +289,7 @@ async function handleDashboard(request, env, headers) {
     cn_region_distribution: cnRegionDist.results || [],
     daily_trend: dailyTrend.results || [],
     funnel,
+    platform_distribution: platformDist.results || [],  // always full-population, ignores filter
   };
 
   return jsonResponse(data, 200, headers);
