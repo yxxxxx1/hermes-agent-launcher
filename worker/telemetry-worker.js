@@ -147,30 +147,48 @@ async function handleDashboard(request, env, headers) {
   const url = new URL(request.url);
   const days = Math.max(1, Math.min(30, parseInt(url.searchParams.get('days') || '1', 10) || 1));
   const sinceTs = Math.floor(Date.now() / 1000) - days * 86400;
+  // 任务 016 Bug version-filter:dashboard 之前不按版本过滤,导致老版本的失败被算进新版分析。
+  // 加 ?version=Windows v2026.05.06.4 这种过滤,空值=全部版本。
+  const versionFilter = (url.searchParams.get('version') || '').trim();
+  const verCond = versionFilter ? ` AND version = ?` : '';
+  const verBind = versionFilter ? [versionFilter] : [];
 
   const eventCounts = await env.DB
-    .prepare(`SELECT event_name, COUNT(*) AS count FROM events WHERE server_timestamp >= ? GROUP BY event_name ORDER BY count DESC`)
-    .bind(sinceTs)
+    .prepare(`SELECT event_name, COUNT(*) AS count FROM events WHERE server_timestamp >= ?${verCond} GROUP BY event_name ORDER BY count DESC`)
+    .bind(sinceTs, ...verBind)
     .all();
 
   const uniqUsers = await env.DB
-    .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE server_timestamp >= ?`)
-    .bind(sinceTs)
+    .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE server_timestamp >= ?${verCond}`)
+    .bind(sinceTs, ...verBind)
     .first();
 
   const totalEvents = await env.DB
-    .prepare(`SELECT COUNT(*) AS count FROM events WHERE server_timestamp >= ?`)
-    .bind(sinceTs)
+    .prepare(`SELECT COUNT(*) AS count FROM events WHERE server_timestamp >= ?${verCond}`)
+    .bind(sinceTs, ...verBind)
     .first();
+
+  // 版本分布(用户去重 + 事件数,按版本分组,Top 10)。无论是否传 version 过滤,这块都返回全部版本视图,
+  // 让 PM 一眼看到哪个版本贡献了多少用户/事件。
+  const versionBreakdown = await env.DB
+    .prepare(
+      `SELECT COALESCE(NULLIF(version, ''), 'UNKNOWN') AS version,
+              COUNT(DISTINCT anonymous_id) AS users,
+              COUNT(*) AS events
+       FROM events WHERE server_timestamp >= ?
+       GROUP BY version ORDER BY events DESC LIMIT 15`
+    )
+    .bind(sinceTs)
+    .all();
 
   const failureRows = await env.DB
     .prepare(
       `SELECT properties FROM events
        WHERE (event_name LIKE '%failed' OR event_name = 'unexpected_error')
-         AND server_timestamp >= ?
+         AND server_timestamp >= ?${verCond}
        ORDER BY server_timestamp DESC LIMIT 500`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...verBind)
     .all();
 
   const reasonCounts = {};
@@ -197,10 +215,10 @@ async function handleDashboard(request, env, headers) {
               COUNT(DISTINCT anonymous_id) AS users,
               COUNT(*) AS events
        FROM events
-       WHERE server_timestamp >= ?
+       WHERE server_timestamp >= ?${verCond}
        GROUP BY day ORDER BY day`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...verBind)
     .all();
 
   const funnelSteps = [
@@ -214,8 +232,8 @@ async function handleDashboard(request, env, headers) {
   const funnel = {};
   for (const step of funnelSteps) {
     const r = await env.DB
-      .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE event_name = ? AND server_timestamp >= ?`)
-      .bind(step, sinceTs)
+      .prepare(`SELECT COUNT(DISTINCT anonymous_id) AS count FROM events WHERE event_name = ? AND server_timestamp >= ?${verCond}`)
+      .bind(step, sinceTs, ...verBind)
       .first();
     funnel[step] = r ? r.count : 0;
   }
@@ -225,23 +243,24 @@ async function handleDashboard(request, env, headers) {
     .prepare(
       `SELECT COALESCE(NULLIF(server_country, ''), 'UNKNOWN') AS country,
               COUNT(DISTINCT anonymous_id) AS users
-       FROM events WHERE server_timestamp >= ?
+       FROM events WHERE server_timestamp >= ?${verCond}
        GROUP BY country ORDER BY users DESC LIMIT 15`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...verBind)
     .all();
   const cnRegionDist = await env.DB
     .prepare(
       `SELECT COALESCE(NULLIF(server_region, ''), 'UNKNOWN') AS region,
               COUNT(DISTINCT anonymous_id) AS users
-       FROM events WHERE server_country = 'CN' AND server_timestamp >= ?
+       FROM events WHERE server_country = 'CN' AND server_timestamp >= ?${verCond}
        GROUP BY region ORDER BY users DESC LIMIT 10`
     )
-    .bind(sinceTs)
+    .bind(sinceTs, ...verBind)
     .all();
 
   const data = {
     days,
+    version_filter: versionFilter || null,
     generated_at: new Date().toISOString(),
     total_events: totalEvents ? totalEvents.count : 0,
     unique_users: uniqUsers ? uniqUsers.count : 0,
@@ -249,6 +268,7 @@ async function handleDashboard(request, env, headers) {
     top_failure_reasons: topReasons,
     country_distribution: countryDist.results || [],
     cn_region_distribution: cnRegionDist.results || [],
+    version_breakdown: versionBreakdown.results || [],
     daily_trend: dailyTrend.results || [],
     funnel,
   };

@@ -121,6 +121,10 @@
         <option value="7" selected>近 7 天</option>
         <option value="30">近 30 天</option>
       </select>
+      <label style="margin-left:12px;">版本</label>
+      <select id="versionSelect">
+        <option value="" selected>全部版本</option>
+      </select>
       <button class="primary" id="btnRefresh">刷新</button>
       <span id="status" class="subtitle"></span>
     </div>
@@ -147,6 +151,11 @@
     <div class="panel">
       <h2>用户地区分布(基于 IP，国家 / 国内省份)</h2>
       <div id="regionDist"></div>
+    </div>
+
+    <div class="panel">
+      <h2>版本分布(每版本独立用户 / 总事件,Top 15)</h2>
+      <div id="versionDist"></div>
     </div>
 
     <div class="panel">
@@ -361,14 +370,54 @@
     document.getElementById('regionDist').innerHTML = countryHtml + regionHtml;
   }
 
+  // 版本分布(v2026.05.06.4 加入,陷阱 #48 升级 — 之前 dashboard 不区分版本,
+  // 老版本错误会算进新版分析里,误判修复未上线)。
+  function renderVersionDist(rows) {
+    const r = rows || [];
+    if (r.length === 0) {
+      document.getElementById('versionDist').innerHTML = '<div class="empty">暂无版本数据</div>';
+      return;
+    }
+    const maxEvents = Math.max.apply(null, r.map(function (x) { return x.events || 0; }).concat([1]));
+    const html = r.map(function (x) {
+      const pct = maxEvents > 0 ? Math.round((x.events / maxEvents) * 100) : 0;
+      return '<div class="trend-row">' +
+        '<div class="trend-day" style="width:240px;">' + escapeHtml(x.version || 'UNKNOWN') + '</div>' +
+        '<div class="trend-bar"><div class="trend-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="num">' + x.users + ' 人</div>' +
+        '<div class="num">' + x.events + ' 件</div>' +
+        '</div>';
+    }).join('');
+    document.getElementById('versionDist').innerHTML = html;
+    // 同步填 toolbar 里的版本下拉框(去重 + 保留当前选择)
+    const sel = document.getElementById('versionSelect');
+    if (sel) {
+      const cur = sel.value;
+      const seen = new Set();
+      let opts = '<option value="">全部版本</option>';
+      r.forEach(function (x) {
+        const v = x.version || 'UNKNOWN';
+        if (v === 'UNKNOWN') return;
+        if (seen.has(v)) return;
+        seen.add(v);
+        opts += '<option value="' + escapeHtml(v) + '"' + (v === cur ? ' selected' : '') + '>' +
+                escapeHtml(v) + ' (' + x.users + ' 人)</option>';
+      });
+      sel.innerHTML = opts;
+    }
+  }
+
   async function loadDashboard() {
     const cfg = ensureCfg();
     if (!cfg) return;
     const days = document.getElementById('rangeSelect').value;
+    const versionSel = document.getElementById('versionSelect');
+    const version = versionSel ? versionSel.value : '';
     setStatus('加载中…');
     setError('');
     try {
-      const url = cfg.endpoint + '/api/dashboard?days=' + encodeURIComponent(days);
+      let url = cfg.endpoint + '/api/dashboard?days=' + encodeURIComponent(days);
+      if (version) url += '&version=' + encodeURIComponent(version);
       const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + cfg.token } });
       if (res.status === 401) {
         setError('鉴权失败:Token 不正确或未配置。点击「设置」更新 Token。');
@@ -387,12 +436,14 @@
       renderReasonsTable(data.top_failure_reasons);
       renderTrend(data.daily_trend);
       renderRegionDist(data.country_distribution, data.cn_region_distribution);
-      // 任务 015 Bug H (v2026.05.06.3):趋势标题跟随 days 选择，PM 切窗口能看到反馈
+      renderVersionDist(data.version_breakdown);
+      // 任务 015 Bug H (v2026.05.06.3):趋势标题跟随 days 选择,PM 切窗口能看到反馈
       const trendTitle = document.getElementById('trendTitle');
       if (trendTitle) {
         trendTitle.textContent = '近 ' + (data.days || days) + ' 天趋势(独立用户 / 总事件数)';
       }
-      setStatus('已更新 · 窗口:近 ' + (data.days || days) + ' 天 · ' + new Date().toLocaleString('zh-CN'));
+      const verTag = data.version_filter ? ' · 版本:' + data.version_filter : ' · 全部版本';
+      setStatus('已更新 · 窗口:近 ' + (data.days || days) + ' 天' + verTag + ' · ' + new Date().toLocaleString('zh-CN'));
     } catch (e) {
       setError('网络异常:' + (e && e.message ? e.message : String(e)));
       setStatus('');
@@ -401,6 +452,7 @@
 
   document.getElementById('btnRefresh').addEventListener('click', loadDashboard);
   document.getElementById('rangeSelect').addEventListener('change', loadDashboard);
+  document.getElementById('versionSelect').addEventListener('change', loadDashboard);
   document.getElementById('btnSettings').addEventListener('click', function () {
     const next = promptForCfg(getCfg());
     if (next) {
