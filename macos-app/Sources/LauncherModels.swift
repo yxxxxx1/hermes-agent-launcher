@@ -322,6 +322,11 @@ enum LauncherHeroState: Equatable {
 
 struct LauncherSnapshot {
     var version = "macOS v2026.05.06.5"
+    /// Title-bar form: drops the redundant "macOS " prefix (the user is on macOS — this Mac
+    /// app already implies the platform). Falls back to the full string if no prefix matched.
+    var shortVersion: String {
+        version.replacingOccurrences(of: "macOS ", with: "")
+    }
     var primaryButtonTitle = "开始安装"
     var primaryAction = "install"
     var webuiStatus = "未准备"

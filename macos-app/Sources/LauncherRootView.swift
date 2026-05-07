@@ -69,11 +69,18 @@ struct LauncherRootView: View {
 // MARK: - Title bar
 
 private struct TitleBarView: View {
+    private let shortVersion: String = LauncherSnapshot().shortVersion
+
     var body: some View {
         ZStack {
-            Text("Hermes Launcher")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(LauncherPalette.textSecondary)
+            HStack(spacing: 18) {
+                Text("Hermes Launcher")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textSecondary)
+                Text(shortVersion)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .foregroundStyle(LauncherPalette.textTertiary)
+            }
         }
         .frame(maxWidth: .infinity)
         .frame(height: 40)
