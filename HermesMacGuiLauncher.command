@@ -3,7 +3,7 @@
 set -euo pipefail
 
 APP_TITLE="Hermes Agent macOS 轻量启动器"
-LAUNCHER_VERSION="macOS v2026.05.07.1"
+LAUNCHER_VERSION="macOS v2026.05.07.2"
 OFFICIAL_INSTALL_URL="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
 OFFICIAL_REPO_URL="https://github.com/NousResearch/hermes-agent"
 OFFICIAL_DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation/"
@@ -1203,7 +1203,11 @@ detect_webui_installed() {
 }
 
 webui_health_check() {
-    curl -fsS --max-time 3 "$WEBUI_HEALTH_URL" >/dev/null 2>&1
+    # 10s timeout (was 3s — chat #N+10). The hermes-web-ui daemon's update-check thread
+    # periodically starves the HTTP event loop; /health responds correctly but can take
+    # 4–7 seconds under load. A 3-second timeout produced false negatives that triggered
+    # the stale-daemon kill path on a perfectly healthy daemon.
+    curl -fsS --max-time 10 "$WEBUI_HEALTH_URL" >/dev/null 2>&1
 }
 
 wait_for_webui_health() {
@@ -1252,6 +1256,24 @@ start_hermes_web_ui() {
         return 0
     fi
 
+    # Stale-daemon recovery (chat #N+8 — daemon stuck in update-check loop, alive but
+    # not serving HTTP). If the bin reports "running" yet /health is unresponsive, the
+    # daemon is wedged. `hermes-web-ui start` would refuse with "already running" and
+    # exit 1; we must kill the wedged process first.
+    if webui_bin_invoke status 2>/dev/null | grep -q "is running"; then
+        emit_stage start_webui running "DETAIL=killing_unresponsive_daemon"
+        webui_bin_invoke stop >>"$RUNTIME_INSTALL_LOG" 2>&1 || true
+        sleep 2
+        # Defensive: if `stop` left a zombie holding the port, force-kill the listener.
+        local listener_pid
+        listener_pid="$(lsof -ti:"$WEBUI_PORT" 2>/dev/null | head -1 || true)"
+        if [[ -n "$listener_pid" ]]; then
+            kill -9 "$listener_pid" 2>/dev/null || true
+            sleep 1
+        fi
+        rm -f "$WEBUI_PID_FILE"
+    fi
+
     emit_stage start_webui running
 
     local tmp_log
@@ -1287,8 +1309,12 @@ start_hermes_web_ui() {
     fi
     emit_stage start_webui ok
 
+    # 60s headroom (was 30s — chat #N+9). Fresh daemon after stale-recovery needs a full
+    # cold bootstrap (sqlite WAL, gateway connection, route registration). The bin script
+    # has its own internal /health wait but exits as soon as the port binds; the actual
+    # /health endpoint may not respond for another 10–20s while the agent boots.
     emit_stage wait_healthy running
-    if ! wait_for_webui_health 30; then
+    if ! wait_for_webui_health 60; then
         emit_stage wait_healthy failed "REASON=health_timeout"
         return 1
     fi
