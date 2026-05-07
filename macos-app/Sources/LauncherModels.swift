@@ -321,7 +321,7 @@ enum LauncherHeroState: Equatable {
 // MARK: - Snapshot
 
 struct LauncherSnapshot {
-    var version = "macOS v2026.05.06.5"
+    var version = "macOS v2026.05.07.1"
     /// Title-bar form: drops the redundant "macOS " prefix (the user is on macOS — this Mac
     /// app already implies the platform). Falls back to the full string if no prefix matched.
     var shortVersion: String {
